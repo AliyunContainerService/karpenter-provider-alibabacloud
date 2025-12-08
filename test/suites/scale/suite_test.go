@@ -52,6 +52,5 @@ var _ = BeforeEach(func() {
 })
 
 var _ = AfterEach(func() {
-	env.Cleanup()
 	env.AfterEach()
 })

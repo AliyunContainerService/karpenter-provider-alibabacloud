@@ -58,6 +58,13 @@ var _ = Describe("Deprovisioning", func() {
 						Values:   []string{v1alpha1.CapacityTypeOnDemand},
 					},
 				},
+				{
+					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+						Key:      v1alpha1.LabelInstanceType,
+						Operator: corev1.NodeSelectorOpIn,
+						Values:   []string{"ecs.c6.xlarge", "ecs.c7.xlarge"},
+					},
+				},
 			}
 			// Enable consolidation with immediate trigger
 			nodePool.Spec.Disruption.ConsolidationPolicy = karpv1.ConsolidationPolicyWhenEmptyOrUnderutilized
@@ -162,7 +169,13 @@ var _ = Describe("Deprovisioning", func() {
 						Values:   []string{v1alpha1.CapacityTypeOnDemand},
 					},
 				},
-			}
+				{
+					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+						Key:      v1alpha1.LabelInstanceType,
+						Operator: corev1.NodeSelectorOpIn,
+						Values:   []string{"ecs.c6.xlarge", "ecs.c7.xlarge"},
+					},
+				}}
 			nodePool.Spec.Disruption.ConsolidationPolicy = karpv1.ConsolidationPolicyWhenEmptyOrUnderutilized
 			nodePool.Spec.Disruption.ConsolidateAfter = karpv1.MustParseNillableDuration("0s")
 
@@ -271,7 +284,13 @@ var _ = Describe("Deprovisioning", func() {
 						Values:   []string{v1alpha1.CapacityTypeOnDemand},
 					},
 				},
-			}
+				{
+					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+						Key:      v1alpha1.LabelInstanceType,
+						Operator: corev1.NodeSelectorOpIn,
+						Values:   []string{"ecs.c6.xlarge", "ecs.c7.xlarge"},
+					},
+				}}
 			// Set TTLSecondsAfterEmpty to 0 for immediate deletion
 			nodePool.Spec.Disruption.ConsolidationPolicy = karpv1.ConsolidationPolicyWhenEmpty
 			nodePool.Spec.Disruption.ConsolidateAfter = karpv1.MustParseNillableDuration("0s")
@@ -363,7 +382,13 @@ var _ = Describe("Deprovisioning", func() {
 						Values:   []string{v1alpha1.CapacityTypeOnDemand},
 					},
 				},
-			}
+				{
+					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+						Key:      v1alpha1.LabelInstanceType,
+						Operator: corev1.NodeSelectorOpIn,
+						Values:   []string{"ecs.c6.xlarge", "ecs.c7.xlarge"},
+					},
+				}}
 			// Set expiration to 5 minutes for testing
 			nodePool.Spec.Template.Spec.ExpireAfter = karpv1.MustParseNillableDuration("5m")
 
@@ -473,7 +498,13 @@ var _ = Describe("Deprovisioning", func() {
 						Values:   []string{v1alpha1.CapacityTypeOnDemand},
 					},
 				},
-			}
+				{
+					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+						Key:      v1alpha1.LabelInstanceType,
+						Operator: corev1.NodeSelectorOpIn,
+						Values:   []string{"ecs.c6.xlarge", "ecs.c7.xlarge"},
+					},
+				}}
 
 			// Create workload
 			replicas := int32(2)

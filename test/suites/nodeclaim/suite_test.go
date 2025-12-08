@@ -21,10 +21,10 @@ import (
 	"fmt"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	environmentcs "github.com/AliyunContainerService/karpenter-provider-alibabacloud/test/pkg/cs"
+	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strings"
 	"testing"
 
@@ -51,49 +51,11 @@ func TestNodeClaim(t *testing.T) {
 }
 
 var _ = BeforeEach(func() {
-	// 删除已有的 ECSNodeClass 和 NodePool 对象，确保测试环境干净
-	nodeClassList := &v1alpha1.ECSNodeClassList{}
-	if err := env.Client.List(context.Background(), nodeClassList); err == nil {
-		for i := range nodeClassList.Items {
-			_ = env.Client.Delete(context.Background(), &nodeClassList.Items[i], &client.DeleteOptions{})
-		}
-	}
-	nodePoolList := &karpv1.NodePoolList{}
-	if err := env.Client.List(context.Background(), nodePoolList); err == nil {
-		for i := range nodePoolList.Items {
-			_ = env.Client.Delete(context.Background(), &nodePoolList.Items[i], &client.DeleteOptions{})
-		}
-	}
-
-	// 给已有节点打上 taint，防止测试 Pod 调度到现有节点
-	nodeList := &corev1.NodeList{}
-	Expect(env.Client.List(context.Background(), nodeList)).To(Succeed())
-	for i := range nodeList.Items {
-		node := &nodeList.Items[i]
-		// 检查节点是否已有该 taint
-		hasTaint := false
-		for _, taint := range node.Spec.Taints {
-			if taint.Key == "karpenter-test" {
-				hasTaint = true
-				break
-			}
-		}
-		if !hasTaint {
-			node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{
-				Key:    "karpenter-test",
-				Value:  "true",
-				Effect: corev1.TaintEffectNoSchedule,
-			})
-			Expect(env.Client.Update(context.Background(), node, &client.UpdateOptions{})).To(Succeed())
-		}
-	}
-
-	env.ValidateCleanEnvironment()
+	env.BeforeEach()
 	nodeClass = env.DefaultECSNodeClass()
 	nodePool = env.DefaultNodePool(nodeClass)
 })
 var _ = AfterEach(func() {
-	env.CleanupObjects(environmentcs.CleanableObjects...)
 	env.AfterEach()
 })
 
@@ -115,9 +77,14 @@ var _ = Describe("GarbageCollection", func() {
 		node := env.ExpectCreatedNodeCount("==", 1)[0]
 
 		strs := strings.Split(node.Spec.ProviderID, ".")
-		_, err := env.ECSAPI.DeleteInstances(context.Background(), &ecs.DeleteInstancesRequest{
-			InstanceId: &[]string{strs[1]},
-		})
+		// Create delete instance request
+		request := ecs.CreateDeleteInstancesRequest()
+		request.RegionId = strs[0]
+		// Set instance IDs correctly for DeleteInstances
+		request.InstanceId = &[]string{strs[1]}
+		request.Force = requests.NewBoolean(true)                 // Force deletion
+		request.TerminateSubscription = requests.NewBoolean(true) // Terminate associated subscription resources
+		_, err := env.ECSAPI.DeleteInstances(context.Background(), request)
 		Expect(err).ToNot(HaveOccurred())
 		env.EventuallyExpectNotFound(node)
 	})

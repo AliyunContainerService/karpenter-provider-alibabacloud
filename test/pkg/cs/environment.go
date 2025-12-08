@@ -17,41 +17,50 @@ limitations under the License.
 package cs
 
 import (
+	"context"
 	"fmt"
+	"github.com/aws/karpenter-provider-aws/test/pkg/debug"
+	"k8s.io/apimachinery/pkg/types"
+	"os"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"testing"
+	"time"
+
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/operator"
-	"github.com/aws/amazon-vpc-resource-controller-k8s/apis/vpcresources/v1beta1"
-	v1 "github.com/aws/karpenter-provider-aws/pkg/apis/v1"
+	"github.com/awslabs/operatorpkg/object"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	schedulingv1 "k8s.io/api/scheduling/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"os"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/karpenter/pkg/test"
 	"sigs.k8s.io/karpenter/pkg/utils/pod"
-	"testing"
-	"time"
+
+	"github.com/aws/karpenter-provider-aws/test/pkg/environment/common"
 
 	"github.com/samber/lo"
 	"k8s.io/client-go/kubernetes/scheme"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
-
-	"github.com/aws/karpenter-provider-aws/test/pkg/environment/common"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
 func init() {
+	ctrl.SetLogger(zap.New())
 	lo.Must0(v1alpha1.AddToScheme(scheme.Scheme)) // add scheme for the security group policy CRD
 	karpv1.NormalizedLabels = lo.Assign(karpv1.NormalizedLabels)
 }
 
-var DefaultImageID = "aliyun_3_x64_20G_container_optimized_alibase_20250629.vhd"
+var persistedSettings []corev1.EnvVar
+
+var DefaultImageID = "aliyun_4_x64_20G_container_optimized_alibase_20251106.vhd"
 
 var (
 	CleanableObjects = []client.Object{
@@ -68,8 +77,7 @@ var (
 		&schedulingv1.PriorityClass{},
 		&corev1.Node{},
 		&karpv1.NodeClaim{},
-		&v1.EC2NodeClass{},
-		&v1beta1.SecurityGroupPolicy{},
+		&v1alpha1.ECSNodeClass{},
 	}
 )
 
@@ -108,10 +116,14 @@ func NewEnvironment(t *testing.T) *Environment {
 		AccessKeySecret: lo.Must(os.LookupEnv("ALIBABA_CLOUD_ACCESS_KEY_SECRET")),
 	}
 
-	csAPI, _ := operator.InitCSClient(cfg.Region, cfg.AccessKeyID, cfg.AccessKeySecret)
-	ecsAPI, _ := operator.InitECSClient(cfg.Region, cfg.AccessKeyID, cfg.AccessKeySecret)
-	vpcAPI, _ := operator.InitVPCClient(cfg.Region, cfg.AccessKeyID, cfg.AccessKeySecret)
-	ramAPI, _ := operator.InitRAMClient(cfg.Region, cfg.AccessKeyID, cfg.AccessKeySecret)
+	csAPI, err := operator.InitCSClient(cfg.Region, cfg.AccessKeyID, cfg.AccessKeySecret)
+	Expect(err).ToNot(HaveOccurred())
+	ecsAPI, err := operator.InitECSClient(cfg.Region, cfg.AccessKeyID, cfg.AccessKeySecret)
+	Expect(err).ToNot(HaveOccurred())
+	vpcAPI, err := operator.InitVPCClient(cfg.Region, cfg.AccessKeyID, cfg.AccessKeySecret)
+	Expect(err).ToNot(HaveOccurred())
+	ramAPI, err := operator.InitRAMClient(cfg.Region, cfg.AccessKeyID, cfg.AccessKeySecret)
+	Expect(err).ToNot(HaveOccurred())
 
 	testEnv := &Environment{
 		Region:          cfg.Region,
@@ -125,6 +137,64 @@ func NewEnvironment(t *testing.T) *Environment {
 		ClusterEndpoint: lo.Must(os.LookupEnv("TEST_CLUSTER_ENDPOINT")),
 	}
 	return testEnv
+}
+
+func (env *Environment) BeforeEach() {
+	d := &appsv1.Deployment{}
+	Expect(env.Client.Get(env.Context, types.NamespacedName{Namespace: "karpenter", Name: "karpenter"}, d)).To(Succeed())
+	Expect(d.Spec.Template.Spec.Containers).To(HaveLen(1))
+	persistedSettings = lo.Map(d.Spec.Template.Spec.Containers[0].Env, func(v corev1.EnvVar, _ int) corev1.EnvVar {
+		return *v.DeepCopy()
+	})
+	debug.BeforeEach(env.Context, env.Config, env.Client)
+
+	// 删除已有的 ECSNodeClass 和 NodePool 对象，确保测试环境干净
+	nodeClassList := &v1alpha1.ECSNodeClassList{}
+	if err := env.Client.List(context.Background(), nodeClassList); err == nil {
+		for i := range nodeClassList.Items {
+			_ = env.Client.Delete(context.Background(), &nodeClassList.Items[i], &client.DeleteOptions{})
+		}
+	}
+	nodePoolList := &karpv1.NodePoolList{}
+	if err := env.Client.List(context.Background(), nodePoolList); err == nil {
+		for i := range nodePoolList.Items {
+			_ = env.Client.Delete(context.Background(), &nodePoolList.Items[i], &client.DeleteOptions{})
+		}
+	}
+
+	// 给已有节点打上 taint，防止测试 Pod 调度到现有节点
+	nodeList := &corev1.NodeList{}
+	Expect(env.Client.List(context.Background(), nodeList)).To(Succeed())
+	for i := range nodeList.Items {
+		node := &nodeList.Items[i]
+		// 检查节点是否已有该 taint
+		hasTaint := false
+		for _, taint := range node.Spec.Taints {
+			if taint.Key == "karpenter-test" {
+				hasTaint = true
+				break
+			}
+		}
+		if !hasTaint {
+			node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{
+				Key:    "karpenter-test",
+				Value:  "true",
+				Effect: corev1.TaintEffectNoSchedule,
+			})
+			Expect(env.Client.Update(context.Background(), node, &client.UpdateOptions{})).To(Succeed())
+		}
+	}
+
+	// Expect this cluster to be clean for test runs to execute successfully
+	env.ValidateCleanEnvironment()
+
+	env.Monitor.Reset()
+	env.StartingNodeCount = env.Monitor.NodeCountAtReset()
+}
+
+func (env *Environment) AfterEach() {
+	env.CleanupObjects(CleanableObjects...)
+	env.Environment.AfterEach()
 }
 
 func (env *Environment) ValidateCleanEnvironment() {
@@ -154,6 +224,10 @@ func (env *Environment) ValidateCleanEnvironment() {
 
 func (env *Environment) DefaultECSNodeClass() *v1alpha1.ECSNodeClass {
 	nodeClass := &v1alpha1.ECSNodeClass{}
+
+	nodeClass.ObjectMeta = test.ObjectMeta(nodeClass.ObjectMeta)
+
+	nodeClass.Spec.ClusterID = env.ClusterID
 	nodeClass.Spec.Tags = map[string]string{
 		"testing/cluster": env.ClusterName,
 	}
@@ -172,6 +246,18 @@ func (env *Environment) DefaultECSNodeClass() *v1alpha1.ECSNodeClass {
 			ID: &DefaultImageID,
 		},
 	}
+	nodeClass.Spec.SystemDisk = &v1alpha1.SystemDiskSpec{
+		Category:         "cloud_essd",
+		Size:             lo.ToPtr(int32(40)),
+		PerformanceLevel: lo.ToPtr("PL0"),
+	}
+	nodeClass.Spec.DataDisks = []v1alpha1.DataDiskSpec{
+		{
+			Category:         "cloud_essd",
+			Size:             120,
+			PerformanceLevel: lo.ToPtr("PL0"),
+		},
+	}
 	return nodeClass
 }
 
@@ -186,8 +272,8 @@ func (env *Environment) DefaultNodePool(nodeClass *v1alpha1.ECSNodeClass) *karpv
 					TerminationGracePeriod: &metav1.Duration{Duration: 1 * time.Minute},
 					ExpireAfter:            karpv1.MustParseNillableDuration("720h"),
 					NodeClassRef: &karpv1.NodeClassReference{
-						Group: "karpenter.alibabacloud.com",
-						Kind:  "ECSNodeClass",
+						Group: object.GVK(nodeClass).Group,
+						Kind:  object.GVK(nodeClass).Kind,
 						Name:  nodeClass.Name,
 					},
 					Requirements: []karpv1.NodeSelectorRequirementWithMinValues{

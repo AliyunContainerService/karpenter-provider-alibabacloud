@@ -58,9 +58,9 @@ var _ = Describe("Provisioning", func() {
 				},
 				{
 					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
-						Key:      corev1.LabelArchStable,
+						Key:      v1alpha1.LabelInstanceType,
 						Operator: corev1.NodeSelectorOpIn,
-						Values:   []string{"amd64"},
+						Values:   []string{"ecs.c6.xlarge", "ecs.c7.xlarge"},
 					},
 				},
 			}
@@ -171,9 +171,9 @@ var _ = Describe("Provisioning", func() {
 				},
 				{
 					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
-						Key:      corev1.LabelArchStable,
+						Key:      v1alpha1.LabelInstanceType,
 						Operator: corev1.NodeSelectorOpIn,
-						Values:   []string{"amd64"},
+						Values:   []string{"ecs.c6.xlarge", "ecs.c7.xlarge"},
 					},
 				},
 			}
