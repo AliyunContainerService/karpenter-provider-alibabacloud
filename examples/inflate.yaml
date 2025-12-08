@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inflate
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: inflate
+  template:
+    metadata:
+      labels:
+        app: inflate
+    spec:
+      containers:
+        - name: inflate
+          image: registry-cn-hangzhou.ack.aliyuncs.com/acs/pause:3.9
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"

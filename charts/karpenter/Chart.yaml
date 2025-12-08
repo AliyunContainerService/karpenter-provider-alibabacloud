@@ -1,0 +1,17 @@
+apiVersion: v2
+name: karpenter
+description: A Helm chart for Karpenter AlibabaCloud Provider
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - karpenter
+  - alibabacloud
+  - kubernetes
+  - autoscaling
+home: https://github.com/AliyunContainerService/karpenter-provider-alibabacloud
+sources:
+  - https://github.com/AliyunContainerService/karpenter-provider-alibabacloud
+maintainers:
+  - name: Alibaba Cloud Container Service Team
+    email: kubernetes@alibaba-inc.com

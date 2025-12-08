@@ -1,0 +1,23 @@
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: default
+spec:
+  template:
+    spec:
+      terminationGracePeriod: 1m
+      expireAfter: 720h
+      nodeClassRef:
+        group: karpenter.alibabacloud.com
+        kind: ECSNodeClass
+        name: default
+      requirements:
+      - key: "karpenter.sh/capacity-type"
+        operator: In
+        values: ["on-demand"]
+      - key: "node.kubernetes.io/instance-type"
+        operator: In
+        values: ["ecs.c6.xlarge", "ecs.g6.xlarge"]
+      - key: "topology.kubernetes.io/zone"
+        operator: In
+        values: ["cn-hongkong-b", "cn-hongkong-c", "cn-hongkong-d"]

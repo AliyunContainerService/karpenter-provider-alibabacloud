@@ -1,0 +1,19 @@
+name: qoder-auto-review
+triggers:
+  merge_request:
+    target-branches: '**'
+    types:
+      - opened
+      - reopened
+jobs:
+  auto-review:
+    steps:
+      - uses: checkout
+        inputs:
+          fetch-depth: 0
+      - uses: run-qoder-cli@1.0.3
+        envs:
+          CI: true
+          QODER_PERSONAL_ACCESS_TOKEN: ${{secrets.QODER_PERSONAL_ACCESS_TOKEN}}
+        inputs:
+          settings: '{"exclude_files": [".aoneci", "mocks/"], "skip": {"max_commits": 100, "max_changed_lines": 10000}}'

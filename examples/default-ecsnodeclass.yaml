@@ -1,0 +1,31 @@
+apiVersion: karpenter.alibabacloud.com/v1alpha1
+kind: ECSNodeClass
+metadata:
+  name: default
+spec:
+  # 集群ID - ACK集群的ID
+  clusterID: ""
+  # VSwitch 选择器 - 根据当前集群所在的可用区进行配置
+  vSwitchSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: ${CLUSTER_NAME}
+  # 安全组选择器 - 通过标签自动发现
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: ${CLUSTER_NAME}
+  # 镜像选择器
+  imageSelectorTerms:
+    - id: "aliyun_3_x64_20G_container_optimized_alibase_20250629.vhd"
+  # 系统盘配置
+  systemDisk:
+    category: cloud_essd
+    size: 40
+    performanceLevel: PL0
+  dataDisks:
+    - category: cloud_essd
+      size: 120
+      performanceLevel: PL0
+  # 标签
+  tags:
+    team: platform
+    environment: production

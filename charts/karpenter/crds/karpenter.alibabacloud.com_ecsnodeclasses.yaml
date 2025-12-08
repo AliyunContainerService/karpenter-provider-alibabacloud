@@ -1,0 +1,473 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+  name: ecsnodeclasses.karpenter.alibabacloud.com
+spec:
+  group: karpenter.alibabacloud.com
+  names:
+    categories:
+    - karpenter
+    kind: ECSNodeClass
+    listKind: ECSNodeClassList
+    plural: ecsnodeclasses
+    singular: ecsnodeclass
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ECSNodeClass is the Schema for the ECSNodeClass API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ECSNodeClassSpec defines the desired state of ECSNodeClass
+            properties:
+              capacityReservationPreference:
+                description: CapacityReservationPreference specifies the preference
+                  for capacity reservations (open or target or none)
+                type: string
+              capacityReservationSelectorTerms:
+                description: CapacityReservationSelectorTerms is a list of capacity
+                  reservation selector requirements
+                items:
+                  description: CapacityReservationSelectorTerm defines selection logic
+                    for Capacity Reservation
+                  properties:
+                    id:
+                      description: ID is the capacity reservation ID
+                      type: string
+                    tags:
+                      additionalProperties:
+                        type: string
+                      description: Tags is a map of tags to match
+                      type: object
+                  type: object
+                type: array
+              clusterEndpoint:
+                description: ClusterEndpoint is the Kubernetes API server endpoint
+                type: string
+              clusterID:
+                description: ClusterID is the ACK cluster ID
+                type: string
+              clusterName:
+                description: ClusterName is the ACK cluster name
+                type: string
+              dataDisks:
+                description: DataDisks specifies the data disk configuration
+                items:
+                  description: DataDiskSpec defines the data disk configuration
+                  properties:
+                    category:
+                      description: Category is the disk type
+                      type: string
+                    deleteWithInstance:
+                      default: true
+                      description: DeleteWithInstance specifies whether to delete
+                        with instance
+                      type: boolean
+                    encrypted:
+                      description: Encrypted specifies whether the disk is encrypted
+                      type: boolean
+                    performanceLevel:
+                      description: PerformanceLevel is the ESSD performance level
+                      type: string
+                    size:
+                      description: Size is the disk size in GB
+                      format: int32
+                      type: integer
+                    snapshotID:
+                      description: SnapshotID is the snapshot ID to create from
+                      type: string
+                  required:
+                  - category
+                  - size
+                  type: object
+                type: array
+              imageSelectorTerms:
+                description: ImageSelectorTerms is a list of image selector requirements
+                items:
+                  description: ImageSelectorTerm defines selection logic for Image
+                  properties:
+                    id:
+                      description: ID is the image ID
+                      type: string
+                    imageFamily:
+                      description: Family is the image family (e.g. acs:alibaba_cloud_linux_3_2104_lts_x64)
+                      type: string
+                    imageOwnerAlias:
+                      description: Alias is the image alias (system, self, others,
+                        marketplace)
+                      type: string
+                    imageOwnerID:
+                      description: Owner is the image owner
+                      type: string
+                    name:
+                      description: Name is the image name pattern
+                      type: string
+                    tags:
+                      additionalProperties:
+                        type: string
+                      description: Tags is a map of tags to match
+                      type: object
+                  type: object
+                minItems: 1
+                type: array
+              kubelet:
+                description: Kubelet defines Kubelet configuration overrides
+                properties:
+                  clusterDNS:
+                    description: ClusterDNS is a list of DNS server IP addresses
+                    items:
+                      type: string
+                    type: array
+                  cpuCFSQuota:
+                    description: CPUCFSQuota enables CPU CFS quota enforcement
+                    type: boolean
+                  evictionHard:
+                    additionalProperties:
+                      type: string
+                    description: EvictionHard contains eviction thresholds
+                    type: object
+                  evictionMaxPodGracePeriod:
+                    description: EvictionMaxPodGracePeriod is the maximum grace period
+                      for pod termination during eviction
+                    format: int32
+                    type: integer
+                  evictionSoft:
+                    additionalProperties:
+                      type: string
+                    description: EvictionSoft contains soft eviction thresholds
+                    type: object
+                  evictionSoftGracePeriod:
+                    additionalProperties:
+                      type: string
+                    description: EvictionSoftGracePeriod contains grace periods for
+                      soft eviction thresholds
+                    type: object
+                  imageGCHighThresholdPercent:
+                    description: ImageGCHighThresholdPercent is the disk usage threshold
+                      for high image garbage collection
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                  imageGCLowThresholdPercent:
+                    description: ImageGCLowThresholdPercent is the disk usage threshold
+                      for low image garbage collection
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                  kubeReserved:
+                    additionalProperties:
+                      type: string
+                    description: KubeReserved contains resources reserved for Kubernetes
+                      components
+                    type: object
+                  maxPods:
+                    description: MaxPods is the maximum number of pods per node
+                    format: int32
+                    type: integer
+                  podsPerCore:
+                    description: |-
+                      PodsPerCore enables pods per core scheduling
+                      The maximum number of pods per node will be calculated as podsPerCore * number of cores
+                    format: int32
+                    type: integer
+                  systemReserved:
+                    additionalProperties:
+                      type: string
+                    description: SystemReserved contains resources reserved for system
+                      daemons
+                    type: object
+                type: object
+              launchTemplateID:
+                description: LaunchTemplateID specifies the launch template ID to
+                  use
+                type: string
+              metadataOptions:
+                description: MetadataOptions specifies metadata service options
+                properties:
+                  httpEndpoint:
+                    default: enabled
+                    description: HttpEndpoint enables or disables the metadata service
+                    enum:
+                    - enabled
+                    - disabled
+                    type: string
+                  httpPutResponseHopLimit:
+                    default: 1
+                    description: HttpPutResponseHopLimit specifies the hop limit for
+                      instance metadata requests
+                    format: int32
+                    maximum: 64
+                    minimum: 1
+                    type: integer
+                  httpTokens:
+                    default: optional
+                    description: HttpTokens specifies whether to require IMDSv2 (optional
+                      or required)
+                    enum:
+                    - optional
+                    - required
+                    type: string
+                type: object
+              role:
+                description: Role is the name of the RAM role to use for the instance
+                type: string
+              securityGroupSelectorTerms:
+                description: SecurityGroupSelectorTerms is a list of security group
+                  selector requirements
+                items:
+                  description: SecurityGroupSelectorTerm defines selection logic for
+                    Security Group
+                  properties:
+                    id:
+                      description: ID is the security group ID
+                      type: string
+                    name:
+                      description: Name is the security group name
+                      type: string
+                    tags:
+                      additionalProperties:
+                        type: string
+                      description: Tags is a map of tags to match
+                      type: object
+                  type: object
+                minItems: 1
+                type: array
+              spotPriceLimit:
+                description: SpotPriceLimit specifies the maximum hourly price for
+                  spot instances
+                type: number
+              spotStrategy:
+                description: SpotStrategy specifies the spot instance strategy (SpotAsPriceGo
+                  or SpotWithPriceLimit)
+                type: string
+              systemDisk:
+                description: SystemDisk specifies the system disk configuration
+                properties:
+                  category:
+                    default: cloud_essd
+                    description: Category is the disk type (cloud_efficiency, cloud_ssd,
+                      cloud_essd)
+                    type: string
+                  encrypted:
+                    description: Encrypted specifies whether the disk is encrypted
+                    type: boolean
+                  kmsKeyID:
+                    description: KMSKeyID is the KMS key ID for encryption
+                    type: string
+                  performanceLevel:
+                    default: PL0
+                    description: PerformanceLevel is the ESSD performance level (PL0,
+                      PL1, PL2, PL3)
+                    type: string
+                  size:
+                    default: 40
+                    description: Size is the disk size in GB
+                    format: int32
+                    maximum: 500
+                    minimum: 20
+                    type: integer
+                type: object
+              tags:
+                additionalProperties:
+                  type: string
+                description: Tags are instance tags
+                type: object
+              userData:
+                description: UserData specifies custom user data script
+                type: string
+              vSwitchSelectorTerms:
+                description: VSwitchSelectorTerms is a list of VSwitch selector requirements
+                items:
+                  description: VSwitchSelectorTerm defines selection logic for VSwitch
+                  properties:
+                    id:
+                      description: ID is the VSwitch ID
+                      type: string
+                    tags:
+                      additionalProperties:
+                        type: string
+                      description: Tags is a map of tags to match
+                      type: object
+                    zoneID:
+                      description: ZoneID is the zone ID
+                      type: string
+                  type: object
+                minItems: 1
+                type: array
+            required:
+            - imageSelectorTerms
+            - securityGroupSelectorTerms
+            - vSwitchSelectorTerms
+            type: object
+          status:
+            description: ECSNodeClassStatus defines the observed state of ECSNodeClass
+            properties:
+              conditions:
+                description: Conditions contains the current conditions of the ECSNodeClass
+                items:
+                  description: "Condition contains details for one aspect of the current
+                    state of this API Resource.\n---\nThis struct is intended for
+                    direct use as an array at the field path .status.conditions.  For
+                    example,\n\n\n\ttype FooStatus struct{\n\t    // Represents the
+                    observations of a foo's current state.\n\t    // Known .status.conditions.type
+                    are: \"Available\", \"Progressing\", and \"Degraded\"\n\t    //
+                    +patchMergeKey=type\n\t    // +patchStrategy=merge\n\t    // +listType=map\n\t
+                    \   // +listMapKey=type\n\t    Conditions []metav1.Condition `json:\"conditions,omitempty\"
+                    patchStrategy:\"merge\" patchMergeKey:\"type\" protobuf:\"bytes,1,rep,name=conditions\"`\n\n\n\t
+                    \   // other fields\n\t}"
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: |-
+                        type of condition in CamelCase or in foo.example.com/CamelCase.
+                        ---
+                        Many .condition.type values are consistent across resources like Available, but because arbitrary conditions can be
+                        useful (see .node.status.conditions), the ability to deconflict is important.
+                        The regex it matches is (dns1123SubdomainFmt/)?(qualifiedNameFmt)
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              images:
+                description: Images contains the resolved image list
+                items:
+                  description: Image represents a resolved image
+                  properties:
+                    architecture:
+                      description: Architecture is the image architecture
+                      type: string
+                    id:
+                      description: ID is the image ID
+                      type: string
+                    name:
+                      description: Name is the image name
+                      type: string
+                  required:
+                  - id
+                  type: object
+                type: array
+              ramRole:
+                description: RAMRole is the resolved RAM role
+                type: string
+              ready:
+                description: Ready indicates whether the ECSNodeClass is ready to
+                  provision instances
+                type: boolean
+              securityGroups:
+                description: SecurityGroups contains the resolved security group list
+                items:
+                  description: SecurityGroup represents a resolved security group
+                  properties:
+                    id:
+                      description: ID is the security group ID
+                      type: string
+                    name:
+                      description: Name is the security group name
+                      type: string
+                  required:
+                  - id
+                  type: object
+                type: array
+              vSwitches:
+                description: VSwitches contains the resolved VSwitch list
+                items:
+                  description: VSwitch represents a resolved VSwitch
+                  properties:
+                    availableIPAddressCount:
+                      description: AvailableIPAddressCount is the available IP address
+                        count
+                      type: integer
+                    id:
+                      description: ID is the VSwitch ID
+                      type: string
+                    zone:
+                      description: Zone is the availability zone
+                      type: string
+                    zoneID:
+                      description: ZoneID is the availability zone ID (alias for Zone)
+                      type: string
+                  required:
+                  - id
+                  - zone
+                  type: object
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

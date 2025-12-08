@@ -1,0 +1,17 @@
+apiVersion: karpenter.alibabacloud.com/v1alpha1
+kind: ECSNodeClass
+metadata:
+  name: minimal
+spec:
+  # 通过标签自动发现VSwitch和安全组
+  vSwitchSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: my-cluster
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: my-cluster
+  # 使用阿里云官方支持的镜像别名
+  imageSelectorTerms:
+    - id: "aliyun_3_x64_20G_container_optimized_alibase_20250629.vhd"
+  # RAM角色
+  role: KarpenterNodeRole

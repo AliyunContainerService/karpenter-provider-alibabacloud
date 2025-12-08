@@ -1,0 +1,67 @@
+# Default values for karpenter
+replicaCount: 1
+
+controller:
+  image:
+    repository: registry-cn-hangzhou.ack.aliyuncs.com/acs/karpenter-provider-alibabacloud
+    pullPolicy: Always
+    tag: "v1.0.0"
+
+  resources:
+    requests:
+      cpu: "1"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  env:
+    - name: ALIBABA_CLOUD_ACCESS_KEY_ID
+      value: ""
+    - name: ALIBABA_CLOUD_ACCESS_KEY_SECRET
+      value: ""
+    - name: ALIBABA_CLOUD_REGION
+      value: ""
+    - name: ECS_ENDPOINT
+      value: ""
+    - name: CS_ENDPOINT
+      value: ""
+    - name: VPC_ENDPOINT
+      value: ""
+    - name: RAM_ENDPOINT
+      value: ""
+
+
+settings:
+  clusterName: ""
+  clusterEndpoint: ""
+  region: ""
+  
+  # Feature gates
+  featureGates:
+    spotInterruption: true
+    capacityReservation: true
+
+  # Batch processing settings
+  batchMaxDuration: "30s"
+  batchIdleDuration: "5s"
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: "karpenter"
+
+rbac:
+  create: true
+
+metrics:
+  enabled: true
+  port: 8080
+
+webhook:
+  enabled: true
+  port: 9443
