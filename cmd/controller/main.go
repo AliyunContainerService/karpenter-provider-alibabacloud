@@ -17,6 +17,9 @@ limitations under the License.
 package main
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/cloudprovider"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/controllers"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/operator"
@@ -40,7 +43,8 @@ func main() {
 	// Create Alibaba Cloud operator with providers, passing the core operator
 	alibabaOperator, err := operator.NewOperator(ctx, coreOp)
 	if err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "Failed to create Alibaba Cloud operator: %v\n", err)
+		os.Exit(1)
 	}
 
 	alibabaCloudProvider := cloudprovider.New(

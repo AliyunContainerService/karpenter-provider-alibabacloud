@@ -58,6 +58,17 @@ const (
 	EnvCSEndpoint  = "CS_ENDPOINT"
 )
 
+var (
+	transport = &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 50,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+		// Explicitly enable HTTP/2 support
+		ForceAttemptHTTP2: true,
+	}
+)
+
 // Operator is injected into the Alibaba Cloud CloudProvider's factories
 type Operator struct {
 	*coreoperator.Operator
@@ -97,7 +108,9 @@ type Operator struct {
 func (o *Operator) Close() error {
 	// Note: Most Alibaba Cloud SDK clients don't have explicit Close methods
 	// The Go HTTP client handles connection pooling automatically
-
+	if o.InstanceProvider != nil && o.InstanceProvider.Batcher != nil {
+		o.InstanceProvider.Batcher.Close()
+	}
 	return nil
 }
 
@@ -128,16 +141,6 @@ func InitECSClient(region, accessKeyID, accessKeySecret string) (clients.ECSClie
 				region: os.Getenv(EnvECSEndpoint),
 			}
 		}
-
-		// Configure HTTP transport with proper connection pooling
-		transport := &http.Transport{
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 50,
-			IdleConnTimeout:     90 * time.Second,
-			TLSHandshakeTimeout: 10 * time.Second,
-			// Explicitly enable HTTP/2 support
-			ForceAttemptHTTP2: true,
-		}
 		client.GetConfig().WithHttpTransport(transport)
 
 		return clients.NewDefaultECSClient(client, region), nil
@@ -156,16 +159,6 @@ func InitECSClient(region, accessKeyID, accessKeySecret string) (clients.ECSClie
 	// Configure HTTP client parameters to prevent connection leaks
 	client.GetConfig().WithTimeout(30 * time.Second)
 	client.GetConfig().WithGoRoutinePoolSize(10)
-
-	// Configure HTTP transport with proper connection pooling
-	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 50,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
-		// Explicitly enable HTTP/2 support
-		ForceAttemptHTTP2: true,
-	}
 	client.GetConfig().WithHttpTransport(transport)
 
 	return clients.NewDefaultECSClient(client, region), nil
@@ -186,16 +179,6 @@ func InitVPCClient(region, accessKeyID, accessKeySecret string) (clients.VPCClie
 			client.EndpointMap = map[string]string{
 				region: os.Getenv(EnvVPCEndpoint),
 			}
-		}
-
-		// Configure HTTP transport with proper connection pooling
-		transport := &http.Transport{
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 50,
-			IdleConnTimeout:     90 * time.Second,
-			TLSHandshakeTimeout: 10 * time.Second,
-			// Explicitly enable HTTP/2 support
-			ForceAttemptHTTP2: true,
 		}
 		client.GetConfig().WithHttpTransport(transport)
 
@@ -241,16 +224,6 @@ func InitRAMClient(region, accessKeyID, accessKeySecret string) (clients.RAMClie
 				region: os.Getenv(EnvRAMEndpoint),
 			}
 		}
-
-		// Configure HTTP transport with proper connection pooling
-		transport := &http.Transport{
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 50,
-			IdleConnTimeout:     90 * time.Second,
-			TLSHandshakeTimeout: 10 * time.Second,
-			// Explicitly enable HTTP/2 support
-			ForceAttemptHTTP2: true,
-		}
 		client.GetConfig().WithHttpTransport(transport)
 
 		return clients.NewDefaultRAMClient(client, region), nil
@@ -264,16 +237,6 @@ func InitRAMClient(region, accessKeyID, accessKeySecret string) (clients.RAMClie
 	// Configure HTTP client parameters to prevent connection leaks
 	client.GetConfig().WithTimeout(30 * time.Second)
 	client.GetConfig().WithGoRoutinePoolSize(10)
-
-	// Configure HTTP transport with proper connection pooling
-	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 50,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
-		// Explicitly enable HTTP/2 support
-		ForceAttemptHTTP2: true,
-	}
 	client.GetConfig().WithHttpTransport(transport)
 
 	return clients.NewDefaultRAMClient(client, region), nil
@@ -343,7 +306,7 @@ func NewOperator(ctx context.Context, coreOp *coreoperator.Operator) (*Operator,
 	ramProvider := ramrole.NewProvider(ramClient, opts.Region)
 	instanceTypeProvider := instancetype.NewProvider(opts.Region, ecsClient)
 	imageFamilyProvider := imagefamily.NewProvider(ecsClient)
-	instanceProvider := instance.NewProvider(opts.Region, ecsClient)
+	instanceProvider := instance.NewProvider(ctx, opts.Region, ecsClient)
 	capacityReservationProvider := capacityreservation.NewProvider(opts.Region, ecsClient)
 
 	// Remove the manual creation of coreOp since we're now receiving it as a parameter

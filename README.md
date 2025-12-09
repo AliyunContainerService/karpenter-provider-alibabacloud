@@ -26,6 +26,32 @@ graph TD
     F --> I[系统镜像]
 ```
 
+## 支持功能
+
+### NodeClass 属性支持
+
+| 属性 | 配置 |   |
+|------|------|---|
+| clusterID | - | ✅ |
+| vSwitchSelectorTerms | id | ✅ |
+|  | tag | ✅ |
+| securityGroupSelectorTerms | id | ✅ |
+|  | tag | ✅ |
+| imageSelectorTerms | id | ✅ |
+|  | imageFamily | ✅ |
+| systemDisk | - | ✅ |
+| dataDisk | - | ✅ |
+
+### NodePool 属性支持
+
+| 属性 | 配置 |  |
+|------|------|----|
+| karpenter.sh/capacity-type | 仅支持按量付费 | ✅  |
+| node.kubernetes.io/instance-type | 多实例规格 | ✅  |
+| topology.kubernetes.io/zone | 多可用区 | ✅  |
+
+
+
 ## 快速开始
 
 请参考 [快速开始指南](QUICK_START.md) 了解如何部署和使用 Alibaba Cloud Karpenter Provider。
@@ -40,18 +66,23 @@ kind: ECSNodeClass
 metadata:
   name: default
 spec:
+  # 集群 ID
+  clusterID: ""
   # VSwitch 选择器
   vSwitchSelectorTerms:
     - tags:
         karpenter.sh/discovery: my-cluster
+    - id: "vsw-bp1h5w****"
   
   # 安全组选择器
   securityGroupSelectorTerms:
     - tags:
         karpenter.sh/discovery: my-cluster
+    - id: "sg-bp1h5w****"
   
   # 镜像选择器
   imageSelectorTerms:
+    - imageFamily: "acs:alibaba_cloud_linux_3_2104_lts_x64"
     - id: "aliyun_3_x64_20G_container_optimized_alibase_20250629.vhd"
 ```
 

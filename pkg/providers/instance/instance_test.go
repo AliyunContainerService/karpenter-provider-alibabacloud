@@ -19,6 +19,8 @@ package instance
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/responses"
 	"testing"
 	"time"
 
@@ -159,7 +161,7 @@ func TestCreate(t *testing.T) {
 			mockClient := new(MockECSClient)
 			tt.mockSetup(mockClient)
 
-			provider := NewProvider("cn-hangzhou", mockClient)
+			provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
 			result, err := provider.Create(context.Background(), tt.opts)
 
 			if tt.expectError {
@@ -222,7 +224,169 @@ func TestList(t *testing.T) {
 			mockClient := new(MockECSClient)
 			tt.mockSetup(mockClient)
 
-			provider := NewProvider("cn-hangzhou", mockClient)
+			provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+			result, err := provider.List(context.Background(), tt.tags)
+
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Len(t, result, tt.expectedLen)
+			}
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestListWithPagination(t *testing.T) {
+	tests := []struct {
+		name        string
+		tags        map[string]string
+		mockSetup   func(*MockECSClient)
+		expectedLen int
+		expectError bool
+	}{
+		{
+			name: "single page result",
+			tags: map[string]string{"env": "test"},
+			mockSetup: func(m *MockECSClient) {
+				response := &ecs.DescribeInstancesResponse{
+					BaseResponse: &responses.BaseResponse{},
+					TotalCount:   1,
+					PageNumber:   1,
+					PageSize:     100,
+					Instances: ecs.InstancesInDescribeInstances{
+						Instance: []ecs.Instance{
+							{
+								InstanceId:         "i-123",
+								RegionId:           "cn-hangzhou",
+								ZoneId:             "cn-hangzhou-h",
+								InstanceType:       "ecs.g6.large",
+								ImageId:            "img-123",
+								Cpu:                2,
+								Memory:             8192,
+								Status:             "Running",
+								InstanceChargeType: "PostPaid",
+							},
+						},
+					},
+				}
+				m.On("DescribeInstances", mock.Anything, mock.Anything).Return(response, nil)
+			},
+			expectedLen: 1,
+		},
+		{
+			name: "multiple pages result",
+			tags: map[string]string{"env": "test"},
+			mockSetup: func(m *MockECSClient) {
+				// First page
+				firstPage := &ecs.DescribeInstancesResponse{
+					BaseResponse: &responses.BaseResponse{},
+					TotalCount:   150, // Total 150 instances
+					PageNumber:   1,
+					PageSize:     100,
+					Instances: ecs.InstancesInDescribeInstances{
+						Instance: make([]ecs.Instance, 100), // First 100 instances
+					},
+				}
+				// Initialize first 100 instances
+				for i := 0; i < 100; i++ {
+					firstPage.Instances.Instance[i] = ecs.Instance{
+						InstanceId:         fmt.Sprintf("i-%d", i),
+						RegionId:           "cn-hangzhou",
+						ZoneId:             "cn-hangzhou-h",
+						InstanceType:       "ecs.g6.large",
+						ImageId:            "img-123",
+						Cpu:                2,
+						Memory:             8192,
+						Status:             "Running",
+						InstanceChargeType: "PostPaid",
+					}
+				}
+
+				// Second page
+				secondPage := &ecs.DescribeInstancesResponse{
+					BaseResponse: &responses.BaseResponse{},
+					TotalCount:   150,
+					PageNumber:   2,
+					PageSize:     100,
+					Instances: ecs.InstancesInDescribeInstances{
+						Instance: make([]ecs.Instance, 50), // Remaining 50 instances
+					},
+				}
+				// Initialize remaining 50 instances
+				for i := 0; i < 50; i++ {
+					secondPage.Instances.Instance[i] = ecs.Instance{
+						InstanceId:         fmt.Sprintf("i-%d", i+100),
+						RegionId:           "cn-hangzhou",
+						ZoneId:             "cn-hangzhou-h",
+						InstanceType:       "ecs.g6.large",
+						ImageId:            "img-123",
+						Cpu:                2,
+						Memory:             8192,
+						Status:             "Running",
+						InstanceChargeType: "PostPaid",
+					}
+				}
+
+				// Set up mock expectations - we'll use call count to simulate different responses
+				m.On("DescribeInstances", mock.Anything, mock.Anything).Return(firstPage, nil).Once()
+				m.On("DescribeInstances", mock.Anything, mock.Anything).Return(secondPage, nil).Once()
+			},
+			expectedLen: 150,
+		},
+		{
+			name: "API error on first page",
+			tags: map[string]string{"env": "test"},
+			mockSetup: func(m *MockECSClient) {
+				m.On("DescribeInstances", mock.Anything, mock.Anything).Return(nil, errors.New("API error"))
+			},
+			expectError: true,
+		},
+		{
+			name: "API error on second page",
+			tags: map[string]string{"env": "test"},
+			mockSetup: func(m *MockECSClient) {
+				// First page succeeds
+				firstPage := &ecs.DescribeInstancesResponse{
+					BaseResponse: &responses.BaseResponse{},
+					TotalCount:   150,
+					PageNumber:   1,
+					PageSize:     100,
+					Instances: ecs.InstancesInDescribeInstances{
+						Instance: make([]ecs.Instance, 100),
+					},
+				}
+				// Initialize first 100 instances
+				for i := 0; i < 100; i++ {
+					firstPage.Instances.Instance[i] = ecs.Instance{
+						InstanceId:         fmt.Sprintf("i-%d", i),
+						RegionId:           "cn-hangzhou",
+						ZoneId:             "cn-hangzhou-h",
+						InstanceType:       "ecs.g6.large",
+						ImageId:            "img-123",
+						Cpu:                2,
+						Memory:             8192,
+						Status:             "Running",
+						InstanceChargeType: "PostPaid",
+					}
+				}
+
+				// Set up mock expectations
+				m.On("DescribeInstances", mock.Anything, mock.Anything).Return(firstPage, nil).Once()
+				m.On("DescribeInstances", mock.Anything, mock.Anything).Return(nil, errors.New("API error")).Once()
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := new(MockECSClient)
+			tt.mockSetup(mockClient)
+
+			provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
 			result, err := provider.List(context.Background(), tt.tags)
 
 			if tt.expectError {
@@ -294,7 +458,7 @@ func TestDelete(t *testing.T) {
 			mockClient := new(MockECSClient)
 			tt.mockSetup(mockClient)
 
-			provider := NewProvider("cn-hangzhou", mockClient)
+			provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
 			err := provider.Delete(context.Background(), tt.instanceID)
 
 			if tt.expectError {
@@ -341,7 +505,7 @@ func TestTagInstance(t *testing.T) {
 			mockClient := new(MockECSClient)
 			tt.mockSetup(mockClient)
 
-			provider := NewProvider("cn-hangzhou", mockClient)
+			provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
 			err := provider.TagInstance(context.Background(), tt.instanceID, tt.tags)
 
 			if tt.expectError {
@@ -356,7 +520,7 @@ func TestTagInstance(t *testing.T) {
 }
 
 func TestCacheOperations(t *testing.T) {
-	provider := NewProvider("cn-hangzhou", new(MockECSClient))
+	provider := NewProvider(context.Background(), "cn-hangzhou", new(MockECSClient))
 
 	// Test setCachedInstance and getCachedInstance
 	instance := &Instance{
@@ -379,7 +543,7 @@ func TestCacheOperations(t *testing.T) {
 }
 
 func TestSetCacheTTL(t *testing.T) {
-	provider := NewProvider("cn-hangzhou", new(MockECSClient))
+	provider := NewProvider(context.Background(), "cn-hangzhou", new(MockECSClient))
 
 	newTTL := 1 * time.Minute
 	provider.SetCacheTTL(newTTL)

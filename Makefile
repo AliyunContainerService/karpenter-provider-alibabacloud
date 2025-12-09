@@ -123,4 +123,11 @@ ENVTEST_K8S_VERSION ?= 1.28.0
 test: generate manifests envtest-setup fmt vet
 	@KUBEBUILDER_ASSETS="$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)"; \
 	echo "KUBEBUILDER_ASSETS=$${KUBEBUILDER_ASSETS}"; \
-	KUBEBUILDER_ASSETS="$${KUBEBUILDER_ASSETS}" go test -v ./pkg/controllers/...
+	KUBEBUILDER_ASSETS="$${KUBEBUILDER_ASSETS}" go test -v ./pkg/... -coverprofile test.out
+
+.PHONY: test-integration
+test-integration: fmt vet ## Run integration tests in test/suites/...
+	go test -v ./test/suites/... -timeout 2h
+
+.PHONY: test-all
+test-all: test test-integration ## Run all tests (unit + integration)

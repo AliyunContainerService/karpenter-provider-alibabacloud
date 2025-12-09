@@ -98,7 +98,7 @@ var _ = BeforeSuite(func() {
 	mockVPCClient = new(MockVPCClient)
 
 	// Create providers
-	instanceProvider = instance.NewProvider("cn-hangzhou", mockECSClient)
+	instanceProvider = instance.NewProvider(ctx, "cn-hangzhou", mockECSClient)
 	instanceTypeProvider = instancetype.NewProvider("cn-hangzhou", mockECSClient)
 	imageFamilyProvider = imagefamily.NewProvider(mockECSClient)
 	securityGroupProvider = securitygroup.NewProvider("cn-hangzhou", mockECSClient)
@@ -146,7 +146,7 @@ var _ = Describe("GarbageCollectionController", func() {
 		mockVPCClient = new(MockVPCClient)
 
 		// Recreate all providers with new mocks
-		instanceProvider = instance.NewProvider("cn-hangzhou", mockECSClient)
+		instanceProvider = instance.NewProvider(ctx, "cn-hangzhou", mockECSClient)
 		instanceTypeProvider = instancetype.NewProvider("cn-hangzhou", mockECSClient)
 		imageFamilyProvider = imagefamily.NewProvider(mockECSClient)
 		securityGroupProvider = securitygroup.NewProvider("cn-hangzhou", mockECSClient)

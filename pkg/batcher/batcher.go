@@ -51,7 +51,7 @@ type BatchResult struct {
 
 // NewBatcher creates a new API batcher
 // 使用更短的时间间隔以提高响应速度，参考AWS Karpenter的优化设置
-func NewBatcher(maxBatchDuration, batchIdleDuration time.Duration) *Batcher {
+func NewBatcher(ctx context.Context, maxBatchDuration, batchIdleDuration time.Duration) *Batcher {
 	// 如果使用默认值，应用优化的设置
 	if maxBatchDuration == 100*time.Millisecond && batchIdleDuration == 10*time.Millisecond {
 		maxBatchDuration = 10 * time.Millisecond
@@ -65,8 +65,8 @@ func NewBatcher(maxBatchDuration, batchIdleDuration time.Duration) *Batcher {
 		cleanupCh:         make(chan struct{}),
 	}
 
-	// Start cache cleanup goroutine
-	go b.cleanupLoop()
+	// Start cache cleanup goroutine with context
+	go b.cleanupLoop(ctx)
 
 	return b
 }
@@ -213,7 +213,7 @@ func (b *Batcher) deleteCache(key string) {
 }
 
 // cleanupLoop periodically removes expired cache entries
-func (b *Batcher) cleanupLoop() {
+func (b *Batcher) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
@@ -221,7 +221,11 @@ func (b *Batcher) cleanupLoop() {
 		select {
 		case <-ticker.C:
 			b.cleanupExpired()
+		case <-ctx.Done():
+			// Context cancelled, stop the loop
+			return
 		case <-b.cleanupCh:
+			// Explicit close signal
 			return
 		}
 	}

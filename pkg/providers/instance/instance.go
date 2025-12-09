@@ -40,7 +40,7 @@ import (
 type Provider struct {
 	region    string
 	ecsClient clients.ECSClient
-	batcher   *batcher.Batcher
+	Batcher   *batcher.Batcher
 	cache     map[string]*CacheEntry
 	cacheMu   sync.RWMutex
 	cacheTTL  time.Duration
@@ -102,11 +102,11 @@ type Instance struct {
 
 // NewProvider creates a new instance provider
 // 参考AWS Karpenter的优化设置，使用更短的批处理时间间隔以提高响应速度
-func NewProvider(region string, ecsClient clients.ECSClient) *Provider {
+func NewProvider(ctx context.Context, region string, ecsClient clients.ECSClient) *Provider {
 	return &Provider{
 		region:    region,
 		ecsClient: ecsClient,
-		batcher:   batcher.NewBatcher(10*time.Millisecond, 1*time.Millisecond), // 初始化batcher，使用优化的时间间隔
+		Batcher:   batcher.NewBatcher(ctx, 10*time.Millisecond, 1*time.Millisecond), // 初始化batcher，使用优化的时间间隔
 		cache:     make(map[string]*CacheEntry),
 		cacheTTL:  30 * time.Second, // 缩短缓存TTL以更快响应变化
 	}
@@ -120,19 +120,29 @@ func (p *Provider) SetCacheTTL(ttl time.Duration) {
 // getCachedInstance retrieves an instance from cache if it exists and is not expired
 func (p *Provider) getCachedInstance(instanceID string) (*Instance, bool) {
 	p.cacheMu.RLock()
-	defer p.cacheMu.RUnlock()
 
 	entry, exists := p.cache[instanceID]
 	if !exists {
+		p.cacheMu.RUnlock()
 		return nil, false
 	}
 
 	// Check if cache entry is expired
 	if time.Now().After(entry.ExpiresAt) {
+		// Release read lock and acquire write lock to clean up expired entry
+		p.cacheMu.RUnlock()
+		p.cacheMu.Lock()
+		// Double-check if entry is still expired after acquiring write lock
+		if entry, exists := p.cache[instanceID]; exists && time.Now().After(entry.ExpiresAt) {
+			delete(p.cache, instanceID)
+		}
+		p.cacheMu.Unlock()
 		return nil, false
 	}
 
-	return entry.Instance, true
+	instance := entry.Instance
+	p.cacheMu.RUnlock()
+	return instance, true
 }
 
 // setCachedInstance stores an instance in cache with expiration
@@ -326,7 +336,7 @@ func (p *Provider) Get(ctx context.Context, instanceID string) (*Instance, error
 
 	// 使用批处理机制来减少API调用
 	instanceIDs := []string{instanceID}
-	results, err := p.batcher.BatchDescribeInstances(ctx, instanceIDs, func(ids []string) (interface{}, error) {
+	results, err := p.Batcher.BatchDescribeInstances(ctx, instanceIDs, func(ids []string) (interface{}, error) {
 		return p.describeInstances(ctx, ids)
 	})
 	if err != nil {
@@ -635,6 +645,9 @@ func (p *Provider) List(ctx context.Context, tags map[string]string) ([]*Instanc
 	request := ecs.CreateDescribeInstancesRequest()
 	request.RegionId = p.region
 
+	// Set page size for better performance
+	request.PageSize = requests.NewInteger(100)
+
 	// Log the tags we're filtering by
 	logger.Info("Listing instances with tags", "tags", tags)
 
@@ -648,122 +661,135 @@ func (p *Provider) List(ctx context.Context, tags map[string]string) ([]*Instanc
 	}
 	request.Tag = &ecsTags
 
-	// Implement retry mechanism for throttling errors
-	var response *ecs.DescribeInstancesResponse
-	var err error
+	// Implement pagination
+	var allInstances []*Instance
+	pageNumber := 1
 
-	// Get retry strategy for throttling
-	strategy := errors.GetRetryStrategy(fmt.Errorf("throttling"))
-	if strategy == nil {
-		// Default strategy if not found
-		strategy = &errors.RetryStrategy{
-			MaxAttempts:       5,
-			InitialBackoff:    1000,  // 1s
-			MaxBackoff:        16000, // 16s
-			BackoffMultiplier: 2.0,
+	for {
+		request.PageNumber = requests.NewInteger(pageNumber)
+
+		// Implement retry mechanism for throttling errors
+		var response *ecs.DescribeInstancesResponse
+		var err error
+
+		// Get retry strategy for throttling
+		strategy := errors.GetRetryStrategy(fmt.Errorf("throttling"))
+		if strategy == nil {
+			// Default strategy if not found
+			strategy = &errors.RetryStrategy{
+				MaxAttempts:       5,
+				InitialBackoff:    1000,  // 1s
+				MaxBackoff:        16000, // 16s
+				BackoffMultiplier: 2.0,
+			}
 		}
-	}
 
-	for attempt := 0; attempt < strategy.MaxAttempts; attempt++ {
-		// Execute request
-		response, err = p.ecsClient.DescribeInstances(ctx, request)
-		if err == nil {
-			break // Success
-		}
-
-		// Check if it's a throttling error
-		if errors.IsThrottlingError(err) {
-			logger.Info("Throttling error encountered, will retry", "attempt", attempt+1, "error", err.Error())
-
-			// Calculate backoff with jitter
-			backoff := time.Duration(strategy.InitialBackoff) * time.Millisecond
-			if attempt > 0 {
-				backoff = time.Duration(float64(backoff) * math.Pow(strategy.BackoffMultiplier, float64(attempt)))
+		for attempt := 0; attempt < strategy.MaxAttempts; attempt++ {
+			// Execute request
+			response, err = p.ecsClient.DescribeInstances(ctx, request)
+			if err == nil {
+				break // Success
 			}
 
-			// Cap at max backoff
-			if backoff > time.Duration(strategy.MaxBackoff)*time.Millisecond {
-				backoff = time.Duration(strategy.MaxBackoff) * time.Millisecond
+			// Check if it's a throttling error
+			if errors.IsThrottlingError(err) {
+				logger.Info("Throttling error encountered, will retry", "attempt", attempt+1, "error", err.Error())
+
+				// Calculate backoff with jitter
+				backoff := time.Duration(strategy.InitialBackoff) * time.Millisecond
+				if attempt > 0 {
+					backoff = time.Duration(float64(backoff) * math.Pow(strategy.BackoffMultiplier, float64(attempt)))
+				}
+
+				// Cap at max backoff
+				if backoff > time.Duration(strategy.MaxBackoff)*time.Millisecond {
+					backoff = time.Duration(strategy.MaxBackoff) * time.Millisecond
+				}
+
+				// Add jitter (±50%)
+				jitter := time.Duration(rand.Int63n(int64(backoff))) - backoff/2
+				backoff += jitter
+
+				// Ensure backoff is positive
+				if backoff < 0 {
+					backoff = time.Duration(strategy.InitialBackoff) * time.Millisecond
+				}
+
+				logger.Info("Waiting before retry", "backoff", backoff.String(), "attempt", attempt+1)
+				time.Sleep(backoff)
+				continue
 			}
 
-			// Add jitter (±50%)
-			jitter := time.Duration(rand.Int63n(int64(backoff))) - backoff/2
-			backoff += jitter
+			// For non-throttling errors, don't retry
+			logger.Error(err, "failed to list instances")
+			return nil, fmt.Errorf("failed to list instances: %w", err)
+		}
 
-			// Ensure backoff is positive
-			if backoff < 0 {
-				backoff = time.Duration(strategy.InitialBackoff) * time.Millisecond
+		if err != nil {
+			logger.Error(err, "failed to list instances after retries")
+			return nil, fmt.Errorf("failed to list instances after %d attempts: %w", strategy.MaxAttempts, err)
+		}
+
+		// Log response information
+		logger.Info("DescribeInstances response", "totalCount", response.TotalCount, "returnedCount", len(response.Instances.Instance), "pageNumber", pageNumber)
+
+		// Convert to our Instance type
+		for _, inst := range response.Instances.Instance {
+			cpu := resource.MustParse(fmt.Sprintf("%d", inst.Cpu))
+			memory := resource.MustParse(fmt.Sprintf("%dGi", inst.Memory/1024)) // ECS returns memory in MiB
+			storage := resource.MustParse("0")                                  // Storage is not directly available in DescribeInstances response
+
+			// Get architecture from instance type
+			architecture := "amd64"
+			if strings.HasPrefix(inst.InstanceType, "ecs.gn") || strings.HasPrefix(inst.InstanceType, "ecs.cu") {
+				architecture = "arm64"
 			}
 
-			logger.Info("Waiting before retry", "backoff", backoff.String(), "attempt", attempt+1)
-			time.Sleep(backoff)
-			continue
+			// Determine capacity type
+			var capacityType string
+			if inst.InstanceChargeType == "PostPaid" {
+				capacityType = "on-demand"
+			} else if inst.InstanceChargeType == "PrePaid" {
+				capacityType = "pre-paid"
+			} else if inst.SpotStrategy != "" && inst.SpotStrategy != "NoSpot" {
+				capacityType = "spot"
+			}
+
+			instance := &Instance{
+				InstanceID:       inst.InstanceId,
+				Region:           inst.RegionId,
+				Zone:             inst.ZoneId,
+				InstanceType:     inst.InstanceType,
+				ImageID:          inst.ImageId,
+				CPU:              cpu,
+				Memory:           memory,
+				Storage:          storage,
+				Architecture:     architecture,
+				Status:           inst.Status,
+				CreationTime:     inst.CreationTime,
+				Tags:             convertTags(inst.Tags.Tag),
+				CapacityType:     capacityType,
+				SecurityGroupIDs: inst.SecurityGroupIds.SecurityGroupId,
+				VSwitchID:        inst.VpcAttributes.VSwitchId,
+			}
+
+			// Log each instance found
+			logger.Info("Found instance", "instanceID", instance.InstanceID, "status", instance.Status, "tags", instance.Tags)
+
+			allInstances = append(allInstances, instance)
+
+			// Cache the instance
+			p.setCachedInstance(inst.InstanceId, instance)
 		}
 
-		// For non-throttling errors, don't retry
-		logger.Error(err, "failed to list instances")
-		return nil, fmt.Errorf("failed to list instances: %w", err)
+		// Check if there are more pages
+		if pageNumber*100 >= response.TotalCount {
+			break
+		}
+		pageNumber++
 	}
 
-	if err != nil {
-		logger.Error(err, "failed to list instances after retries")
-		return nil, fmt.Errorf("failed to list instances after %d attempts: %w", strategy.MaxAttempts, err)
-	}
-
-	// Log response information
-	logger.Info("DescribeInstances response", "totalCount", response.TotalCount, "returnedCount", len(response.Instances.Instance))
-
-	// Convert to our Instance type
-	var instances []*Instance
-	for _, inst := range response.Instances.Instance {
-		cpu := resource.MustParse(fmt.Sprintf("%d", inst.Cpu))
-		memory := resource.MustParse(fmt.Sprintf("%dGi", inst.Memory/1024)) // ECS returns memory in MiB
-		storage := resource.MustParse("0")                                  // Storage is not directly available in DescribeInstances response
-
-		// Get architecture from instance type
-		architecture := "amd64"
-		if strings.HasPrefix(inst.InstanceType, "ecs.gn") || strings.HasPrefix(inst.InstanceType, "ecs.cu") {
-			architecture = "arm64"
-		}
-
-		// Determine capacity type
-		var capacityType string
-		if inst.InstanceChargeType == "PostPaid" {
-			capacityType = "on-demand"
-		} else if inst.InstanceChargeType == "PrePaid" {
-			capacityType = "pre-paid"
-		} else if inst.SpotStrategy != "" && inst.SpotStrategy != "NoSpot" {
-			capacityType = "spot"
-		}
-
-		instance := &Instance{
-			InstanceID:       inst.InstanceId,
-			Region:           inst.RegionId,
-			Zone:             inst.ZoneId,
-			InstanceType:     inst.InstanceType,
-			ImageID:          inst.ImageId,
-			CPU:              cpu,
-			Memory:           memory,
-			Storage:          storage,
-			Architecture:     architecture,
-			Status:           inst.Status,
-			CreationTime:     inst.CreationTime,
-			Tags:             convertTags(inst.Tags.Tag),
-			CapacityType:     capacityType,
-			SecurityGroupIDs: inst.SecurityGroupIds.SecurityGroupId,
-			VSwitchID:        inst.VpcAttributes.VSwitchId,
-		}
-
-		// Log each instance found
-		logger.Info("Found instance", "instanceID", instance.InstanceID, "status", instance.Status, "tags", instance.Tags)
-
-		instances = append(instances, instance)
-
-		// Cache the instance
-		p.setCachedInstance(inst.InstanceId, instance)
-	}
-
-	return instances, nil
+	return allInstances, nil
 }
 
 // TagInstance tags an ECS instance with the given tags

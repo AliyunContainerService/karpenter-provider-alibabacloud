@@ -438,3 +438,7 @@ func (p *Provider) ClearCache() {
 	defer p.cacheMu.Unlock()
 	p.cache = make(map[string]*CacheEntry)
 }
+
+func (p *Provider) GetImageSupportInstanceTypes() []string {
+	return []string{}
+}

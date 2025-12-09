@@ -82,7 +82,7 @@ var _ = BeforeSuite(func() {
 	mockECSClient = new(MockECSClient)
 
 	// Create instance provider with mock client
-	instanceProvider = instance.NewProvider("cn-hangzhou", mockECSClient)
+	instanceProvider = instance.NewProvider(ctx, "cn-hangzhou", mockECSClient)
 
 	// Create tagging controller
 	taggingController = tagging.NewController(k8sClient, instanceProvider)
@@ -106,7 +106,7 @@ var _ = Describe("TaggingController", func() {
 	BeforeEach(func() {
 		// Reset mock expectations
 		mockECSClient = new(MockECSClient)
-		instanceProvider = instance.NewProvider("cn-hangzhou", mockECSClient)
+		instanceProvider = instance.NewProvider(ctx, "cn-hangzhou", mockECSClient)
 		taggingController = tagging.NewController(env.Client, instanceProvider)
 
 		// Create ECSNodeClass

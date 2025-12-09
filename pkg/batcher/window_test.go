@@ -231,7 +231,7 @@ func TestWindowedBatcher(t *testing.T) {
 
 // TestBatcherTTLCache tests TTL-based caching
 func TestBatcherTTLCache(t *testing.T) {
-	b := NewBatcher(100*time.Millisecond, 10*time.Millisecond)
+	b := NewBatcher(context.Background(), 100*time.Millisecond, 10*time.Millisecond)
 	defer b.Close()
 
 	callCount := 0

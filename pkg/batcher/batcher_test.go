@@ -27,7 +27,7 @@ import (
 
 // TestBatcherDo tests basic singleflight deduplication
 func TestBatcherDo(t *testing.T) {
-	b := NewBatcher(100*time.Millisecond, 10*time.Millisecond)
+	b := NewBatcher(context.Background(), 100*time.Millisecond, 10*time.Millisecond)
 	defer b.Close()
 
 	callCount := int32(0)
@@ -74,7 +74,7 @@ func TestBatcherDo(t *testing.T) {
 
 // TestBatchDescribeInstances tests instance description batching
 func TestBatchDescribeInstances(t *testing.T) {
-	b := NewBatcher(100*time.Millisecond, 10*time.Millisecond)
+	b := NewBatcher(context.Background(), 100*time.Millisecond, 10*time.Millisecond)
 	defer b.Close()
 
 	callCount := int32(0)
@@ -112,7 +112,7 @@ func TestBatchDescribeInstances(t *testing.T) {
 
 // TestBatchAddTags tests tag adding batching
 func TestBatchAddTags(t *testing.T) {
-	b := NewBatcher(100*time.Millisecond, 10*time.Millisecond)
+	b := NewBatcher(context.Background(), 100*time.Millisecond, 10*time.Millisecond)
 	defer b.Close()
 
 	callCount := int32(0)
@@ -148,7 +148,7 @@ func TestBatchAddTags(t *testing.T) {
 
 // TestDedupDescribeInstanceTypes tests instance type deduplication
 func TestDedupDescribeInstanceTypes(t *testing.T) {
-	b := NewBatcher(100*time.Millisecond, 10*time.Millisecond)
+	b := NewBatcher(context.Background(), 100*time.Millisecond, 10*time.Millisecond)
 	defer b.Close()
 
 	callCount := int32(0)
@@ -199,7 +199,7 @@ func TestDedupDescribeInstanceTypes(t *testing.T) {
 
 // TestDedupDescribeVSwitches tests VSwitch deduplication
 func TestDedupDescribeVSwitches(t *testing.T) {
-	b := NewBatcher(100*time.Millisecond, 10*time.Millisecond)
+	b := NewBatcher(context.Background(), 100*time.Millisecond, 10*time.Millisecond)
 	defer b.Close()
 
 	callCount := make(map[string]int32)
@@ -260,7 +260,7 @@ func TestDedupDescribeVSwitches(t *testing.T) {
 
 // TestDedupWithTTL tests TTL-based caching
 func TestDedupWithTTL(t *testing.T) {
-	b := NewBatcher(100*time.Millisecond, 10*time.Millisecond)
+	b := NewBatcher(context.Background(), 100*time.Millisecond, 10*time.Millisecond)
 	defer b.Close()
 
 	callCount := int32(0)
@@ -312,7 +312,7 @@ func TestDedupWithTTL(t *testing.T) {
 
 // TestCacheCleanup tests automatic cache cleanup
 func TestCacheCleanup(t *testing.T) {
-	b := NewBatcher(100*time.Millisecond, 10*time.Millisecond)
+	b := NewBatcher(context.Background(), 100*time.Millisecond, 10*time.Millisecond)
 	defer b.Close()
 
 	// Add multiple entries with short TTL
@@ -345,7 +345,7 @@ func TestCacheCleanup(t *testing.T) {
 
 // TestConcurrentBatchOperations tests multiple concurrent batch operations
 func TestConcurrentBatchOperations(t *testing.T) {
-	b := NewBatcher(100*time.Millisecond, 10*time.Millisecond)
+	b := NewBatcher(context.Background(), 100*time.Millisecond, 10*time.Millisecond)
 	defer b.Close()
 
 	operationCounts := make(map[string]int32)
@@ -426,7 +426,7 @@ func TestConcurrentBatchOperations(t *testing.T) {
 
 // TestBatcherClose tests proper cleanup on close
 func TestBatcherClose(t *testing.T) {
-	b := NewBatcher(100*time.Millisecond, 10*time.Millisecond)
+	b := NewBatcher(context.Background(), 100*time.Millisecond, 10*time.Millisecond)
 
 	// Add some cache entries
 	for i := 0; i < 5; i++ {
@@ -454,7 +454,7 @@ func TestBatcherClose(t *testing.T) {
 
 // BenchmarkBatcherDo benchmarks singleflight deduplication
 func BenchmarkBatcherDo(b *testing.B) {
-	batcher := NewBatcher(100*time.Millisecond, 10*time.Millisecond)
+	batcher := NewBatcher(context.Background(), 100*time.Millisecond, 10*time.Millisecond)
 	defer batcher.Close()
 
 	fn := func() (interface{}, error) {
@@ -472,7 +472,7 @@ func BenchmarkBatcherDo(b *testing.B) {
 
 // BenchmarkDedupWithTTL benchmarks TTL cache
 func BenchmarkDedupWithTTL(b *testing.B) {
-	batcher := NewBatcher(100*time.Millisecond, 10*time.Millisecond)
+	batcher := NewBatcher(context.Background(), 100*time.Millisecond, 10*time.Millisecond)
 	defer batcher.Close()
 
 	fn := func() (interface{}, error) {
