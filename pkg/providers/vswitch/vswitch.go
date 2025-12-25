@@ -141,7 +141,7 @@ func (p *Provider) getByID(ctx context.Context, id string) (*v1alpha1.VSwitch, e
 
 	// Execute request
 	response, err := p.vpcClient.DescribeVSwitches(ctx, id, nil)
-	if err != nil {
+	if err != nil || response == nil || len(response.VSwitches.VSwitch) == 0 {
 		logger.Error(err, "failed to describe VSwitches by id %s", id)
 		return nil, fmt.Errorf("failed to describe VSwitches: %w", err)
 	}
@@ -159,7 +159,7 @@ func (p *Provider) getByTags(ctx context.Context, tags map[string]string) ([]v1a
 
 	// Execute request
 	response, err := p.vpcClient.DescribeVSwitches(ctx, "", tags)
-	if err != nil {
+	if err != nil || response == nil || len(response.VSwitches.VSwitch) == 0 {
 		logger.Error(err, "failed to describe VSwitches")
 		return nil, fmt.Errorf("failed to describe VSwitches: %w", err)
 	}

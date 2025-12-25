@@ -277,7 +277,7 @@ func (c *CloudProvider) Get(ctx context.Context, providerID string) (*coreapis.N
 func (c *CloudProvider) List(ctx context.Context) ([]*coreapis.NodeClaim, error) {
 	// List all Karpenter-managed instances
 	tags := map[string]string{
-		v1alpha1.TagManagedBy: "true",
+		v1alpha1.TagManagedBy: "karpenter",
 	}
 
 	instances, err := c.instanceProvider.List(ctx, tags)
@@ -664,7 +664,7 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClass *
 	if nodeClass.Spec.SystemDisk != nil {
 		opts.SystemDisk.Category = nodeClass.Spec.SystemDisk.Category
 		if nodeClass.Spec.SystemDisk.Size != nil {
-			opts.SystemDisk.Category = nodeClass.Spec.SystemDisk.Category
+			opts.SystemDisk.Size = *nodeClass.Spec.SystemDisk.Size
 		}
 		if nodeClass.Spec.SystemDisk.PerformanceLevel != nil {
 			opts.SystemDisk.PerformanceLevel = *nodeClass.Spec.SystemDisk.PerformanceLevel

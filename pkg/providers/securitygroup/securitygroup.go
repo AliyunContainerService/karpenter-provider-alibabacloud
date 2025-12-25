@@ -139,7 +139,7 @@ func (p *Provider) getByTags(ctx context.Context, tags map[string]string) ([]v1a
 
 	// Execute request
 	response, err := p.ecsClient.DescribeSecurityGroups(ctx, tags)
-	if err != nil {
+	if err != nil || response == nil || len(response.SecurityGroups.SecurityGroup) == 0 {
 		logger.Error(err, "failed to describe security groups")
 		return nil, fmt.Errorf("failed to describe security groups: %w", err)
 	}

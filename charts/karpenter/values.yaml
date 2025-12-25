@@ -50,6 +50,9 @@ settings:
   batchMaxDuration: "30s"
   batchIdleDuration: "5s"
 
+imagePullSecrets:
+   - name: my-secret
+
 serviceAccount:
   create: true
   annotations: {}
@@ -61,6 +64,9 @@ rbac:
 metrics:
   enabled: true
   port: 8080
+
+service:
+  metricsPort: 8080
 
 webhook:
   enabled: true

@@ -48,7 +48,7 @@ const (
 	TagNodeClaim = Group + "/nodeclaim"
 
 	// TagManagedBy is the tag key indicating resource is managed by Karpenter
-	TagManagedBy = Group + "/managed"
+	TagManagedBy = Group + "/managed-by"
 
 	// TagCluster is the tag key for cluster name
 	TagCluster = "kubernetes.io/cluster"

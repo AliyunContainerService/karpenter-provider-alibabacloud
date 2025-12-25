@@ -19,9 +19,10 @@ package status
 import (
 	"context"
 	"fmt"
-	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/ramrole"
 	"math/rand"
 	"time"
+
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/ramrole"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/imagefamily"
@@ -90,7 +91,7 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if err != nil || len(vswitches) == 0 {
 		log.Error(err, "failed to resolve vswitches", "nodeclass", nodeClass.Name)
 		c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionFalse,
-			"VSwitchResolutionFailed", err.Error())
+			"VSwitchResolutionFailed", safeErrorMessage(err, "vswitch not found"))
 		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
 			"ResourceResolutionFailed", "VSwitch resolution failed")
 		statusChanged = true
@@ -106,7 +107,7 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if err != nil || len(securityGroups) == 0 {
 		log.Error(err, "failed to resolve security groups", "nodeclass", nodeClass.Name)
 		c.setCondition(nodeClass, v1alpha1.ConditionTypeSecurityGroupResolved, metav1.ConditionFalse,
-			"SecurityGroupResolutionFailed", err.Error())
+			"SecurityGroupResolutionFailed", safeErrorMessage(err, "security group not found"))
 		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
 			"ResourceResolutionFailed", "SecurityGroup resolution failed")
 		statusChanged = true
@@ -122,7 +123,7 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if err != nil || len(images) == 0 {
 		log.Error(err, "failed to resolve images", "nodeclass", nodeClass.Name)
 		c.setCondition(nodeClass, v1alpha1.ConditionTypeImageResolved, metav1.ConditionFalse,
-			"ImageResolutionFailed", err.Error())
+			"ImageResolutionFailed", safeErrorMessage(err, "image not found"))
 		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
 			"ResourceResolutionFailed", "Image resolution failed")
 		statusChanged = true
@@ -260,4 +261,12 @@ func (c *Controller) Register(ctx context.Context, mgr manager.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.ECSNodeClass{}).
 		Complete(c)
+}
+
+// safeErrorMessage returns the error message if err is not nil, otherwise returns a default message
+func safeErrorMessage(err error, defaultMessage string) string {
+	if err != nil {
+		return err.Error()
+	}
+	return defaultMessage
 }
