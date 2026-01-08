@@ -127,7 +127,7 @@ test: generate manifests envtest-setup fmt vet
 
 .PHONY: test-integration
 test-integration: fmt vet ## Run integration tests in test/suites/...
-	go test -v ./test/suites/... -timeout 2h
+	ginkgo -v --procs=1 -timeout 2h ./test/suites/...
 
 .PHONY: test-all
 test-all: test test-integration ## Run all tests (unit + integration)

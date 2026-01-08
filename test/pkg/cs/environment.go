@@ -19,13 +19,14 @@ package cs
 import (
 	"context"
 	"fmt"
-	"github.com/aws/karpenter-provider-aws/test/pkg/debug"
-	"k8s.io/apimachinery/pkg/types"
 	"os"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"testing"
 	"time"
+
+	"github.com/aws/karpenter-provider-aws/test/pkg/debug"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
@@ -289,13 +290,6 @@ func (env *Environment) DefaultNodePool(nodeClass *v1alpha1.ECSNodeClass) *karpv
 								Key:      corev1.LabelInstanceTypeStable,
 								Operator: corev1.NodeSelectorOpIn,
 								Values:   []string{"ecs.c6.xlarge", "ecs.g6.xlarge"},
-							},
-						},
-						{
-							NodeSelectorRequirement: corev1.NodeSelectorRequirement{
-								Key:      corev1.LabelTopologyZone,
-								Operator: corev1.NodeSelectorOpIn,
-								Values:   []string{"cn-hongkong-b", "cn-hongkong-c", "cn-hongkong-d"},
 							},
 						},
 					},

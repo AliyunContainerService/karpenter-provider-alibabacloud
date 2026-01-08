@@ -22,10 +22,11 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"sigs.k8s.io/karpenter/pkg/cloudprovider"
 	"strings"
 	"sync"
 	"time"
+
+	"sigs.k8s.io/karpenter/pkg/cloudprovider"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/batcher"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
@@ -79,6 +80,7 @@ type DataDisk struct {
 	Category         string
 	Size             int32
 	PerformanceLevel string
+	Device           string
 }
 
 // Instance represents an ECS instance
@@ -91,6 +93,9 @@ type Instance struct {
 	CPU              resource.Quantity
 	Memory           resource.Quantity
 	Storage          resource.Quantity
+	GPU              resource.Quantity
+	GPUMem           resource.Quantity
+	GPUSpec          string
 	Architecture     string
 	Status           string
 	CreationTime     string
@@ -192,8 +197,13 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 		request.SecurityGroupId = opts.SecurityGroupIDs[0]
 	}
 
-	request.SpotStrategy = opts.SpotStrategy
-	request.SpotPriceLimit = requests.NewFloat(opts.SpotPriceLimit)
+	if opts.SpotStrategy != "" {
+		request.SpotStrategy = opts.SpotStrategy
+	}
+
+	if opts.SpotPriceLimit > 0 {
+		request.SpotPriceLimit = requests.NewFloat(opts.SpotPriceLimit)
+	}
 
 	// Set system disk
 	request.SystemDiskCategory = opts.SystemDisk.Category
@@ -206,6 +216,9 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 			dataDisk := ecs.RunInstancesDataDisk{
 				Category: disk.Category,
 				Size:     fmt.Sprintf("%d", disk.Size),
+			}
+			if disk.Device != "" {
+				dataDisk.Device = disk.Device
 			}
 			if disk.PerformanceLevel != "" {
 				dataDisk.PerformanceLevel = disk.PerformanceLevel
@@ -387,7 +400,9 @@ func (p *Provider) Get(ctx context.Context, instanceID string) (*Instance, error
 	// Convert to our Instance type
 	cpu := resource.MustParse(fmt.Sprintf("%d", inst.Cpu))
 	memory := resource.MustParse(fmt.Sprintf("%dGi", inst.Memory/1024)) // ECS returns memory in MiB
-	storage := resource.MustParse("0")                                  // Storage is not directly available in DescribeInstances response
+	gpu := resource.MustParse(fmt.Sprintf("%d", inst.GPUAmount))
+	storage := resource.MustParse("0") // Storage is not directly available in DescribeInstances response
+	gpuMem := resource.MustParse("0")  // GPUMem is not directly available in DescribeInstances response
 
 	// Get architecture from instance type
 	architecture := "amd64"
@@ -420,6 +435,9 @@ func (p *Provider) Get(ctx context.Context, instanceID string) (*Instance, error
 		CapacityType:     capacityType,
 		SecurityGroupIDs: inst.SecurityGroupIds.SecurityGroupId,
 		VSwitchID:        inst.VpcAttributes.VSwitchId,
+		GPU:              gpu,
+		GPUMem:           gpuMem,
+		GPUSpec:          inst.GPUSpec,
 	}
 
 	// Cache the instance
@@ -738,6 +756,8 @@ func (p *Provider) List(ctx context.Context, tags map[string]string) ([]*Instanc
 			cpu := resource.MustParse(fmt.Sprintf("%d", inst.Cpu))
 			memory := resource.MustParse(fmt.Sprintf("%dGi", inst.Memory/1024)) // ECS returns memory in MiB
 			storage := resource.MustParse("0")                                  // Storage is not directly available in DescribeInstances response
+			gpu := resource.MustParse(fmt.Sprintf("%d", inst.GPUAmount))
+			gpuMem := resource.MustParse("0") // GPUMem is not directly available in DescribeInstances response
 
 			// Get architecture from instance type
 			architecture := "amd64"
@@ -771,6 +791,9 @@ func (p *Provider) List(ctx context.Context, tags map[string]string) ([]*Instanc
 				CapacityType:     capacityType,
 				SecurityGroupIDs: inst.SecurityGroupIds.SecurityGroupId,
 				VSwitchID:        inst.VpcAttributes.VSwitchId,
+				GPU:              gpu,
+				GPUSpec:          inst.GPUSpec,
+				GPUMem:           gpuMem,
 			}
 
 			// Log each instance found

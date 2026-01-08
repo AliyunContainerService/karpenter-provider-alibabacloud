@@ -19,12 +19,14 @@ package operator
 import (
 	"context"
 	"fmt"
-	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
-	"github.com/alibabacloud-go/darabonba-openapi/v2/utils"
-	"github.com/alibabacloud-go/tea/tea"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/cluster"
+	"github.com/alibabacloud-go/darabonba-openapi/v2/utils"
+	"github.com/alibabacloud-go/tea/tea"
 
 	aliv1alpha1 "github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/cache"
@@ -74,9 +76,10 @@ type Operator struct {
 	*coreoperator.Operator
 
 	// Alibaba Cloud specific configuration
-	Region            string
-	ClusterName       string
-	InterruptionQueue string
+	Region               string
+	ClusterName          string
+	InterruptionQueue    string
+	ClusterNetworkConfig *cluster.NetworkConfig
 
 	// Alibaba Cloud SDK clients
 	ECSClient clients.ECSClient
@@ -296,6 +299,11 @@ func NewOperator(ctx context.Context, coreOp *coreoperator.Operator) (*Operator,
 	// Initialize cache
 	unavailableOfferingsCache := cache.NewUnavailableOfferingsCache()
 
+	// Initialize cluster network config
+	networkConfig, err := cluster.InitializeClusterNetworkConfig(csClient, opts.ClusterName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize cluster network config: %w", err)
+	}
 	// Initialize providers
 	vswitchProvider := vswitch.NewProvider(opts.Region, vpcClient)
 	securityGroupProvider := securitygroup.NewProvider(opts.Region, ecsClient)
@@ -318,6 +326,7 @@ func NewOperator(ctx context.Context, coreOp *coreoperator.Operator) (*Operator,
 		ECSClient:                   ecsClient,
 		VPCClient:                   vpcClient,
 		RAMClient:                   ramClient,
+		CSClient:                    csClient,
 		UnavailableOfferingsCache:   unavailableOfferingsCache,
 		VSwitchProvider:             vswitchProvider,
 		SecurityGroupProvider:       securityGroupProvider,
@@ -330,6 +339,7 @@ func NewOperator(ctx context.Context, coreOp *coreoperator.Operator) (*Operator,
 		RAMProvider:                 ramProvider,
 		LaunchTemplateProvider:      launchTemplateProvider,
 		CapacityReservationProvider: capacityReservationProvider,
+		ClusterNetworkConfig:        networkConfig,
 	}
 
 	return result, nil

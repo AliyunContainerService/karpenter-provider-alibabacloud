@@ -59,6 +59,7 @@ func main() {
 		alibabaOperator.PricingProvider,
 		alibabaOperator.LaunchTemplateProvider,
 		alibabaOperator.BootstrapProvider,
+		alibabaOperator.ClusterNetworkConfig,
 	)
 
 	overlayUndecoratedCloudProvider := metrics.Decorate(alibabaCloudProvider)

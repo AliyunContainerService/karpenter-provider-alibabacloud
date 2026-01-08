@@ -19,6 +19,7 @@ package instancetype
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -46,13 +47,15 @@ type CacheEntry struct {
 
 // InstanceType represents an ECS instance type
 type InstanceType struct {
-	Name         string
-	Architecture string
-	CPU          *resource.Quantity
-	Memory       *resource.Quantity
-	Storage      *resource.Quantity
-	GPU          *GPU
-	Zones        map[string]ZoneInfo
+	Name                        string
+	Architecture                string
+	CPU                         *resource.Quantity
+	Memory                      *resource.Quantity
+	Storage                     *resource.Quantity
+	GPU                         *GPU
+	Zones                       map[string]ZoneInfo
+	EniQuantity                 int
+	EniPrivateIpAddressQuantity int
 }
 
 // ZoneInfo represents information about an instance type in a specific zone
@@ -157,25 +160,54 @@ func (p *Provider) convertECSInstanceType(ecsInstanceType ecs.InstanceType, zone
 	// Get architecture from ECS API, fallback to amd64 if empty
 	architecture := ecsInstanceType.CpuArchitecture
 
-	// Get GPU information if available
+	// Get GPU information if available with enhanced memory calculation
 	var gpu *GPU
 	if ecsInstanceType.GPUAmount > 0 {
 		gpuCount := resource.NewQuantity(int64(ecsInstanceType.GPUAmount), resource.DecimalSI)
+		gpuMemory := CalculateGPUMemory(ecsInstanceType)
 		gpu = &GPU{
-			Count: gpuCount,
-			Model: ecsInstanceType.GPUSpec,
+			Count:  gpuCount,
+			Model:  ecsInstanceType.GPUSpec,
+			Memory: gpuMemory,
 		}
 	}
 
 	return &InstanceType{
-		Name:         ecsInstanceType.InstanceTypeId,
-		Architecture: architecture,
-		CPU:          cpu,
-		Memory:       memory,
-		Storage:      storage,
-		GPU:          gpu,
-		Zones:        zones,
+		Name:                        ecsInstanceType.InstanceTypeId,
+		Architecture:                architecture,
+		CPU:                         cpu,
+		Memory:                      memory,
+		Storage:                     storage,
+		GPU:                         gpu,
+		Zones:                       zones,
+		EniQuantity:                 ecsInstanceType.EniQuantity,
+		EniPrivateIpAddressQuantity: ecsInstanceType.EniPrivateIpAddressQuantity,
 	}
+}
+
+// calculateGPUMemory calculates GPU memory for an ECS instance type
+// It implements a hierarchical fallback strategy with priority:
+// 1. Try exact instance type match in GPUInstanceTypes map
+// 2. Try instance family match in GPUInstanceTypeFamily map (multiply by GPU count)
+// 3. Try GPUMemorySize from ECS API (multiply by GPU count)
+func CalculateGPUMemory(ecsInstanceType ecs.InstanceType) *resource.Quantity {
+	if ecsInstanceType.GPUAmount == 0 {
+		return nil
+	}
+
+	// Priority 1: Check exact instance type in GPUInstanceTypes map
+	if v, ok := GPUInstanceTypes[ecsInstanceType.InstanceTypeId]; ok {
+		// GPUInstanceTypes already contains total memory for all GPUs
+		return resource.NewQuantity(CovertMibToGib(v.GPUMemory), resource.DecimalSI)
+	}
+
+	// Priority 2: Check instance family in GPUInstanceTypeFamily map
+	// This contains per-GPU memory, so multiply by GPU count
+	if familyVal, ok := GPUInstanceTypeFamily[ecsInstanceType.InstanceTypeFamily]; ok {
+		return resource.NewQuantity(CovertMibToGib(familyVal.GPUMemory*int64(ecsInstanceType.GPUAmount)), resource.DecimalSI)
+	}
+
+	return resource.NewQuantity(int64(ecsInstanceType.GPUMemorySize)*int64(ecsInstanceType.GPUAmount), resource.DecimalSI)
 }
 
 // getAvailableZones fetches available zones from Alibaba Cloud API
@@ -249,6 +281,8 @@ func (p *Provider) List(ctx context.Context) ([]*InstanceType, error) {
 			"name", it.InstanceTypeId,
 			"cpu", it.CpuCoreCount,
 			"memoryGiB", it.MemorySize,
+			"gpuAmount", it.GPUAmount,
+			"gpuSpec", it.GPUSpec,
 			"zones", zones)
 
 		instanceTypes = append(instanceTypes, instanceType)
@@ -441,4 +475,8 @@ func (p *Provider) ClearCache() {
 
 func (p *Provider) GetImageSupportInstanceTypes() []string {
 	return []string{}
+}
+
+func CovertMibToGib(mibValue int64) int64 {
+	return int64(int(math.Floor(float64(mibValue) / 1024)))
 }

@@ -529,6 +529,8 @@ func TestCacheOperations(t *testing.T) {
 		Zone:       "cn-hangzhou-h",
 		CPU:        resource.MustParse("2"),
 		Memory:     resource.MustParse("8Gi"),
+		GPU:        resource.MustParse("0"),
+		GPUSpec:    "",
 	}
 
 	provider.setCachedInstance("i-123", instance)

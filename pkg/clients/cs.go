@@ -25,6 +25,8 @@ import (
 // CSClient is an interface for Container Service client operations
 type CSClient interface {
 	DescribeClusterAttachScripts(ctx context.Context, clusterID string, request *cs.DescribeClusterAttachScriptsRequest) (string, error)
+	GetClusterAddonInstance(ctx context.Context, clusterID, addonName string) (*cs.GetClusterAddonInstanceResponse, error)
+	DescribeClusterDetail(ctx context.Context, clusterID string) (*cs.DescribeClusterDetailResponse, error)
 }
 
 // DefaultCSClient implements CSClient using Alibaba Cloud SDK
@@ -51,4 +53,12 @@ func (c *DefaultCSClient) DescribeClusterAttachScripts(ctx context.Context, clus
 	}
 
 	return *response.Body, nil
+}
+
+func (c *DefaultCSClient) GetClusterAddonInstance(ctx context.Context, clusterID, addonName string) (*cs.GetClusterAddonInstanceResponse, error) {
+	return c.client.GetClusterAddonInstance(&clusterID, &addonName)
+}
+
+func (c *DefaultCSClient) DescribeClusterDetail(ctx context.Context, clusterID string) (*cs.DescribeClusterDetailResponse, error) {
+	return c.client.DescribeClusterDetail(&clusterID)
 }

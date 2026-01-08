@@ -91,6 +91,9 @@ spec:
                       description: DeleteWithInstance specifies whether to delete
                         with instance
                       type: boolean
+                    device:
+                      description: Device is the device name
+                      type: string
                     encrypted:
                       description: Encrypted specifies whether the disk is encrypted
                       type: boolean
@@ -125,7 +128,7 @@ spec:
                         marketplace)
                       type: string
                     imageOwnerID:
-                      description: Owner is the image owner (system, self, others)
+                      description: Owner is the image owner
                       type: string
                     name:
                       description: Name is the image name pattern

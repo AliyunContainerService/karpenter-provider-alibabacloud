@@ -27,8 +27,10 @@ import (
 	"time"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/operator/options"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/bootstrap"
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/cluster"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/imagefamily"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/instance"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/instanceprofile"
@@ -66,6 +68,9 @@ type CloudProvider struct {
 	launchTemplateProvider  *launchtemplate.Provider
 	bootstrapProvider       *bootstrap.Provider
 	instanceProfileProvider *instanceprofile.Provider
+	csClient                clients.CSClient
+
+	clusterNetworkConfig *cluster.NetworkConfig
 }
 
 // New creates a new CloudProvider with injected dependencies
@@ -81,6 +86,7 @@ func New(
 	pricingProvider *pricing.Provider,
 	launchTemplateProvider *launchtemplate.Provider,
 	bootstrapProvider *bootstrap.Provider,
+	networkConfig *cluster.NetworkConfig,
 ) *CloudProvider {
 	return &CloudProvider{
 		kubeClient:              kubeClient,
@@ -93,6 +99,7 @@ func New(
 		launchTemplateProvider:  launchTemplateProvider,
 		bootstrapProvider:       bootstrapProvider,
 		instanceProfileProvider: instanceProfileProvider,
+		clusterNetworkConfig:    networkConfig,
 	}
 }
 
@@ -101,6 +108,11 @@ const (
 	VSwitchDrift       cloudprovider.DriftReason = "VSwitchDrift"
 	SecurityGroupDrift cloudprovider.DriftReason = "SecurityGroupDrift"
 	NodeClassDrift     cloudprovider.DriftReason = "NodeClassDrift"
+)
+
+const (
+	ResourcePodsForExclusiveEniEnabled corev1.ResourceName = "alibabacloud.com/exclusive-eni"
+	DefaultPodsLimit                                       = 110
 )
 
 // Create creates a new instance for the given NodeClaim
@@ -187,7 +199,7 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
 	}
 
 	// 11. Convert instance to NodeClaim
-	createdNodeClaim := convertInstanceToNodeClaim(ctx, inst, nodeClaim, filteredTypes)
+	createdNodeClaim := c.convertInstanceToNodeClaim(ctx, inst, nodeClaim, filteredTypes, nodeClass.Spec.ClusterID)
 
 	// 12. Set NodeClass hash annotation for drift detection
 	hash := calculateNodeClassHash(nodeClass)
@@ -247,7 +259,8 @@ func (c *CloudProvider) Get(ctx context.Context, providerID string) (*coreapis.N
 	for _, it := range instanceTypes {
 		if it.Name == inst.InstanceType {
 			var err error
-			capacity, allocatable, err = calculateCapacityAndAllocatable(ctx, it)
+			clusterID := inst.Tags[v1alpha1.TagClusterID]
+			capacity, allocatable, err = c.calculateCapacityAndAllocatable(ctx, it, clusterID)
 			if err != nil {
 				return nil, err
 			}
@@ -305,7 +318,8 @@ func (c *CloudProvider) List(ctx context.Context) ([]*coreapis.NodeClaim, error)
 		var allocatable corev1.ResourceList
 		if it, ok := instanceTypeMap[inst.InstanceType]; ok {
 			// Ignore error here, just skip if calculation fails
-			capacity, allocatable, _ = calculateCapacityAndAllocatable(ctx, it)
+			clusterID := inst.Tags[v1alpha1.TagClusterID]
+			capacity, allocatable, _ = c.calculateCapacityAndAllocatable(ctx, it, clusterID)
 		}
 
 		// Parse launch time
@@ -395,12 +409,10 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 			continue
 		}
 
-		// Create capacity ResourceList from CPU and Memory
-		capacity := corev1.ResourceList{
-			corev1.ResourceCPU:    *it.CPU,
-			corev1.ResourceMemory: *it.Memory,
-			// 添加pods资源到总容量中
-			corev1.ResourcePods: *resource.NewQuantity(110, resource.DecimalSI), // 默认110个pods
+		capacity, _, err := c.calculateCapacityAndAllocatable(ctx, it, nodeClass.Spec.ClusterID)
+		if err != nil {
+			logger.Error(err, "failed to calculate capacity", "instanceType", it.Name)
+			continue
 		}
 
 		// Create offerings from zones
@@ -588,6 +600,11 @@ func buildInstanceTags(nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNod
 
 	// Add Karpenter management tag
 	tags[v1alpha1.TagManagedBy] = "true"
+
+	// Add ClusterID if available
+	if nodeClass.Spec.ClusterID != "" {
+		tags[v1alpha1.TagClusterID] = nodeClass.Spec.ClusterID
+	}
 	// NodePool name will be extracted from labels if needed
 
 	// Add NodeClaim labels as tags
@@ -677,6 +694,9 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClass *
 				Category: disk.Category,
 				Size:     disk.Size,
 			}
+			if disk.Device != nil {
+				dataDisk.Device = *disk.Device
+			}
 			if disk.PerformanceLevel != nil {
 				dataDisk.PerformanceLevel = *disk.PerformanceLevel
 			}
@@ -702,7 +722,7 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClass *
 	return instanceID, nil
 }
 
-func convertInstanceToNodeClaim(ctx context.Context, inst *instance.Instance, original *coreapis.NodeClaim, instanceTypes []*instancetype.InstanceType) *coreapis.NodeClaim {
+func (c *CloudProvider) convertInstanceToNodeClaim(ctx context.Context, inst *instance.Instance, original *coreapis.NodeClaim, instanceTypes []*instancetype.InstanceType, clusterID string) *coreapis.NodeClaim {
 	labels := make(map[string]string)
 	// Find instance type info
 	var capacity corev1.ResourceList
@@ -710,7 +730,7 @@ func convertInstanceToNodeClaim(ctx context.Context, inst *instance.Instance, or
 
 	for _, it := range instanceTypes {
 		if it.Name == inst.InstanceType {
-			capacity, allocatable, _ = calculateCapacityAndAllocatable(ctx, it)
+			capacity, allocatable, _ = c.calculateCapacityAndAllocatable(ctx, it, clusterID)
 			break
 		}
 	}
@@ -869,13 +889,9 @@ func calculateOverhead(ctx context.Context, instanceType *instancetype.InstanceT
 	// For CPU, we keep a fixed overhead similar to AWS approach
 	cpuOverhead := resource.MustParse("100m")
 
-	// For pods, use a reasonable default
-	podsOverhead := resource.MustParse("10") // 保留10个pods用于系统使用
-
 	return corev1.ResourceList{
 		corev1.ResourceCPU:    cpuOverhead,
 		corev1.ResourceMemory: memoryOverhead,
-		corev1.ResourcePods:   podsOverhead,
 	}
 }
 
@@ -898,8 +914,23 @@ func divideQuantity(q resource.Quantity, divisor int64) resource.Quantity {
 	return *resource.NewQuantity(value, q.Format)
 }
 
+func resourcesSubtract(lhs, rhs corev1.ResourceList) corev1.ResourceList {
+	result := make(corev1.ResourceList, len(lhs))
+	for k, v := range lhs {
+		result[k] = v.DeepCopy()
+	}
+	for resourceName := range lhs {
+		current := lhs[resourceName]
+		if rhsValue, ok := rhs[resourceName]; ok {
+			current.Sub(rhsValue)
+		}
+		result[resourceName] = current
+	}
+	return result
+}
+
 // calculateCapacityAndAllocatable calculates capacity and allocatable resources for an instance type
-func calculateCapacityAndAllocatable(ctx context.Context, it *instancetype.InstanceType) (capacity, allocatable corev1.ResourceList, err error) {
+func (c *CloudProvider) calculateCapacityAndAllocatable(ctx context.Context, it *instancetype.InstanceType, clusterID string) (capacity, allocatable corev1.ResourceList, err error) {
 	if it.CPU == nil || it.Memory == nil {
 		return nil, nil, fmt.Errorf("instance type %s has nil CPU or Memory", it.Name)
 	}
@@ -908,16 +939,34 @@ func calculateCapacityAndAllocatable(ctx context.Context, it *instancetype.Insta
 	capacity = corev1.ResourceList{
 		corev1.ResourceCPU:    *it.CPU,
 		corev1.ResourceMemory: *it.Memory,
-		corev1.ResourcePods:   *resource.NewQuantity(110, resource.DecimalSI),
+		corev1.ResourcePods:   *resource.NewQuantity(DefaultPodsLimit, resource.DecimalSI),
+	}
+
+	// Add GPU resources if available
+	if it.GPU != nil {
+		if it.GPU.Count != nil && it.GPU.Count.Value() > 0 {
+			capacity[v1alpha1.ResourceGPU] = *it.GPU.Count
+		}
+		if it.GPU.Memory != nil && it.GPU.Memory.Value() > 0 {
+			capacity[v1alpha1.ResourceGPUMemory] = *it.GPU.Memory
+		}
+	}
+
+	// Optimize ResourcePods based on network config
+	if c.clusterNetworkConfig != nil {
+		if c.clusterNetworkConfig.ClusterNetwork == "terway-eniip" {
+			capacity[corev1.ResourcePods] = *resource.NewQuantity(int64((it.EniQuantity-1)*it.EniPrivateIpAddressQuantity+3), resource.DecimalSI)
+			capacity[ResourcePodsForExclusiveEniEnabled] = *resource.NewQuantity(int64(it.EniQuantity)-1+3, resource.DecimalSI)
+		} else if c.clusterNetworkConfig.ClusterNetwork == "kube-flannel-ds" || c.clusterNetworkConfig.ClusterNetwork == "kube-flannel-ds-vxlan" {
+			if c.clusterNetworkConfig.MaxPods > 0 {
+				capacity[corev1.ResourcePods] = *resource.NewQuantity(c.clusterNetworkConfig.MaxPods, resource.DecimalSI)
+			}
+		}
 	}
 
 	// Calculate allocatable by subtracting overhead
 	overhead := calculateOverhead(ctx, it)
-	allocatable = corev1.ResourceList{
-		corev1.ResourceCPU:    subtractQuantity(*it.CPU, overhead[corev1.ResourceCPU]),
-		corev1.ResourceMemory: subtractQuantity(*it.Memory, overhead[corev1.ResourceMemory]),
-		corev1.ResourcePods:   subtractQuantity(*resource.NewQuantity(110, resource.DecimalSI), overhead[corev1.ResourcePods]),
-	}
+	allocatable = resourcesSubtract(capacity, overhead)
 
 	return capacity, allocatable, nil
 }

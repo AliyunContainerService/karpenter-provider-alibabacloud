@@ -250,6 +250,10 @@ type DataDiskSpec struct {
 	// Size is the disk size in GB
 	Size int32 `json:"size"`
 
+	// Device is the device name
+	// +optional
+	Device *string `json:"device,omitempty"`
+
 	// PerformanceLevel is the ESSD performance level
 	// +optional
 	PerformanceLevel *string `json:"performanceLevel,omitempty"`

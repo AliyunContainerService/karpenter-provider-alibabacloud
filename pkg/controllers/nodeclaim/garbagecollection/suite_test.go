@@ -19,10 +19,13 @@ package garbagecollection_test
 import (
 	"context"
 	"fmt"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/vpc"
 	"path/filepath"
 	"testing"
 	"time"
+
+	cs "github.com/alibabacloud-go/cs-20151215/v5/client"
+	"github.com/aliyun/alibaba-cloud-sdk-go/services/vpc"
+	"github.com/stretchr/testify/mock"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/cloudprovider"
@@ -36,7 +39,6 @@ import (
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/stretchr/testify/mock"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -118,6 +120,7 @@ var _ = BeforeSuite(func() {
 		pricingProvider,
 		nil, // launchTemplateProvider
 		nil, // bootstrapProvider
+		nil,
 	)
 
 	watiDuration := time.Second * 10
@@ -164,6 +167,7 @@ var _ = Describe("GarbageCollectionController", func() {
 			vswitchProvider,
 			nil,
 			pricingProvider,
+			nil,
 			nil,
 			nil,
 		)
@@ -896,6 +900,32 @@ func (m *MockVPCClient) DescribeVSwitches(ctx context.Context, vpcID string, tag
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*vpc.DescribeVSwitchesResponse), args.Error(1)
+}
+
+// MockCSClient is a mock implementation of CSClient for testing
+type MockCSClient struct {
+	mock.Mock
+}
+
+func (m *MockCSClient) DescribeClusterAttachScripts(ctx context.Context, clusterID string, request *cs.DescribeClusterAttachScriptsRequest) (string, error) {
+	args := m.Called(ctx, clusterID, request)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockCSClient) GetClusterAddonInstance(ctx context.Context, clusterID, addonName string) (*cs.GetClusterAddonInstanceResponse, error) {
+	args := m.Called(ctx, clusterID, addonName)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*cs.GetClusterAddonInstanceResponse), args.Error(1)
+}
+
+func (m *MockCSClient) DescribeClusterDetail(ctx context.Context, clusterID string) (*cs.DescribeClusterDetailResponse, error) {
+	args := m.Called(ctx, clusterID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*cs.DescribeClusterDetailResponse), args.Error(1)
 }
 
 // Helper functions

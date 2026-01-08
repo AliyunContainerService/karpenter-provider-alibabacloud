@@ -108,7 +108,7 @@ var _ = Describe("Deprovisioning", func() {
 							Containers: []corev1.Container{
 								{
 									Name:  "pause",
-									Image: "registry.k8s.io/pause:3.9",
+									Image: "registry-cn-hangzhou.ack.aliyuncs.com/acs/pause:3.9",
 									Resources: corev1.ResourceRequirements{
 										Requests: corev1.ResourceList{
 											corev1.ResourceCPU:    resource.MustParse("100m"),
@@ -217,7 +217,7 @@ var _ = Describe("Deprovisioning", func() {
 							Containers: []corev1.Container{
 								{
 									Name:  "pause",
-									Image: "registry.k8s.io/pause:3.9",
+									Image: "registry-cn-hangzhou.ack.aliyuncs.com/acs/pause:3.9",
 									Resources: corev1.ResourceRequirements{
 										Requests: corev1.ResourceList{
 											corev1.ResourceCPU:    resource.MustParse("100m"),
@@ -319,7 +319,7 @@ var _ = Describe("Deprovisioning", func() {
 							Containers: []corev1.Container{
 								{
 									Name:  "pause",
-									Image: "registry.k8s.io/pause:3.9",
+									Image: "registry-cn-hangzhou.ack.aliyuncs.com/acs/pause:3.9",
 									Resources: corev1.ResourceRequirements{
 										Requests: corev1.ResourceList{
 											corev1.ResourceCPU:    resource.MustParse("100m"),
@@ -416,7 +416,7 @@ var _ = Describe("Deprovisioning", func() {
 							Containers: []corev1.Container{
 								{
 									Name:  "pause",
-									Image: "registry.k8s.io/pause:3.9",
+									Image: "registry-cn-hangzhou.ack.aliyuncs.com/acs/pause:3.9",
 									Resources: corev1.ResourceRequirements{
 										Requests: corev1.ResourceList{
 											corev1.ResourceCPU:    resource.MustParse("100m"),
@@ -530,7 +530,7 @@ var _ = Describe("Deprovisioning", func() {
 							Containers: []corev1.Container{
 								{
 									Name:  "pause",
-									Image: "registry.k8s.io/pause:3.9",
+									Image: "registry-cn-hangzhou.ack.aliyuncs.com/acs/pause:3.9",
 									Resources: corev1.ResourceRequirements{
 										Requests: corev1.ResourceList{
 											corev1.ResourceCPU:    resource.MustParse("100m"),

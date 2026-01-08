@@ -16,6 +16,8 @@ limitations under the License.
 
 package v1alpha1
 
+import corev1 "k8s.io/api/core/v1"
+
 const (
 	// Group is the group name for the AlibabaCloud provider
 	Group = "karpenter.sh"
@@ -53,6 +55,9 @@ const (
 	// TagCluster is the tag key for cluster name
 	TagCluster = "kubernetes.io/cluster"
 
+	// TagClusterID is the tag key for ACK cluster ID
+	TagClusterID = Group + "/cluster-id"
+
 	// TagDiscovery is the tag key for resource discovery
 	TagDiscovery = Group + "/discovery"
 
@@ -88,6 +93,9 @@ const (
 
 	// OSWindows represents Windows operating system
 	OSWindows = "windows"
+
+	ResourceGPU       corev1.ResourceName = "nvidia.com/gpu"
+	ResourceGPUMemory corev1.ResourceName = "aliyun.com/gpu-mem"
 )
 
 // WellKnownLabels returns a set of well-known Kubernetes labels

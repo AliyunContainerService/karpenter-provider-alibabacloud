@@ -375,3 +375,173 @@ func TestClearCache(t *testing.T) {
 	_, exists = provider.getCachedValue("test-key")
 	assert.False(t, exists)
 }
+
+func TestCalculateGPUMemory(t *testing.T) {
+	tests := []struct {
+		name            string
+		ecsInstanceType ecs.InstanceType
+		expectedMemory  int64 // in GiB
+		expectNil       bool
+	}{
+		{
+			name: "no GPU",
+			ecsInstanceType: ecs.InstanceType{
+				GPUAmount: 0,
+			},
+			expectNil: true,
+		},
+		{
+			name: "GPU instance from GPUInstanceTypes map (gn7e with single H100)",
+			ecsInstanceType: ecs.InstanceType{
+				InstanceTypeId:     "ecs.gn7e-c16g1.4xlarge",
+				InstanceTypeFamily: "ecs.gn7e",
+				GPUAmount:          1,
+				GPUMemorySize:      0,
+				GPUSpec:            "H100",
+			},
+			// 81251 MiB per GPU -> floor(81251/1024) = 79 GiB
+			expectedMemory: 79,
+		},
+		{
+			name: "GPU instance from GPUInstanceTypeFamily map (gn6i with T4)",
+			ecsInstanceType: ecs.InstanceType{
+				InstanceTypeId:     "ecs.gn6i-c4g1.xlarge",
+				InstanceTypeFamily: "ecs.gn6i",
+				GPUAmount:          1,
+				GPUMemorySize:      0,
+				GPUSpec:            "T4",
+			},
+			// 15109 MiB per GPU * 1 GPU -> floor(15109/1024) = 14 GiB
+			expectedMemory: 14,
+		},
+		{
+			name: "GPU instance with multiple GPUs from GPUInstanceTypeFamily (gn7 with 4x A100)",
+			ecsInstanceType: ecs.InstanceType{
+				InstanceTypeId:     "ecs.gn7-c13g1.13xlarge",
+				InstanceTypeFamily: "ecs.gn7",
+				GPUAmount:          4,
+				GPUMemorySize:      0,
+				GPUSpec:            "A100",
+			},
+			// 40537 MiB per GPU * 4 GPUs = 162148 MiB -> floor(162148/1024) = 158 GiB
+			expectedMemory: 158,
+		},
+		{
+			name: "GPU instance with GPUMemorySize fallback",
+			ecsInstanceType: ecs.InstanceType{
+				InstanceTypeId:     "ecs.unknown-type.large",
+				InstanceTypeFamily: "ecs.unknown",
+				GPUAmount:          2,
+				GPUMemorySize:      16, // 16 GiB per GPU
+				GPUSpec:            "UnknownGPU",
+			},
+			// 16 GiB per GPU * 2 GPUs = 32 GiB
+			expectedMemory: 32,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := CalculateGPUMemory(tt.ecsInstanceType)
+
+			if tt.expectNil {
+				assert.Nil(t, result)
+			} else {
+				assert.NotNil(t, result)
+				assert.Equal(t, tt.expectedMemory, result.Value())
+			}
+		})
+	}
+}
+
+func TestConvertECSInstanceTypeWithGPU(t *testing.T) {
+	tests := []struct {
+		name            string
+		ecsInstanceType ecs.InstanceType
+		expectGPU       bool
+		expectedGPUMem  int64 // in GiB
+	}{
+		{
+			name: "instance without GPU",
+			ecsInstanceType: ecs.InstanceType{
+				InstanceTypeId:  "ecs.g6.large",
+				CpuCoreCount:    2,
+				MemorySize:      8.0,
+				CpuArchitecture: "X86",
+				GPUAmount:       0,
+			},
+			expectGPU: false,
+		},
+		{
+			name: "GPU instance with gn6i (T4)",
+			ecsInstanceType: ecs.InstanceType{
+				InstanceTypeId:     "ecs.gn6i-c4g1.xlarge",
+				InstanceTypeFamily: "ecs.gn6i",
+				CpuCoreCount:       4,
+				MemorySize:         16.0,
+				CpuArchitecture:    "X86",
+				GPUAmount:          1,
+				GPUMemorySize:      0,
+				GPUSpec:            "Tesla T4",
+			},
+			expectGPU:      true,
+			expectedGPUMem: 14, // 15109 MiB -> floor(15109/1024) = 14 GiB
+		},
+		{
+			name: "GPU instance with multiple A100s (gn7)",
+			ecsInstanceType: ecs.InstanceType{
+				InstanceTypeId:     "ecs.gn7-c13g1.13xlarge",
+				InstanceTypeFamily: "ecs.gn7",
+				CpuCoreCount:       48,
+				MemorySize:         192.0,
+				CpuArchitecture:    "X86",
+				GPUAmount:          4,
+				GPUMemorySize:      0,
+				GPUSpec:            "Tesla A100",
+			},
+			expectGPU:      true,
+			expectedGPUMem: 158, // 40537 * 4 = 162148 MiB -> floor(162148/1024) = 158 GiB
+		},
+		{
+			name: "GPU instance with GPUMemorySize fallback",
+			ecsInstanceType: ecs.InstanceType{
+				InstanceTypeId:     "ecs.unknown.large",
+				InstanceTypeFamily: "ecs.unknown",
+				CpuCoreCount:       8,
+				MemorySize:         32.0,
+				CpuArchitecture:    "X86",
+				GPUAmount:          2,
+				GPUMemorySize:      16, // 16 GiB per GPU
+				GPUSpec:            "Unknown GPU",
+			},
+			expectGPU:      true,
+			expectedGPUMem: 32, // 16 * 2 = 32 GiB
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := NewProvider("cn-hangzhou", new(MockECSClient))
+			zones := map[string]ZoneInfo{
+				"cn-hangzhou-h": {Available: true},
+			}
+
+			result := provider.convertECSInstanceType(tt.ecsInstanceType, zones)
+
+			assert.Equal(t, tt.ecsInstanceType.InstanceTypeId, result.Name)
+			assert.Equal(t, tt.ecsInstanceType.CpuArchitecture, result.Architecture)
+			assert.NotNil(t, result.CPU)
+			assert.NotNil(t, result.Memory)
+
+			if tt.expectGPU {
+				assert.NotNil(t, result.GPU)
+				assert.NotNil(t, result.GPU.Memory)
+				assert.Equal(t, int64(tt.ecsInstanceType.GPUAmount), result.GPU.Count.Value())
+				assert.Equal(t, tt.expectedGPUMem, result.GPU.Memory.Value())
+				assert.Equal(t, tt.ecsInstanceType.GPUSpec, result.GPU.Model)
+			} else {
+				assert.Nil(t, result.GPU)
+			}
+		})
+	}
+}

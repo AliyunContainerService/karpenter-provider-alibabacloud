@@ -33,6 +33,16 @@ type MockCSClient struct {
 	mock.Mock
 }
 
+func (m *MockCSClient) GetClusterAddonInstance(ctx context.Context, clusterID, addonName string) (*cs.GetClusterAddonInstanceResponse, error) {
+	args := m.Called(ctx, clusterID, addonName)
+	return args.Get(0).(*cs.GetClusterAddonInstanceResponse), args.Error(1)
+}
+
+func (m *MockCSClient) DescribeClusterDetail(ctx context.Context, clusterID string) (*cs.DescribeClusterDetailResponse, error) {
+	args := m.Called(ctx, clusterID)
+	return args.Get(0).(*cs.DescribeClusterDetailResponse), args.Error(1)
+}
+
 func (m *MockCSClient) DescribeClusterAttachScripts(ctx context.Context, clusterID string, request *cs.DescribeClusterAttachScriptsRequest) (string, error) {
 	args := m.Called(ctx, clusterID, request)
 	return args.String(0), args.Error(1)
