@@ -1,7 +1,9 @@
 # Makefile for Karpenter Alibaba Cloud Provider
 
 # Image URL to use all building/pushing image targets
-IMG ?= registry.cn-hangzhou.aliyuncs.com/acs/karpenter-provider-alibabacloud:latest
+REGISTRY ?= registry.cn-hangzhou.aliyuncs.com/acs
+TAG ?= latest
+IMG ?= $(REGISTRY)/karpenter-provider-alibabacloud:$(TAG)
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
