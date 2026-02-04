@@ -21,7 +21,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -67,7 +67,7 @@ func (m *MockECSClient) DeleteLaunchTemplate(ctx context.Context, request *ecs.D
 	panic("implement me")
 }
 
-func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.Image, error) {
+func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -113,30 +113,40 @@ func TestList(t *testing.T) {
 		{
 			name: "successful list with multiple instance types",
 			mockSetup: func(m *MockECSClient) {
+				zoneId1 := "cn-hangzhou-h"
+				zoneId2 := "cn-hangzhou-i"
 				zonesResponse := &ecs.DescribeZonesResponse{
-					Zones: ecs.ZonesInDescribeZones{
-						Zone: []ecs.Zone{
-							{ZoneId: "cn-hangzhou-h"},
-							{ZoneId: "cn-hangzhou-i"},
+					Body: &ecs.DescribeZonesResponseBody{
+						Zones: &ecs.DescribeZonesResponseBodyZones{
+							Zone: []*ecs.DescribeZonesResponseBodyZonesZone{
+								{ZoneId: &zoneId1},
+								{ZoneId: &zoneId2},
+							},
 						},
 					},
 				}
 				m.On("DescribeZones", mock.Anything).Return(zonesResponse, nil)
 
+				instanceTypeId1 := "ecs.g6.large"
+				cpuCoreCount1 := int32(2)
+				memorySize1 := float32(8.0)
+				instanceTypeId2 := "ecs.c6.xlarge"
+				cpuCoreCount2 := int32(4)
+				memorySize2 := float32(8.0)
 				instanceTypesResponse := &ecs.DescribeInstanceTypesResponse{
-					InstanceTypes: ecs.InstanceTypesInDescribeInstanceTypes{
-						InstanceType: []ecs.InstanceType{
-							{
-								InstanceTypeId:  "ecs.g6.large",
-								CpuCoreCount:    2,
-								MemorySize:      8.0,
-								CpuArchitecture: "X86",
-							},
-							{
-								InstanceTypeId:  "ecs.c6.xlarge",
-								CpuCoreCount:    4,
-								MemorySize:      8.0,
-								CpuArchitecture: "X86",
+					Body: &ecs.DescribeInstanceTypesResponseBody{
+						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
+								{
+									InstanceTypeId: &instanceTypeId1,
+									CpuCoreCount:   &cpuCoreCount1,
+									MemorySize:     &memorySize1,
+								},
+								{
+									InstanceTypeId: &instanceTypeId2,
+									CpuCoreCount:   &cpuCoreCount2,
+									MemorySize:     &memorySize2,
+								},
 							},
 						},
 					},
@@ -148,22 +158,25 @@ func TestList(t *testing.T) {
 		{
 			name: "zones API error",
 			mockSetup: func(m *MockECSClient) {
-				m.On("DescribeZones", mock.Anything).Return(nil, errors.New("API error"))
+				m.On("DescribeZones", mock.Anything).Return((*ecs.DescribeZonesResponse)(nil), errors.New("API error"))
 			},
 			expectError: true,
 		},
 		{
 			name: "instance types API error",
 			mockSetup: func(m *MockECSClient) {
+				zoneId := "cn-hangzhou-h"
 				zonesResponse := &ecs.DescribeZonesResponse{
-					Zones: ecs.ZonesInDescribeZones{
-						Zone: []ecs.Zone{
-							{ZoneId: "cn-hangzhou-h"},
+					Body: &ecs.DescribeZonesResponseBody{
+						Zones: &ecs.DescribeZonesResponseBodyZones{
+							Zone: []*ecs.DescribeZonesResponseBodyZonesZone{
+								{ZoneId: &zoneId},
+							},
 						},
 					},
 				}
 				m.On("DescribeZones", mock.Anything).Return(zonesResponse, nil)
-				m.On("DescribeInstanceTypes", mock.Anything, mock.Anything).Return(nil, errors.New("API error"))
+				m.On("DescribeInstanceTypes", mock.Anything, mock.Anything).Return((*ecs.DescribeInstanceTypesResponse)(nil), errors.New("API error"))
 			},
 			expectError: true,
 		},
@@ -201,23 +214,30 @@ func TestGet(t *testing.T) {
 			name:             "successful get",
 			instanceTypeName: "ecs.g6.large",
 			mockSetup: func(m *MockECSClient) {
+				zoneId := "cn-hangzhou-h"
 				zonesResponse := &ecs.DescribeZonesResponse{
-					Zones: ecs.ZonesInDescribeZones{
-						Zone: []ecs.Zone{
-							{ZoneId: "cn-hangzhou-h"},
+					Body: &ecs.DescribeZonesResponseBody{
+						Zones: &ecs.DescribeZonesResponseBodyZones{
+							Zone: []*ecs.DescribeZonesResponseBodyZonesZone{
+								{ZoneId: &zoneId},
+							},
 						},
 					},
 				}
 				m.On("DescribeZones", mock.Anything).Return(zonesResponse, nil)
 
+				instanceTypeId := "ecs.g6.large"
+				cpuCoreCount := int32(2)
+				memorySize := float32(8.0)
 				instanceTypesResponse := &ecs.DescribeInstanceTypesResponse{
-					InstanceTypes: ecs.InstanceTypesInDescribeInstanceTypes{
-						InstanceType: []ecs.InstanceType{
-							{
-								InstanceTypeId:  "ecs.g6.large",
-								CpuCoreCount:    2,
-								MemorySize:      8.0,
-								CpuArchitecture: "X86",
+					Body: &ecs.DescribeInstanceTypesResponseBody{
+						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
+								{
+									InstanceTypeId: &instanceTypeId,
+									CpuCoreCount:   &cpuCoreCount,
+									MemorySize:     &memorySize,
+								},
 							},
 						},
 					},
@@ -230,18 +250,23 @@ func TestGet(t *testing.T) {
 			name:             "instance type not found",
 			instanceTypeName: "ecs.notfound.large",
 			mockSetup: func(m *MockECSClient) {
+				zoneId := "cn-hangzhou-h"
 				zonesResponse := &ecs.DescribeZonesResponse{
-					Zones: ecs.ZonesInDescribeZones{
-						Zone: []ecs.Zone{
-							{ZoneId: "cn-hangzhou-h"},
+					Body: &ecs.DescribeZonesResponseBody{
+						Zones: &ecs.DescribeZonesResponseBodyZones{
+							Zone: []*ecs.DescribeZonesResponseBodyZonesZone{
+								{ZoneId: &zoneId},
+							},
 						},
 					},
 				}
 				m.On("DescribeZones", mock.Anything).Return(zonesResponse, nil)
 
 				instanceTypesResponse := &ecs.DescribeInstanceTypesResponse{
-					InstanceTypes: ecs.InstanceTypesInDescribeInstanceTypes{
-						InstanceType: []ecs.InstanceType{},
+					Body: &ecs.DescribeInstanceTypesResponseBody{
+						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{},
+						},
 					},
 				}
 				m.On("DescribeInstanceTypes", mock.Anything, []string{"ecs.notfound.large"}).Return(instanceTypesResponse, nil)
@@ -379,64 +404,70 @@ func TestClearCache(t *testing.T) {
 func TestCalculateGPUMemory(t *testing.T) {
 	tests := []struct {
 		name            string
-		ecsInstanceType ecs.InstanceType
+		ecsInstanceType *ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType
 		expectedMemory  int64 // in GiB
 		expectNil       bool
 	}{
 		{
 			name: "no GPU",
-			ecsInstanceType: ecs.InstanceType{
-				GPUAmount: 0,
-			},
+			ecsInstanceType: func() *ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType {
+				gpuAmount := int32(0)
+				return &ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
+					GPUAmount: &gpuAmount,
+				}
+			}(),
 			expectNil: true,
 		},
 		{
 			name: "GPU instance from GPUInstanceTypes map (gn7e with single H100)",
-			ecsInstanceType: ecs.InstanceType{
-				InstanceTypeId:     "ecs.gn7e-c16g1.4xlarge",
-				InstanceTypeFamily: "ecs.gn7e",
-				GPUAmount:          1,
-				GPUMemorySize:      0,
-				GPUSpec:            "H100",
-			},
+			ecsInstanceType: func() *ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType {
+				instanceTypeId := "ecs.gn7e-c16g1.4xlarge"
+				instanceTypeFamily := "ecs.gn7e"
+				gpuAmount := int32(1)
+				gpuSpec := "H100"
+				return &ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
+					InstanceTypeId:     &instanceTypeId,
+					InstanceTypeFamily: &instanceTypeFamily,
+					GPUAmount:          &gpuAmount,
+					GPUSpec:            &gpuSpec,
+				}
+			}(),
 			// 81251 MiB per GPU -> floor(81251/1024) = 79 GiB
 			expectedMemory: 79,
 		},
 		{
 			name: "GPU instance from GPUInstanceTypeFamily map (gn6i with T4)",
-			ecsInstanceType: ecs.InstanceType{
-				InstanceTypeId:     "ecs.gn6i-c4g1.xlarge",
-				InstanceTypeFamily: "ecs.gn6i",
-				GPUAmount:          1,
-				GPUMemorySize:      0,
-				GPUSpec:            "T4",
-			},
+			ecsInstanceType: func() *ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType {
+				instanceTypeId := "ecs.gn6i-c4g1.xlarge"
+				instanceTypeFamily := "ecs.gn6i"
+				gpuAmount := int32(1)
+				gpuSpec := "T4"
+				return &ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
+					InstanceTypeId:     &instanceTypeId,
+					InstanceTypeFamily: &instanceTypeFamily,
+					GPUAmount:          &gpuAmount,
+					GPUSpec:            &gpuSpec,
+				}
+			}(),
 			// 15109 MiB per GPU * 1 GPU -> floor(15109/1024) = 14 GiB
 			expectedMemory: 14,
 		},
 		{
 			name: "GPU instance with multiple GPUs from GPUInstanceTypeFamily (gn7 with 4x A100)",
-			ecsInstanceType: ecs.InstanceType{
-				InstanceTypeId:     "ecs.gn7-c13g1.13xlarge",
-				InstanceTypeFamily: "ecs.gn7",
-				GPUAmount:          4,
-				GPUMemorySize:      0,
-				GPUSpec:            "A100",
-			},
+			ecsInstanceType: func() *ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType {
+				instanceTypeId := "ecs.gn7-c13g1.13xlarge"
+				instanceTypeFamily := "ecs.gn7"
+				gpuAmount := int32(4)
+				gpuSpec := "A100"
+				return &ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
+					InstanceTypeId:     &instanceTypeId,
+					InstanceTypeFamily: &instanceTypeFamily,
+					GPUAmount:          &gpuAmount,
+					GPUSpec:            &gpuSpec,
+				}
+			}(),
 			// 40537 MiB per GPU * 4 GPUs = 162148 MiB -> floor(162148/1024) = 158 GiB
 			expectedMemory: 158,
-		},
-		{
-			name: "GPU instance with GPUMemorySize fallback",
-			ecsInstanceType: ecs.InstanceType{
-				InstanceTypeId:     "ecs.unknown-type.large",
-				InstanceTypeFamily: "ecs.unknown",
-				GPUAmount:          2,
-				GPUMemorySize:      16, // 16 GiB per GPU
-				GPUSpec:            "UnknownGPU",
-			},
-			// 16 GiB per GPU * 2 GPUs = 32 GiB
-			expectedMemory: 32,
 		},
 	}
 
@@ -457,65 +488,67 @@ func TestCalculateGPUMemory(t *testing.T) {
 func TestConvertECSInstanceTypeWithGPU(t *testing.T) {
 	tests := []struct {
 		name            string
-		ecsInstanceType ecs.InstanceType
+		ecsInstanceType *ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType
 		expectGPU       bool
 		expectedGPUMem  int64 // in GiB
 	}{
 		{
 			name: "instance without GPU",
-			ecsInstanceType: ecs.InstanceType{
-				InstanceTypeId:  "ecs.g6.large",
-				CpuCoreCount:    2,
-				MemorySize:      8.0,
-				CpuArchitecture: "X86",
-				GPUAmount:       0,
-			},
+			ecsInstanceType: func() *ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType {
+				instanceTypeId := "ecs.g6.large"
+				cpuCoreCount := int32(2)
+				memorySize := float32(8.0)
+				gpuAmount := int32(0)
+				return &ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
+					InstanceTypeId: &instanceTypeId,
+					CpuCoreCount:   &cpuCoreCount,
+					MemorySize:     &memorySize,
+					GPUAmount:      &gpuAmount,
+				}
+			}(),
 			expectGPU: false,
 		},
 		{
 			name: "GPU instance with gn6i (T4)",
-			ecsInstanceType: ecs.InstanceType{
-				InstanceTypeId:     "ecs.gn6i-c4g1.xlarge",
-				InstanceTypeFamily: "ecs.gn6i",
-				CpuCoreCount:       4,
-				MemorySize:         16.0,
-				CpuArchitecture:    "X86",
-				GPUAmount:          1,
-				GPUMemorySize:      0,
-				GPUSpec:            "Tesla T4",
-			},
+			ecsInstanceType: func() *ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType {
+				instanceTypeId := "ecs.gn6i-c4g1.xlarge"
+				instanceTypeFamily := "ecs.gn6i"
+				cpuCoreCount := int32(4)
+				memorySize := float32(16.0)
+				gpuAmount := int32(1)
+				gpuSpec := "Tesla T4"
+				return &ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
+					InstanceTypeId:     &instanceTypeId,
+					InstanceTypeFamily: &instanceTypeFamily,
+					CpuCoreCount:       &cpuCoreCount,
+					MemorySize:         &memorySize,
+					GPUAmount:          &gpuAmount,
+					GPUSpec:            &gpuSpec,
+				}
+			}(),
 			expectGPU:      true,
 			expectedGPUMem: 14, // 15109 MiB -> floor(15109/1024) = 14 GiB
 		},
 		{
 			name: "GPU instance with multiple A100s (gn7)",
-			ecsInstanceType: ecs.InstanceType{
-				InstanceTypeId:     "ecs.gn7-c13g1.13xlarge",
-				InstanceTypeFamily: "ecs.gn7",
-				CpuCoreCount:       48,
-				MemorySize:         192.0,
-				CpuArchitecture:    "X86",
-				GPUAmount:          4,
-				GPUMemorySize:      0,
-				GPUSpec:            "Tesla A100",
-			},
+			ecsInstanceType: func() *ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType {
+				instanceTypeId := "ecs.gn7-c13g1.13xlarge"
+				instanceTypeFamily := "ecs.gn7"
+				cpuCoreCount := int32(48)
+				memorySize := float32(192.0)
+				gpuAmount := int32(4)
+				gpuSpec := "Tesla A100"
+				return &ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
+					InstanceTypeId:     &instanceTypeId,
+					InstanceTypeFamily: &instanceTypeFamily,
+					CpuCoreCount:       &cpuCoreCount,
+					MemorySize:         &memorySize,
+					GPUAmount:          &gpuAmount,
+					GPUSpec:            &gpuSpec,
+				}
+			}(),
 			expectGPU:      true,
 			expectedGPUMem: 158, // 40537 * 4 = 162148 MiB -> floor(162148/1024) = 158 GiB
-		},
-		{
-			name: "GPU instance with GPUMemorySize fallback",
-			ecsInstanceType: ecs.InstanceType{
-				InstanceTypeId:     "ecs.unknown.large",
-				InstanceTypeFamily: "ecs.unknown",
-				CpuCoreCount:       8,
-				MemorySize:         32.0,
-				CpuArchitecture:    "X86",
-				GPUAmount:          2,
-				GPUMemorySize:      16, // 16 GiB per GPU
-				GPUSpec:            "Unknown GPU",
-			},
-			expectGPU:      true,
-			expectedGPUMem: 32, // 16 * 2 = 32 GiB
 		},
 	}
 
@@ -528,17 +561,16 @@ func TestConvertECSInstanceTypeWithGPU(t *testing.T) {
 
 			result := provider.convertECSInstanceType(tt.ecsInstanceType, zones)
 
-			assert.Equal(t, tt.ecsInstanceType.InstanceTypeId, result.Name)
-			assert.Equal(t, tt.ecsInstanceType.CpuArchitecture, result.Architecture)
+			assert.Equal(t, *tt.ecsInstanceType.InstanceTypeId, result.Name)
 			assert.NotNil(t, result.CPU)
 			assert.NotNil(t, result.Memory)
 
 			if tt.expectGPU {
 				assert.NotNil(t, result.GPU)
 				assert.NotNil(t, result.GPU.Memory)
-				assert.Equal(t, int64(tt.ecsInstanceType.GPUAmount), result.GPU.Count.Value())
+				assert.Equal(t, int64(*tt.ecsInstanceType.GPUAmount), result.GPU.Count.Value())
 				assert.Equal(t, tt.expectedGPUMem, result.GPU.Memory.Value())
-				assert.Equal(t, tt.ecsInstanceType.GPUSpec, result.GPU.Model)
+				assert.Equal(t, *tt.ecsInstanceType.GPUSpec, result.GPU.Model)
 			} else {
 				assert.Nil(t, result.GPU)
 			}

@@ -22,7 +22,7 @@ import (
 	"testing"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -77,7 +77,7 @@ func (m *MockECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesRe
 	panic("implement me")
 }
 
-func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.Image, error) {
+func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -98,6 +98,10 @@ func (m *MockECSClient) DescribeCapacityReservations(ctx context.Context, id str
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*ecs.DescribeCapacityReservationsResponse), args.Error(1)
+}
+
+func stringPtr(s string) *string {
+	return &s
 }
 
 func TestResolve(t *testing.T) {
@@ -121,12 +125,16 @@ func TestResolve(t *testing.T) {
 				},
 			},
 			mockSetup: func(m *MockECSClient) {
+				id := "cr-12345"
+				name := "cn-hangzhou-h"
 				response := &ecs.DescribeCapacityReservationsResponse{
-					CapacityReservationSet: ecs.CapacityReservationSet{
-						CapacityReservationItem: []ecs.CapacityReservationItem{
-							{
-								PrivatePoolOptionsId:   "cr-12345",
-								PrivatePoolOptionsName: "cn-hangzhou-h",
+					Body: &ecs.DescribeCapacityReservationsResponseBody{
+						CapacityReservationSet: &ecs.DescribeCapacityReservationsResponseBodyCapacityReservationSet{
+							CapacityReservationItem: []*ecs.DescribeCapacityReservationsResponseBodyCapacityReservationSetCapacityReservationItem{
+								{
+									PrivatePoolOptionsId:   &id,
+									PrivatePoolOptionsName: &name,
+								},
 							},
 						},
 					},
@@ -149,8 +157,10 @@ func TestResolve(t *testing.T) {
 			},
 			mockSetup: func(m *MockECSClient) {
 				response := &ecs.DescribeCapacityReservationsResponse{
-					CapacityReservationSet: ecs.CapacityReservationSet{
-						CapacityReservationItem: []ecs.CapacityReservationItem{},
+					Body: &ecs.DescribeCapacityReservationsResponseBody{
+						CapacityReservationSet: &ecs.DescribeCapacityReservationsResponseBodyCapacityReservationSet{
+							CapacityReservationItem: []*ecs.DescribeCapacityReservationsResponseBodyCapacityReservationSetCapacityReservationItem{},
+						},
 					},
 				}
 				m.On("DescribeCapacityReservations", mock.Anything, "cr-notfound", mock.Anything).Return(response, nil)
@@ -167,16 +177,22 @@ func TestResolve(t *testing.T) {
 				},
 			},
 			mockSetup: func(m *MockECSClient) {
+				id1 := "cr-tag-1"
+				name1 := "cn-hangzhou-h"
+				id2 := "cr-tag-2"
+				name2 := "cn-hangzhou-i"
 				response := &ecs.DescribeCapacityReservationsResponse{
-					CapacityReservationSet: ecs.CapacityReservationSet{
-						CapacityReservationItem: []ecs.CapacityReservationItem{
-							{
-								PrivatePoolOptionsId:   "cr-tag-1",
-								PrivatePoolOptionsName: "cn-hangzhou-h",
-							},
-							{
-								PrivatePoolOptionsId:   "cr-tag-2",
-								PrivatePoolOptionsName: "cn-hangzhou-i",
+					Body: &ecs.DescribeCapacityReservationsResponseBody{
+						CapacityReservationSet: &ecs.DescribeCapacityReservationsResponseBodyCapacityReservationSet{
+							CapacityReservationItem: []*ecs.DescribeCapacityReservationsResponseBodyCapacityReservationSetCapacityReservationItem{
+								{
+									PrivatePoolOptionsId:   &id1,
+									PrivatePoolOptionsName: &name1,
+								},
+								{
+									PrivatePoolOptionsId:   &id2,
+									PrivatePoolOptionsName: &name2,
+								},
 							},
 						},
 					},
@@ -242,12 +258,16 @@ func TestGetByID(t *testing.T) {
 			name: "successful retrieval",
 			id:   "cr-12345",
 			mockSetup: func(m *MockECSClient) {
+				id := "cr-12345"
+				name := "cn-hangzhou-h"
 				response := &ecs.DescribeCapacityReservationsResponse{
-					CapacityReservationSet: ecs.CapacityReservationSet{
-						CapacityReservationItem: []ecs.CapacityReservationItem{
-							{
-								PrivatePoolOptionsId:   "cr-12345",
-								PrivatePoolOptionsName: "cn-hangzhou-h",
+					Body: &ecs.DescribeCapacityReservationsResponseBody{
+						CapacityReservationSet: &ecs.DescribeCapacityReservationsResponseBodyCapacityReservationSet{
+							CapacityReservationItem: []*ecs.DescribeCapacityReservationsResponseBodyCapacityReservationSetCapacityReservationItem{
+								{
+									PrivatePoolOptionsId:   &id,
+									PrivatePoolOptionsName: &name,
+								},
 							},
 						},
 					},
@@ -264,8 +284,10 @@ func TestGetByID(t *testing.T) {
 			id:   "cr-notfound",
 			mockSetup: func(m *MockECSClient) {
 				response := &ecs.DescribeCapacityReservationsResponse{
-					CapacityReservationSet: ecs.CapacityReservationSet{
-						CapacityReservationItem: []ecs.CapacityReservationItem{},
+					Body: &ecs.DescribeCapacityReservationsResponseBody{
+						CapacityReservationSet: &ecs.DescribeCapacityReservationsResponseBodyCapacityReservationSet{
+							CapacityReservationItem: []*ecs.DescribeCapacityReservationsResponseBodyCapacityReservationSetCapacityReservationItem{},
+						},
 					},
 				}
 				m.On("DescribeCapacityReservations", mock.Anything, "cr-notfound", mock.Anything).Return(response, nil)
@@ -306,16 +328,22 @@ func TestGetByTags(t *testing.T) {
 			name: "successful retrieval with multiple results",
 			tags: map[string]string{"env": "prod"},
 			mockSetup: func(m *MockECSClient) {
+				id1 := "cr-1"
+				name1 := "cn-hangzhou-h"
+				id2 := "cr-2"
+				name2 := "cn-hangzhou-i"
 				response := &ecs.DescribeCapacityReservationsResponse{
-					CapacityReservationSet: ecs.CapacityReservationSet{
-						CapacityReservationItem: []ecs.CapacityReservationItem{
-							{
-								PrivatePoolOptionsId:   "cr-1",
-								PrivatePoolOptionsName: "cn-hangzhou-h",
-							},
-							{
-								PrivatePoolOptionsId:   "cr-2",
-								PrivatePoolOptionsName: "cn-hangzhou-i",
+					Body: &ecs.DescribeCapacityReservationsResponseBody{
+						CapacityReservationSet: &ecs.DescribeCapacityReservationsResponseBodyCapacityReservationSet{
+							CapacityReservationItem: []*ecs.DescribeCapacityReservationsResponseBodyCapacityReservationSetCapacityReservationItem{
+								{
+									PrivatePoolOptionsId:   &id1,
+									PrivatePoolOptionsName: &name1,
+								},
+								{
+									PrivatePoolOptionsId:   &id2,
+									PrivatePoolOptionsName: &name2,
+								},
 							},
 						},
 					},
@@ -361,10 +389,6 @@ func TestGetByTags(t *testing.T) {
 			mockClient.AssertExpectations(t)
 		})
 	}
-}
-
-func stringPtr(s string) *string {
-	return &s
 }
 
 func TestNewProvider(t *testing.T) {

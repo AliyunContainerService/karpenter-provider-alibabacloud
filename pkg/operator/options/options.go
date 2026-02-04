@@ -43,6 +43,16 @@ type Options struct {
 	// AccessKeySecret is the Alibaba Cloud Access Key Secret
 	AccessKeySecret string
 
+	// RRSA (RAM Roles for Service Accounts) configuration
+	// RoleARN is the RAM role ARN for RRSA authentication
+	RoleARN string
+
+	// OIDCProviderARN is the OIDC provider ARN for RRSA authentication
+	OIDCProviderARN string
+
+	// OIDCTokenFile is the path to the OIDC token file for RRSA authentication
+	OIDCTokenFile string
+
 	// InterruptionQueue is the SLS queue name for spot interruption events (optional)
 	InterruptionQueue string
 
@@ -76,6 +86,18 @@ func (o *Options) AddFlags(fs *coreoptions.FlagSet) {
 	fs.Float64Var(&o.VMMemoryOverheadPercent, "vm-memory-overhead-percent", o.VMMemoryOverheadPercent, "The VM memory overhead as a percent (default: 0.075)")
 }
 
+// RRSA environment variable names
+const (
+	EnvRoleARN         = "ALIBABA_CLOUD_ROLE_ARN"
+	EnvOIDCProviderARN = "ALIBABA_CLOUD_OIDC_PROVIDER_ARN"
+	EnvOIDCTokenFile   = "ALIBABA_CLOUD_OIDC_TOKEN_FILE"
+)
+
+// IsRRSAEnabled checks if RRSA is configured in options
+func (o *Options) IsRRSAEnabled() bool {
+	return o.RoleARN != "" && o.OIDCProviderARN != "" && o.OIDCTokenFile != ""
+}
+
 // Parse validates and populates options from environment variables
 func (o *Options) Parse(fs *coreoptions.FlagSet, args ...string) error {
 	// Required fields validation
@@ -86,15 +108,21 @@ func (o *Options) Parse(fs *coreoptions.FlagSet, args ...string) error {
 		return fmt.Errorf("cluster-endpoint is required")
 	}
 
-	// Get credentials from environment variables
+	// Get AK/SK credentials from environment variables (optional if RRSA is enabled)
 	o.AccessKeyID = os.Getenv("ALIBABA_CLOUD_ACCESS_KEY_ID")
-	if o.AccessKeyID == "" {
-		return fmt.Errorf("ALIBABA_CLOUD_ACCESS_KEY_ID environment variable is required")
-	}
-
 	o.AccessKeySecret = os.Getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET")
-	if o.AccessKeySecret == "" {
-		return fmt.Errorf("ALIBABA_CLOUD_ACCESS_KEY_SECRET environment variable is required")
+
+	// Get RRSA credentials from environment variables
+	o.RoleARN = os.Getenv(EnvRoleARN)
+	o.OIDCProviderARN = os.Getenv(EnvOIDCProviderARN)
+	o.OIDCTokenFile = os.Getenv(EnvOIDCTokenFile)
+
+	// Check authentication: either RRSA or AK/SK must be configured
+	hasAKSK := o.AccessKeyID != "" && o.AccessKeySecret != ""
+	hasRRSA := o.IsRRSAEnabled()
+
+	if !hasRRSA && !hasAKSK {
+		return fmt.Errorf("authentication required: either configure RRSA (ALIBABA_CLOUD_ROLE_ARN, ALIBABA_CLOUD_OIDC_PROVIDER_ARN, ALIBABA_CLOUD_OIDC_TOKEN_FILE) or AK/SK (ALIBABA_CLOUD_ACCESS_KEY_ID, ALIBABA_CLOUD_ACCESS_KEY_SECRET)")
 	}
 
 	// Optional region override from environment

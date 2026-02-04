@@ -25,7 +25,7 @@ import (
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/controllers/nodeclaim/tagging"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/instance"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/mock"
@@ -183,15 +183,15 @@ var _ = Describe("TaggingController", func() {
 			// Setup mock expectations
 			mockECSClient.On("TagResources", mock.Anything, mock.MatchedBy(func(req *ecs.TagResourcesRequest) bool {
 				// Verify instance ID
-				if len(*req.ResourceId) != 1 || (*req.ResourceId)[0] != "i-test123456" {
+				if len(req.ResourceId) != 1 || *req.ResourceId[0] != "i-test123456" {
 					return false
 				}
 				// Verify resource type
-				if req.ResourceType != "instance" {
+				if req.ResourceType == nil || *req.ResourceType != "instance" {
 					return false
 				}
 				// Verify tags exist
-				if req.Tag == nil || len(*req.Tag) == 0 {
+				if req.Tag == nil || len(req.Tag) == 0 {
 					return false
 				}
 				return true
@@ -218,8 +218,8 @@ var _ = Describe("TaggingController", func() {
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 				req := args.Get(1).(*ecs.TagResourcesRequest)
 				capturedTags = make(map[string]string)
-				for _, tag := range *req.Tag {
-					capturedTags[tag.Key] = tag.Value
+				for _, tag := range req.Tag {
+					capturedTags[*tag.Key] = *tag.Value
 				}
 			}).Return(&ecs.TagResourcesResponse{}, nil)
 
@@ -246,8 +246,8 @@ var _ = Describe("TaggingController", func() {
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 				req := args.Get(1).(*ecs.TagResourcesRequest)
 				capturedTags = make(map[string]string)
-				for _, tag := range *req.Tag {
-					capturedTags[tag.Key] = tag.Value
+				for _, tag := range req.Tag {
+					capturedTags[*tag.Key] = *tag.Value
 				}
 			}).Return(&ecs.TagResourcesResponse{}, nil)
 
@@ -273,8 +273,8 @@ var _ = Describe("TaggingController", func() {
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 				req := args.Get(1).(*ecs.TagResourcesRequest)
 				capturedTags = make(map[string]string)
-				for _, tag := range *req.Tag {
-					capturedTags[tag.Key] = tag.Value
+				for _, tag := range req.Tag {
+					capturedTags[*tag.Key] = *tag.Value
 				}
 			}).Return(&ecs.TagResourcesResponse{}, nil)
 
@@ -320,8 +320,8 @@ var _ = Describe("TaggingController", func() {
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 				req := args.Get(1).(*ecs.TagResourcesRequest)
 				capturedTags = make(map[string]string)
-				for _, tag := range *req.Tag {
-					capturedTags[tag.Key] = tag.Value
+				for _, tag := range req.Tag {
+					capturedTags[*tag.Key] = *tag.Value
 				}
 			}).Return(&ecs.TagResourcesResponse{}, nil).Once()
 
@@ -362,8 +362,8 @@ var _ = Describe("TaggingController", func() {
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 				req := args.Get(1).(*ecs.TagResourcesRequest)
 				capturedTags = make(map[string]string)
-				for _, tag := range *req.Tag {
-					capturedTags[tag.Key] = tag.Value
+				for _, tag := range req.Tag {
+					capturedTags[*tag.Key] = *tag.Value
 				}
 			}).Return(&ecs.TagResourcesResponse{}, nil).Once()
 
@@ -386,7 +386,7 @@ var _ = Describe("TaggingController", func() {
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
 
 			mockECSClient.On("TagResources", mock.Anything, mock.MatchedBy(func(req *ecs.TagResourcesRequest) bool {
-				return len(*req.ResourceId) == 1 && (*req.ResourceId)[0] == "i-abc123xyz"
+				return len(req.ResourceId) == 1 && *req.ResourceId[0] == "i-abc123xyz"
 			})).Return(&ecs.TagResourcesResponse{}, nil)
 
 			_, err := taggingController.Reconcile(ctx, reconcile.Request{
@@ -403,7 +403,7 @@ var _ = Describe("TaggingController", func() {
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
 
 			mockECSClient.On("TagResources", mock.Anything, mock.MatchedBy(func(req *ecs.TagResourcesRequest) bool {
-				return len(*req.ResourceId) == 1 && (*req.ResourceId)[0] == "i-xyz789"
+				return len(req.ResourceId) == 1 && *req.ResourceId[0] == "i-xyz789"
 			})).Return(&ecs.TagResourcesResponse{}, nil)
 
 			_, err := taggingController.Reconcile(ctx, reconcile.Request{
@@ -433,7 +433,7 @@ var _ = Describe("TaggingController", func() {
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
 
 			mockECSClient.On("TagResources", mock.Anything, mock.MatchedBy(func(req *ecs.TagResourcesRequest) bool {
-				return len(*req.ResourceId) == 1 && (*req.ResourceId)[0] == "i-standalone123"
+				return len(req.ResourceId) == 1 && *req.ResourceId[0] == "i-standalone123"
 			})).Return(&ecs.TagResourcesResponse{}, nil)
 
 			_, err := taggingController.Reconcile(ctx, reconcile.Request{
@@ -514,8 +514,8 @@ var _ = Describe("TaggingController", func() {
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 				req := args.Get(1).(*ecs.TagResourcesRequest)
 				capturedTags = make(map[string]string)
-				for _, tag := range *req.Tag {
-					capturedTags[tag.Key] = tag.Value
+				for _, tag := range req.Tag {
+					capturedTags[*tag.Key] = *tag.Value
 				}
 			}).Return(&ecs.TagResourcesResponse{}, nil)
 
@@ -540,8 +540,8 @@ var _ = Describe("TaggingController", func() {
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 				req := args.Get(1).(*ecs.TagResourcesRequest)
 				capturedTags = make(map[string]string)
-				for _, tag := range *req.Tag {
-					capturedTags[tag.Key] = tag.Value
+				for _, tag := range req.Tag {
+					capturedTags[*tag.Key] = *tag.Value
 				}
 			}).Return(&ecs.TagResourcesResponse{}, nil)
 
@@ -591,8 +591,8 @@ var _ = Describe("TaggingController", func() {
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 				req := args.Get(1).(*ecs.TagResourcesRequest)
 				capturedTags = make(map[string]string)
-				for _, tag := range *req.Tag {
-					capturedTags[tag.Key] = tag.Value
+				for _, tag := range req.Tag {
+					capturedTags[*tag.Key] = *tag.Value
 				}
 			}).Return(&ecs.TagResourcesResponse{}, nil)
 
@@ -627,7 +627,7 @@ var _ = Describe("TaggingController", func() {
 
 			// First reconcile
 			mockECSClient.On("TagResources", mock.Anything, mock.MatchedBy(func(req *ecs.TagResourcesRequest) bool {
-				return len(*req.ResourceId) == 1 && (*req.ResourceId)[0] == "i-instance001"
+				return len(req.ResourceId) == 1 && *req.ResourceId[0] == "i-instance001"
 			})).Return(&ecs.TagResourcesResponse{}, nil).Once()
 
 			_, err := taggingController.Reconcile(ctx, reconcile.Request{
@@ -637,7 +637,7 @@ var _ = Describe("TaggingController", func() {
 
 			// Second reconcile
 			mockECSClient.On("TagResources", mock.Anything, mock.MatchedBy(func(req *ecs.TagResourcesRequest) bool {
-				return len(*req.ResourceId) == 1 && (*req.ResourceId)[0] == "i-instance002"
+				return len(req.ResourceId) == 1 && *req.ResourceId[0] == "i-instance002"
 			})).Return(&ecs.TagResourcesResponse{}, nil).Once()
 
 			_, err = taggingController.Reconcile(ctx, reconcile.Request{
@@ -695,12 +695,12 @@ func (m *MockECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesRe
 	return args.Get(0).(*ecs.DescribeZonesResponse), args.Error(1)
 }
 
-func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.Image, error) {
+func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error) {
 	args := m.Called(ctx, imageIDs, filters)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]ecs.Image), args.Error(1)
+	return args.Get(0).([]ecs.DescribeImagesResponseBodyImagesImage), args.Error(1)
 }
 
 func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {

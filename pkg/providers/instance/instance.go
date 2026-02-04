@@ -31,8 +31,8 @@ import (
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/batcher"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/errors"
-	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
+	"github.com/alibabacloud-go/tea/tea"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -186,64 +186,67 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 	logger := log.FromContext(ctx)
 
 	// Create instance request
-	request := ecs.CreateRunInstancesRequest()
-	request.RegionId = p.region
-	request.InstanceType = opts.InstanceType
-	request.ImageId = opts.ImageID
-	request.VSwitchId = opts.VSwitchID
+	request := &ecs.RunInstancesRequest{
+		RegionId:     tea.String(p.region),
+		InstanceType: tea.String(opts.InstanceType),
+		ImageId:      tea.String(opts.ImageID),
+		VSwitchId:    tea.String(opts.VSwitchID),
+	}
 
 	// Set security group IDs
 	if len(opts.SecurityGroupIDs) > 0 {
-		request.SecurityGroupId = opts.SecurityGroupIDs[0]
+		request.SecurityGroupId = tea.String(opts.SecurityGroupIDs[0])
 	}
 
 	if opts.SpotStrategy != "" {
-		request.SpotStrategy = opts.SpotStrategy
+		request.SpotStrategy = tea.String(opts.SpotStrategy)
 	}
 
 	if opts.SpotPriceLimit > 0 {
-		request.SpotPriceLimit = requests.NewFloat(opts.SpotPriceLimit)
+		request.SpotPriceLimit = tea.Float32(float32(opts.SpotPriceLimit))
 	}
 
 	// Set system disk
-	request.SystemDiskCategory = opts.SystemDisk.Category
-	request.SystemDiskSize = fmt.Sprintf("%d", opts.SystemDisk.Size)
+	request.SystemDisk = &ecs.RunInstancesRequestSystemDisk{
+		Category: tea.String(opts.SystemDisk.Category),
+		Size:     tea.String(fmt.Sprintf("%d", opts.SystemDisk.Size)),
+	}
 
 	// Set data disks
 	if len(opts.DataDisks) > 0 {
-		var dataDisks []ecs.RunInstancesDataDisk
+		var dataDisks []*ecs.RunInstancesRequestDataDisk
 		for _, disk := range opts.DataDisks {
-			dataDisk := ecs.RunInstancesDataDisk{
-				Category: disk.Category,
-				Size:     fmt.Sprintf("%d", disk.Size),
+			dataDisk := &ecs.RunInstancesRequestDataDisk{
+				Category: tea.String(disk.Category),
+				Size:     tea.Int32(int32(disk.Size)),
 			}
 			if disk.Device != "" {
-				dataDisk.Device = disk.Device
+				dataDisk.Device = tea.String(disk.Device)
 			}
 			if disk.PerformanceLevel != "" {
-				dataDisk.PerformanceLevel = disk.PerformanceLevel
+				dataDisk.PerformanceLevel = tea.String(disk.PerformanceLevel)
 			}
 			dataDisks = append(dataDisks, dataDisk)
 		}
-		request.DataDisk = &dataDisks
+		request.DataDisk = dataDisks
 	}
 
 	// Set user data
 	if opts.UserData != "" {
 		// Encode user data as base64 as required by Alibaba Cloud ECS API
-		request.UserData = base64.StdEncoding.EncodeToString([]byte(opts.UserData))
+		request.UserData = tea.String(base64.StdEncoding.EncodeToString([]byte(opts.UserData)))
 	}
 
 	// Set tags
 	if len(opts.Tags) > 0 {
-		var tags []ecs.RunInstancesTag
+		var tags []*ecs.RunInstancesRequestTag
 		for key, value := range opts.Tags {
-			tags = append(tags, ecs.RunInstancesTag{
-				Key:   key,
-				Value: value,
+			tags = append(tags, &ecs.RunInstancesRequestTag{
+				Key:   tea.String(key),
+				Value: tea.String(value),
 			})
 		}
-		request.Tag = &tags
+		request.Tag = tags
 	}
 
 	// Handle instance store policy if specified
@@ -327,11 +330,16 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 		return "", fmt.Errorf("failed to create instance after %d attempts: %w", strategy.MaxAttempts, err)
 	}
 
-	if len(response.InstanceIdSets.InstanceIdSet) == 0 {
+	// Safely check response chain for nil
+	if response == nil || response.Body == nil || response.Body.InstanceIdSets == nil ||
+		len(response.Body.InstanceIdSets.InstanceIdSet) == 0 {
 		return "", fmt.Errorf("no instance ID returned from ECS API")
 	}
 
-	instanceID := response.InstanceIdSets.InstanceIdSet[0]
+	if response.Body.InstanceIdSets.InstanceIdSet[0] == nil {
+		return "", fmt.Errorf("instance ID is nil in ECS API response")
+	}
+	instanceID := *response.Body.InstanceIdSets.InstanceIdSet[0]
 	logger.Info("created instance", "instanceID", instanceID)
 
 	return instanceID, nil
@@ -368,76 +376,99 @@ func (p *Provider) Get(ctx context.Context, instanceID string) (*Instance, error
 	}
 
 	// Log response information for debugging (only at debug level)
-	logger.V(1).Info("DescribeInstances response", "instanceCount", len(response.Instances.Instance), "totalInstancesInRegion", response.TotalCount, "pageNumber", response.PageNumber, "pageSize", response.PageSize)
+	logger.V(1).Info("DescribeInstances response", "instanceCount", len(response.Body.Instances.Instance), "totalInstancesInRegion", *response.Body.TotalCount, "pageNumber", *response.Body.PageNumber, "pageSize", *response.Body.PageSize)
 
-	if len(response.Instances.Instance) == 0 {
+	if len(response.Body.Instances.Instance) == 0 {
 		// Log additional information when instance is not found (only at debug level)
 		logger.V(1).Info("Instance not found in response", "instanceID", instanceID, "region", p.region,
-			"totalInstancesInRegion", response.TotalCount, "pageNumber", response.PageNumber, "pageSize", response.PageSize)
+			"totalInstancesInRegion", *response.Body.TotalCount, "pageNumber", *response.Body.PageNumber, "pageSize", *response.Body.PageSize)
 
 		// List instances in region for debugging purposes (only when instance is not found and at debug level)
-		if response.TotalCount > 0 {
-			logger.V(1).Info("List instances in region for debugging", "region", p.region, "totalInstances", response.TotalCount, "returnedInstances", len(response.Instances.Instance))
+		if *response.Body.TotalCount > 0 {
+			logger.V(1).Info("List instances in region for debugging", "region", p.region, "totalInstances", *response.Body.TotalCount, "returnedInstances", len(response.Body.Instances.Instance))
 			// Log sample instances for debugging
 			maxSample := 5
-			if len(response.Instances.Instance) < maxSample {
-				maxSample = len(response.Instances.Instance)
+			if len(response.Body.Instances.Instance) < maxSample {
+				maxSample = len(response.Body.Instances.Instance)
 			}
 			for i := 0; i < maxSample; i++ {
-				inst := response.Instances.Instance[i]
-				logger.V(1).Info("Sample instance in region", "sampleInstanceID", inst.InstanceId, "status", inst.Status)
+				inst := response.Body.Instances.Instance[i]
+				logger.V(1).Info("Sample instance in region", "sampleInstanceID", *inst.InstanceId, "status", *inst.Status)
 			}
 		}
 		p.deleteCachedInstance(instanceID)
 		return nil, cloudprovider.NewNodeClaimNotFoundError(fmt.Errorf("instance %s not found", instanceID))
 	}
 
-	inst := response.Instances.Instance[0]
+	inst := response.Body.Instances.Instance[0]
 
 	// Log instance information for debugging (only at debug level)
-	logger.V(1).Info("Found instance", "instanceID", inst.InstanceId, "status", inst.Status, "zone", inst.ZoneId, "instanceType", inst.InstanceType)
+	logger.V(1).Info("Found instance", "instanceID", *inst.InstanceId, "status", *inst.Status, "zone", *inst.ZoneId, "instanceType", *inst.InstanceType)
 
 	// Convert to our Instance type
-	cpu := resource.MustParse(fmt.Sprintf("%d", inst.Cpu))
-	memory := resource.MustParse(fmt.Sprintf("%dGi", inst.Memory/1024)) // ECS returns memory in MiB
-	gpu := resource.MustParse(fmt.Sprintf("%d", inst.GPUAmount))
+	cpu := resource.MustParse(fmt.Sprintf("%d", *inst.Cpu))
+	memory := resource.MustParse(fmt.Sprintf("%dGi", *inst.Memory/1024)) // ECS returns memory in MiB
+	gpuAmount := int32(0)
+	if inst.GPUAmount != nil {
+		gpuAmount = *inst.GPUAmount
+	}
+	gpu := resource.MustParse(fmt.Sprintf("%d", gpuAmount))
 	storage := resource.MustParse("0") // Storage is not directly available in DescribeInstances response
 	gpuMem := resource.MustParse("0")  // GPUMem is not directly available in DescribeInstances response
 
 	// Get architecture from instance type
 	architecture := "amd64"
-	if strings.HasPrefix(inst.InstanceType, "ecs.gn") || strings.HasPrefix(inst.InstanceType, "ecs.cu") {
+	if strings.HasPrefix(*inst.InstanceType, "ecs.gn") || strings.HasPrefix(*inst.InstanceType, "ecs.cu") {
 		architecture = "arm64"
 	}
 
 	var capacityType string
-	if inst.InstanceChargeType == "PostPaid" {
+	if *inst.InstanceChargeType == "PostPaid" {
 		capacityType = "on-demand"
-	} else if inst.InstanceChargeType == "PrePaid" {
+	} else if *inst.InstanceChargeType == "PrePaid" {
 		capacityType = "pre-paid"
-	} else if inst.SpotStrategy != "" && inst.SpotStrategy != "NoSpot" {
+	} else if inst.SpotStrategy != nil && *inst.SpotStrategy != "" && *inst.SpotStrategy != "NoSpot" {
 		capacityType = "spot"
 	}
 
+	securityGroupIds := []string{}
+	if inst.SecurityGroupIds != nil && inst.SecurityGroupIds.SecurityGroupId != nil {
+		for _, sg := range inst.SecurityGroupIds.SecurityGroupId {
+			if sg != nil {
+				securityGroupIds = append(securityGroupIds, *sg)
+			}
+		}
+	}
+
+	vSwitchID := ""
+	if inst.VpcAttributes != nil && inst.VpcAttributes.VSwitchId != nil {
+		vSwitchID = *inst.VpcAttributes.VSwitchId
+	}
+
+	gpuSpec := ""
+	if inst.GPUSpec != nil {
+		gpuSpec = *inst.GPUSpec
+	}
+
 	instance := &Instance{
-		InstanceID:       inst.InstanceId,
-		Region:           inst.RegionId,
-		Zone:             inst.ZoneId,
-		InstanceType:     inst.InstanceType,
-		ImageID:          inst.ImageId,
+		InstanceID:       *inst.InstanceId,
+		Region:           *inst.RegionId,
+		Zone:             *inst.ZoneId,
+		InstanceType:     *inst.InstanceType,
+		ImageID:          *inst.ImageId,
 		CPU:              cpu,
 		Memory:           memory,
 		Storage:          storage,
 		Architecture:     architecture,
-		Status:           inst.Status,
-		CreationTime:     inst.CreationTime,
-		Tags:             convertTags(inst.Tags.Tag),
+		Status:           *inst.Status,
+		CreationTime:     *inst.CreationTime,
+		Tags:             convertTags(inst.Tags),
 		CapacityType:     capacityType,
-		SecurityGroupIDs: inst.SecurityGroupIds.SecurityGroupId,
-		VSwitchID:        inst.VpcAttributes.VSwitchId,
+		SecurityGroupIDs: securityGroupIds,
+		VSwitchID:        vSwitchID,
 		GPU:              gpu,
 		GPUMem:           gpuMem,
-		GPUSpec:          inst.GPUSpec,
+		GPUSpec:          gpuSpec,
 	}
 
 	// Cache the instance
@@ -451,18 +482,19 @@ func (p *Provider) describeInstances(ctx context.Context, instanceIDs []string) 
 	logger := log.FromContext(ctx)
 
 	// Create describe instance request
-	request := ecs.CreateDescribeInstancesRequest()
-	request.RegionId = p.region
+	request := &ecs.DescribeInstancesRequest{
+		RegionId: tea.String(p.region),
+	}
 
 	// Set instance IDs - 使用阿里云SDK推荐的方式
 	if len(instanceIDs) > 0 {
 		// 使用SDK的InstanceIds参数，直接传入字符串数组
 		// 阿里云SDK会自动处理参数格式
-		request.InstanceIds = fmt.Sprintf("[\"%s\"]", strings.Join(instanceIDs, "\",\""))
+		request.InstanceIds = tea.String(fmt.Sprintf("[\"%s\"]", strings.Join(instanceIDs, "\",\"")))
 	}
 
 	// Log the request for debugging (only at debug level)
-	logger.V(1).Info("DescribeInstances request", "regionId", request.RegionId, "instanceIds", request.InstanceIds)
+	logger.V(1).Info("DescribeInstances request", "regionId", *request.RegionId, "instanceIds", *request.InstanceIds)
 
 	// Implement retry mechanism for throttling errors
 	var response *ecs.DescribeInstancesResponse
@@ -555,16 +587,14 @@ func (p *Provider) Delete(ctx context.Context, instanceID string) error {
 	logger.Info("Instance info retrieved", "instanceID", instanceID, "status", inst.Status)
 
 	// Create delete instance request
-	request := ecs.CreateDeleteInstancesRequest()
-	request.RegionId = p.region
-
-	// Set instance IDs correctly for DeleteInstances
-	request.InstanceId = &[]string{instanceID}
-	request.Force = requests.NewBoolean(true)                 // Force deletion
-	request.TerminateSubscription = requests.NewBoolean(true) // Terminate associated subscription resources
+	request := &ecs.DeleteInstancesRequest{
+		RegionId:   tea.String(p.region),
+		InstanceId: []*string{tea.String(instanceID)},
+		Force:      tea.Bool(true),
+	}
 
 	// Log the delete request for debugging
-	logger.Info("DeleteInstances request prepared", "regionId", request.RegionId, "instanceIds", *request.InstanceId, "force", request.Force, "terminateSubscription", request.TerminateSubscription)
+	logger.Info("DeleteInstances request prepared", "regionId", *request.RegionId, "instanceIds", instanceID, "force", *request.Force)
 
 	// Implement retry mechanism for throttling errors
 	var deleteErr error
@@ -587,22 +617,18 @@ func (p *Provider) Delete(ctx context.Context, instanceID string) error {
 		// Execute request
 		response, err := p.ecsClient.DeleteInstances(ctx, request)
 		if err == nil {
-			// Check if the response indicates success
-			if response != nil && response.BaseResponse != nil && !response.BaseResponse.IsSuccess() {
-				// Response indicates failure via HTTP status code
-				deleteErr = fmt.Errorf("delete instance API call succeeded but response indicates failure, requestID: %s, HTTPCode: %d",
-					response.RequestId, response.BaseResponse.GetHttpStatus())
-				logger.Error(deleteErr, "Delete instance API response indicates failure", "instanceID", instanceID)
-			} else {
-				// Success - either response indicates success or we don't have enough info to determine failure
-				logger.Info("Successfully deleted instance", "instanceID", instanceID, "requestId", response.RequestId)
-				p.deleteCachedInstance(instanceID)
-				return nil
+			// Success - log and return
+			requestId := ""
+			if response.Body != nil && response.Body.RequestId != nil {
+				requestId = *response.Body.RequestId
 			}
-		} else {
-			deleteErr = err
-			logger.Info("DeleteInstances API call failed", "attempt", attempt+1, "instanceID", instanceID, "error", err.Error())
+			logger.Info("Successfully deleted instance", "instanceID", instanceID, "requestId", requestId)
+			p.deleteCachedInstance(instanceID)
+			return nil
 		}
+
+		deleteErr = err
+		logger.Info("DeleteInstances API call failed", "attempt", attempt+1, "instanceID", instanceID, "error", err.Error())
 
 		// Check if it's a throttling error, if yes retry
 		if errors.IsThrottlingError(deleteErr) {
@@ -660,31 +686,30 @@ func (p *Provider) List(ctx context.Context, tags map[string]string) ([]*Instanc
 	logger := log.FromContext(ctx)
 
 	// Create describe instances request with Karpenter tag filter
-	request := ecs.CreateDescribeInstancesRequest()
-	request.RegionId = p.region
-
-	// Set page size for better performance
-	request.PageSize = requests.NewInteger(100)
+	request := &ecs.DescribeInstancesRequest{
+		RegionId: tea.String(p.region),
+		PageSize: tea.Int32(100),
+	}
 
 	// Log the tags we're filtering by
 	logger.Info("Listing instances with tags", "tags", tags)
 
 	// Set tag filters
-	var ecsTags []ecs.DescribeInstancesTag
+	var ecsTags []*ecs.DescribeInstancesRequestTag
 	for key, value := range tags {
-		ecsTags = append(ecsTags, ecs.DescribeInstancesTag{
-			Key:   key,
-			Value: value,
+		ecsTags = append(ecsTags, &ecs.DescribeInstancesRequestTag{
+			Key:   tea.String(key),
+			Value: tea.String(value),
 		})
 	}
-	request.Tag = &ecsTags
+	request.Tag = ecsTags
 
 	// Implement pagination
 	var allInstances []*Instance
-	pageNumber := 1
+	pageNumber := int32(1)
 
 	for {
-		request.PageNumber = requests.NewInteger(pageNumber)
+		request.PageNumber = tea.Int32(pageNumber)
 
 		// Implement retry mechanism for throttling errors
 		var response *ecs.DescribeInstancesResponse
@@ -748,51 +773,91 @@ func (p *Provider) List(ctx context.Context, tags map[string]string) ([]*Instanc
 			return nil, fmt.Errorf("failed to list instances after %d attempts: %w", strategy.MaxAttempts, err)
 		}
 
+		// Safely check response chain for nil
+		if response == nil || response.Body == nil || response.Body.Instances == nil {
+			return nil, fmt.Errorf("invalid response from ECS API")
+		}
+
 		// Log response information
-		logger.Info("DescribeInstances response", "totalCount", response.TotalCount, "returnedCount", len(response.Instances.Instance), "pageNumber", pageNumber)
+		totalCount := int32(0)
+		if response.Body.TotalCount != nil {
+			totalCount = *response.Body.TotalCount
+		}
+		logger.Info("DescribeInstances response", "totalCount", totalCount, "returnedCount", len(response.Body.Instances.Instance), "pageNumber", pageNumber)
 
 		// Convert to our Instance type
-		for _, inst := range response.Instances.Instance {
-			cpu := resource.MustParse(fmt.Sprintf("%d", inst.Cpu))
-			memory := resource.MustParse(fmt.Sprintf("%dGi", inst.Memory/1024)) // ECS returns memory in MiB
-			storage := resource.MustParse("0")                                  // Storage is not directly available in DescribeInstances response
-			gpu := resource.MustParse(fmt.Sprintf("%d", inst.GPUAmount))
+		for _, inst := range response.Body.Instances.Instance {
+			// Skip instance if essential fields are nil
+			if inst.Cpu == nil || inst.Memory == nil {
+				logger.Info("Skipping instance with missing CPU or Memory info")
+				continue
+			}
+			cpu := resource.MustParse(fmt.Sprintf("%d", *inst.Cpu))
+			memory := resource.MustParse(fmt.Sprintf("%dGi", *inst.Memory/1024)) // ECS returns memory in MiB
+			storage := resource.MustParse("0")                                   // Storage is not directly available in DescribeInstances response
+			gpuAmount := int32(0)
+			if inst.GPUAmount != nil {
+				gpuAmount = *inst.GPUAmount
+			}
+			gpu := resource.MustParse(fmt.Sprintf("%d", gpuAmount))
 			gpuMem := resource.MustParse("0") // GPUMem is not directly available in DescribeInstances response
 
 			// Get architecture from instance type
 			architecture := "amd64"
-			if strings.HasPrefix(inst.InstanceType, "ecs.gn") || strings.HasPrefix(inst.InstanceType, "ecs.cu") {
+			instType := derefString(inst.InstanceType)
+			if strings.HasPrefix(instType, "ecs.gn") || strings.HasPrefix(instType, "ecs.cu") {
 				architecture = "arm64"
 			}
 
 			// Determine capacity type
 			var capacityType string
-			if inst.InstanceChargeType == "PostPaid" {
+			chargeType := derefString(inst.InstanceChargeType)
+			spotStrategy := derefString(inst.SpotStrategy)
+			if chargeType == "PostPaid" {
 				capacityType = "on-demand"
-			} else if inst.InstanceChargeType == "PrePaid" {
+			} else if chargeType == "PrePaid" {
 				capacityType = "pre-paid"
-			} else if inst.SpotStrategy != "" && inst.SpotStrategy != "NoSpot" {
+			} else if spotStrategy != "" && spotStrategy != "NoSpot" {
 				capacityType = "spot"
 			}
 
+			securityGroupIds := []string{}
+			if inst.SecurityGroupIds != nil && inst.SecurityGroupIds.SecurityGroupId != nil {
+				for _, sg := range inst.SecurityGroupIds.SecurityGroupId {
+					if sg != nil {
+						securityGroupIds = append(securityGroupIds, *sg)
+					}
+				}
+			}
+
+			vSwitchID := ""
+			if inst.VpcAttributes != nil && inst.VpcAttributes.VSwitchId != nil {
+				vSwitchID = *inst.VpcAttributes.VSwitchId
+			}
+
+			gpuSpec := ""
+			if inst.GPUSpec != nil {
+				gpuSpec = *inst.GPUSpec
+			}
+
 			instance := &Instance{
-				InstanceID:       inst.InstanceId,
-				Region:           inst.RegionId,
-				Zone:             inst.ZoneId,
-				InstanceType:     inst.InstanceType,
-				ImageID:          inst.ImageId,
+				InstanceID:       derefString(inst.InstanceId),
+				Region:           derefString(inst.RegionId),
+				Zone:             derefString(inst.ZoneId),
+				InstanceType:     derefString(inst.InstanceType),
+				ImageID:          derefString(inst.ImageId),
 				CPU:              cpu,
 				Memory:           memory,
 				Storage:          storage,
 				Architecture:     architecture,
-				Status:           inst.Status,
-				CreationTime:     inst.CreationTime,
-				Tags:             convertTags(inst.Tags.Tag),
+				Status:           derefString(inst.Status),
+				CreationTime:     derefString(inst.CreationTime),
+				Tags:             convertTags(inst.Tags),
 				CapacityType:     capacityType,
-				SecurityGroupIDs: inst.SecurityGroupIds.SecurityGroupId,
-				VSwitchID:        inst.VpcAttributes.VSwitchId,
+				SecurityGroupIDs: securityGroupIds,
+				VSwitchID:        vSwitchID,
 				GPU:              gpu,
-				GPUSpec:          inst.GPUSpec,
+				GPUSpec:          gpuSpec,
 				GPUMem:           gpuMem,
 			}
 
@@ -802,11 +867,13 @@ func (p *Provider) List(ctx context.Context, tags map[string]string) ([]*Instanc
 			allInstances = append(allInstances, instance)
 
 			// Cache the instance
-			p.setCachedInstance(inst.InstanceId, instance)
+			if inst.InstanceId != nil {
+				p.setCachedInstance(*inst.InstanceId, instance)
+			}
 		}
 
 		// Check if there are more pages
-		if pageNumber*100 >= response.TotalCount {
+		if int32(pageNumber*100) >= totalCount {
 			break
 		}
 		pageNumber++
@@ -820,23 +887,21 @@ func (p *Provider) TagInstance(ctx context.Context, instanceID string, tags map[
 	logger := log.FromContext(ctx)
 
 	// Create tag resources request
-	request := ecs.CreateTagResourcesRequest()
-	request.RegionId = p.region
-	request.ResourceType = "instance"
-
-	// Set resource IDs
-	resourceIds := []string{instanceID}
-	request.ResourceId = &resourceIds
+	request := &ecs.TagResourcesRequest{
+		RegionId:     tea.String(p.region),
+		ResourceType: tea.String("instance"),
+		ResourceId:   []*string{tea.String(instanceID)},
+	}
 
 	// Convert tags to ECS format
-	var ecsTags []ecs.TagResourcesTag
+	var ecsTags []*ecs.TagResourcesRequestTag
 	for key, value := range tags {
-		ecsTags = append(ecsTags, ecs.TagResourcesTag{
-			Key:   key,
-			Value: value,
+		ecsTags = append(ecsTags, &ecs.TagResourcesRequestTag{
+			Key:   tea.String(key),
+			Value: tea.String(value),
 		})
 	}
-	request.Tag = &ecsTags
+	request.Tag = ecsTags
 
 	// Execute request
 	_, err := p.ecsClient.TagResources(ctx, request)
@@ -850,10 +915,16 @@ func (p *Provider) TagInstance(ctx context.Context, instanceID string, tags map[
 }
 
 // convertTags converts ECS tags to map
-func convertTags(ecsTags []ecs.Tag) map[string]string {
+func convertTags(ecsTagsResp *ecs.DescribeInstancesResponseBodyInstancesInstanceTags) map[string]string {
 	tags := make(map[string]string)
+	if ecsTagsResp == nil {
+		return tags
+	}
+	ecsTags := ecsTagsResp.Tag
 	for _, tag := range ecsTags {
-		tags[tag.TagKey] = tag.TagValue
+		if tag.TagKey != nil && tag.TagValue != nil {
+			tags[*tag.TagKey] = *tag.TagValue
+		}
 	}
 	return tags
 }
@@ -877,4 +948,12 @@ func (e *NotFoundError) Error() string {
 func IsNotFoundError(err error) bool {
 	_, ok := err.(*NotFoundError)
 	return ok
+}
+
+// derefString safely dereferences a string pointer, returning empty string if nil
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

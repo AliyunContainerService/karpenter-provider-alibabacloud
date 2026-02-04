@@ -5,7 +5,7 @@ controller:
   image:
     repository: registry-cn-hangzhou.ack.aliyuncs.com/acs/karpenter-provider-alibabacloud
     pullPolicy: Always
-    tag: "v1.0.0"
+    tag: "v0.2.0"
 
   resources:
     requests:
@@ -34,9 +34,20 @@ controller:
       value: ""
     - name: RAM_ENDPOINT
       value: ""
+    - name: STS_ENDPOINT
+      value: ""
+    # RRSA (RAM Roles for Service Account) configuration
+    # If RRSA is enabled, the following three environment variables must be set
+    - name: ALIBABA_CLOUD_ROLE_ARN
+      value: ""
+    - name: ALIBABA_CLOUD_OIDC_PROVIDER_ARN
+      value: ""
+    - name: ALIBABA_CLOUD_OIDC_TOKEN_FILE
+      value: "/var/run/secrets/ack.alibabacloud.com/rrsa-tokens/token"
 
 
 settings:
+  # ACK cluster ID, format: cd43e1dfb7*****
   clusterName: ""
   clusterEndpoint: ""
   region: ""
@@ -51,7 +62,7 @@ settings:
   batchIdleDuration: "5s"
 
 imagePullSecrets:
-   - name: my-secret
+   - name: ""
 
 serviceAccount:
   create: true

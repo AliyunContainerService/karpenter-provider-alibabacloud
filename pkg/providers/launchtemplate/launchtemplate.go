@@ -23,8 +23,8 @@ import (
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
-	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
+	"github.com/alibabacloud-go/tea/tea"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -57,51 +57,54 @@ func (p *Provider) Create(ctx context.Context, nodeClass *v1alpha1.ECSNodeClass,
 	name := fmt.Sprintf("karpenter-%s-%d", nodeClass.Name, time.Now().Unix())
 
 	// Create launch template request
-	request := ecs.CreateCreateLaunchTemplateRequest()
-	request.LaunchTemplateName = name
-	request.RegionId = p.region
+	request := &ecs.CreateLaunchTemplateRequest{
+		LaunchTemplateName: tea.String(name),
+		RegionId:           tea.String(p.region),
+	}
 
 	// Set launch template parameters from nodeClass
 	if len(nodeClass.Status.Images) > 0 {
 		image := nodeClass.Status.Images[0]
-		request.ImageId = image.ID
+		request.ImageId = tea.String(image.ID)
 	}
 
 	// Set security groups if specified
 	if len(nodeClass.Status.SecurityGroups) > 0 {
 		// Extract security group IDs from resolved security groups
-		var sgIDs []string
+		var sgIDs []*string
 		for _, sg := range nodeClass.Status.SecurityGroups {
-			sgIDs = append(sgIDs, sg.ID)
+			sgIDs = append(sgIDs, tea.String(sg.ID))
 		}
-		request.SecurityGroupIds = &sgIDs
+		request.SecurityGroupIds = sgIDs
 	}
 
 	// Set VSwitch ID if specified
 	if nodeClass.Status.VSwitches != nil && len(nodeClass.Status.VSwitches) > 0 {
 		// Use the first available VSwitch
 		// In production, you might want to implement zone-aware selection
-		request.VSwitchId = nodeClass.Status.VSwitches[0].ID
+		request.VSwitchId = tea.String(nodeClass.Status.VSwitches[0].ID)
 	}
 
 	// Set user data
 	if userData != "" {
-		request.UserData = userData
+		request.UserData = tea.String(userData)
 	}
 
 	// Set instance charge type (spot or on-demand)
 	if nodeClass.Spec.SpotStrategy != nil {
-		request.SpotStrategy = string(*nodeClass.Spec.SpotStrategy)
+		request.SpotStrategy = tea.String(string(*nodeClass.Spec.SpotStrategy))
 	}
 
 	// Set system disk configuration if specified
 	if nodeClass.Spec.SystemDisk != nil {
+		systemDisk := &ecs.CreateLaunchTemplateRequestSystemDisk{}
 		if nodeClass.Spec.SystemDisk.Category != "" {
-			request.SystemDiskCategory = nodeClass.Spec.SystemDisk.Category
+			systemDisk.Category = tea.String(nodeClass.Spec.SystemDisk.Category)
 		}
 		if nodeClass.Spec.SystemDisk.Size != nil {
-			request.SystemDiskSize = requests.NewInteger(int(*nodeClass.Spec.SystemDisk.Size))
+			systemDisk.Size = tea.Int32(int32(*nodeClass.Spec.SystemDisk.Size))
 		}
+		request.SystemDisk = systemDisk
 	}
 
 	// Execute request
@@ -111,12 +114,12 @@ func (p *Provider) Create(ctx context.Context, nodeClass *v1alpha1.ECSNodeClass,
 		return nil, fmt.Errorf("failed to create launch template: %w", err)
 	}
 
-	logger.Info("created launch template", "id", response.LaunchTemplateId, "name", name)
+	logger.Info("created launch template", "id", *response.Body.LaunchTemplateId, "name", name)
 
 	return &LaunchTemplate{
-		ID:      response.LaunchTemplateId,
+		ID:      *response.Body.LaunchTemplateId,
 		Name:    name,
-		Version: fmt.Sprintf("%d", response.LaunchTemplateVersionNumber),
+		Version: fmt.Sprintf("%d", *response.Body.LaunchTemplateVersionNumber), // Default version for new templates
 	}, nil
 }
 
@@ -125,8 +128,9 @@ func (p *Provider) Get(ctx context.Context, id string) (*LaunchTemplate, error) 
 	logger := log.FromContext(ctx)
 
 	// Create describe launch templates request
-	request := ecs.CreateDescribeLaunchTemplatesRequest()
-	request.LaunchTemplateId = &[]string{id}
+	request := &ecs.DescribeLaunchTemplatesRequest{
+		LaunchTemplateId: []*string{tea.String(id)},
+	}
 
 	// Execute request
 	response, err := p.ecsClient.DescribeLaunchTemplates(ctx, request)
@@ -136,16 +140,16 @@ func (p *Provider) Get(ctx context.Context, id string) (*LaunchTemplate, error) 
 	}
 
 	// Check if launch template exists
-	if len(response.LaunchTemplateSets.LaunchTemplateSet) == 0 {
+	if len(response.Body.LaunchTemplateSets.LaunchTemplateSet) == 0 {
 		return nil, fmt.Errorf("launch template %s not found", id)
 	}
 
-	launchTemplateSet := response.LaunchTemplateSets.LaunchTemplateSet[0]
+	launchTemplateSet := response.Body.LaunchTemplateSets.LaunchTemplateSet[0]
 
 	return &LaunchTemplate{
-		ID:      launchTemplateSet.LaunchTemplateId,
-		Name:    launchTemplateSet.LaunchTemplateName,
-		Version: fmt.Sprintf("%d", launchTemplateSet.DefaultVersionNumber),
+		ID:      *launchTemplateSet.LaunchTemplateId,
+		Name:    *launchTemplateSet.LaunchTemplateName,
+		Version: fmt.Sprintf("%d", *launchTemplateSet.DefaultVersionNumber),
 	}, nil
 }
 
@@ -154,8 +158,9 @@ func (p *Provider) Delete(ctx context.Context, id string) error {
 	logger := log.FromContext(ctx)
 
 	// Create delete launch template request
-	request := ecs.CreateDeleteLaunchTemplateRequest()
-	request.LaunchTemplateId = id
+	request := &ecs.DeleteLaunchTemplateRequest{
+		LaunchTemplateId: tea.String(id),
+	}
 
 	// Execute request
 	_, err := p.ecsClient.DeleteLaunchTemplate(ctx, request)

@@ -24,7 +24,8 @@ import (
 	"time"
 
 	cs "github.com/alibabacloud-go/cs-20151215/v5/client"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/vpc"
+	"github.com/alibabacloud-go/tea/tea"
+	vpc "github.com/alibabacloud-go/vpc-20160428/v7/client"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
@@ -36,7 +37,7 @@ import (
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/pricing"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/securitygroup"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/vswitch"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	v1 "k8s.io/api/core/v1"
@@ -231,9 +232,11 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeZones (called by instanceTypeProvider.List -> cloudProvider.List)
 			mockECSClient.On("DescribeZones", mock.Anything).Return(
 				&ecs.DescribeZonesResponse{
-					Zones: ecs.ZonesInDescribeZones{
-						Zone: []ecs.Zone{
-							{ZoneId: "cn-hangzhou-h"},
+					Body: &ecs.DescribeZonesResponseBody{
+						Zones: &ecs.DescribeZonesResponseBodyZones{
+							Zone: []*ecs.DescribeZonesResponseBodyZonesZone{
+								{ZoneId: stringPtr("cn-hangzhou-h")},
+							},
 						},
 					},
 				}, nil)
@@ -241,16 +244,20 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeInstanceTypes (called by cloudProvider.List)
 			mockECSClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstanceTypesResponse{
-					InstanceTypes: ecs.InstanceTypesInDescribeInstanceTypes{
-						InstanceType: []ecs.InstanceType{},
+					Body: &ecs.DescribeInstanceTypesResponseBody{
+						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{},
+						},
 					},
 				}, nil)
 
 			// Mock List to return empty instances (orphaned)
 			mockECSClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstancesResponse{
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: []ecs.Instance{},
+					Body: &ecs.DescribeInstancesResponseBody{
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
+						},
 					},
 				}, nil)
 
@@ -272,9 +279,11 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeZones
 			mockECSClient.On("DescribeZones", mock.Anything).Return(
 				&ecs.DescribeZonesResponse{
-					Zones: ecs.ZonesInDescribeZones{
-						Zone: []ecs.Zone{
-							{ZoneId: "cn-hangzhou-h"},
+					Body: &ecs.DescribeZonesResponseBody{
+						Zones: &ecs.DescribeZonesResponseBodyZones{
+							Zone: []*ecs.DescribeZonesResponseBodyZonesZone{
+								{ZoneId: stringPtr("cn-hangzhou-h")},
+							},
 						},
 					},
 				}, nil)
@@ -282,16 +291,20 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeInstanceTypes
 			mockECSClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstanceTypesResponse{
-					InstanceTypes: ecs.InstanceTypesInDescribeInstanceTypes{
-						InstanceType: []ecs.InstanceType{},
+					Body: &ecs.DescribeInstanceTypesResponseBody{
+						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{},
+						},
 					},
 				}, nil)
 
 			// Mock List to return empty instances
 			mockECSClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstancesResponse{
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: []ecs.Instance{},
+					Body: &ecs.DescribeInstancesResponseBody{
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
+						},
 					},
 				}, nil)
 
@@ -314,9 +327,11 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeZones
 			mockECSClient.On("DescribeZones", mock.Anything).Return(
 				&ecs.DescribeZonesResponse{
-					Zones: ecs.ZonesInDescribeZones{
-						Zone: []ecs.Zone{
-							{ZoneId: "cn-hangzhou-h"},
+					Body: &ecs.DescribeZonesResponseBody{
+						Zones: &ecs.DescribeZonesResponseBodyZones{
+							Zone: []*ecs.DescribeZonesResponseBodyZonesZone{
+								{ZoneId: stringPtr("cn-hangzhou-h")},
+							},
 						},
 					},
 				}, nil)
@@ -324,16 +339,20 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeInstanceTypes
 			mockECSClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstanceTypesResponse{
-					InstanceTypes: ecs.InstanceTypesInDescribeInstanceTypes{
-						InstanceType: []ecs.InstanceType{},
+					Body: &ecs.DescribeInstanceTypesResponseBody{
+						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{},
+						},
 					},
 				}, nil)
 
 			// Mock List to return empty instances (orphaned)
 			mockECSClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstancesResponse{
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: []ecs.Instance{},
+					Body: &ecs.DescribeInstancesResponseBody{
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
+						},
 					},
 				}, nil)
 
@@ -366,9 +385,11 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeZones
 			mockECSClient.On("DescribeZones", mock.Anything).Return(
 				&ecs.DescribeZonesResponse{
-					Zones: ecs.ZonesInDescribeZones{
-						Zone: []ecs.Zone{
-							{ZoneId: "cn-hangzhou-h"},
+					Body: &ecs.DescribeZonesResponseBody{
+						Zones: &ecs.DescribeZonesResponseBodyZones{
+							Zone: []*ecs.DescribeZonesResponseBodyZonesZone{
+								{ZoneId: stringPtr("cn-hangzhou-h")},
+							},
 						},
 					},
 				}, nil)
@@ -376,16 +397,20 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeInstanceTypes
 			mockECSClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstanceTypesResponse{
-					InstanceTypes: ecs.InstanceTypesInDescribeInstanceTypes{
-						InstanceType: []ecs.InstanceType{},
+					Body: &ecs.DescribeInstanceTypesResponseBody{
+						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{},
+						},
 					},
 				}, nil)
 
 			// Mock List to return empty instances (orphaned)
 			mockECSClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstancesResponse{
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: []ecs.Instance{},
+					Body: &ecs.DescribeInstancesResponseBody{
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
+						},
 					},
 				}, nil)
 
@@ -421,9 +446,11 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeZones
 			mockECSClient.On("DescribeZones", mock.Anything).Return(
 				&ecs.DescribeZonesResponse{
-					Zones: ecs.ZonesInDescribeZones{
-						Zone: []ecs.Zone{
-							{ZoneId: "cn-hangzhou-h"},
+					Body: &ecs.DescribeZonesResponseBody{
+						Zones: &ecs.DescribeZonesResponseBodyZones{
+							Zone: []*ecs.DescribeZonesResponseBodyZonesZone{
+								{ZoneId: stringPtr("cn-hangzhou-h")},
+							},
 						},
 					},
 				}, nil)
@@ -431,16 +458,20 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeInstanceTypes
 			mockECSClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstanceTypesResponse{
-					InstanceTypes: ecs.InstanceTypesInDescribeInstanceTypes{
-						InstanceType: []ecs.InstanceType{},
+					Body: &ecs.DescribeInstanceTypesResponseBody{
+						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{},
+						},
 					},
 				}, nil)
 
 			// Mock List to return empty instances (all orphaned)
 			mockECSClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstancesResponse{
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: []ecs.Instance{},
+					Body: &ecs.DescribeInstancesResponseBody{
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
+						},
 					},
 				}, nil)
 
@@ -464,9 +495,11 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeZones
 			mockECSClient.On("DescribeZones", mock.Anything).Return(
 				&ecs.DescribeZonesResponse{
-					Zones: ecs.ZonesInDescribeZones{
-						Zone: []ecs.Zone{
-							{ZoneId: "cn-hangzhou-h"},
+					Body: &ecs.DescribeZonesResponseBody{
+						Zones: &ecs.DescribeZonesResponseBodyZones{
+							Zone: []*ecs.DescribeZonesResponseBodyZonesZone{
+								{ZoneId: stringPtr("cn-hangzhou-h")},
+							},
 						},
 					},
 				}, nil)
@@ -474,31 +507,35 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeInstanceTypes
 			mockECSClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstanceTypesResponse{
-					InstanceTypes: ecs.InstanceTypesInDescribeInstanceTypes{
-						InstanceType: []ecs.InstanceType{},
+					Body: &ecs.DescribeInstanceTypesResponseBody{
+						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{},
+						},
 					},
 				}, nil)
 
 			// Mock List to return the instance (NOT orphaned)
 			mockECSClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstancesResponse{
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: []ecs.Instance{
-							{
-								InstanceId:   "i-test123456",
-								RegionId:     "cn-hangzhou",
-								ZoneId:       "cn-hangzhou-h",
-								InstanceType: "ecs.g6.large",
-								ImageId:      "img-123",
-								Status:       "Running",
-								Cpu:          2,
-								Memory:       8192,
-								Tags: ecs.TagsInDescribeInstances{
-									Tag: []ecs.Tag{
-										{Key: "karpenter.sh/managed-by", Value: "true"},
+					Body: &ecs.DescribeInstancesResponseBody{
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{
+								{
+									InstanceId:   tea.String("i-test123456"),
+									RegionId:     tea.String("cn-hangzhou"),
+									ZoneId:       tea.String("cn-hangzhou-h"),
+									InstanceType: tea.String("ecs.g6.large"),
+									ImageId:      tea.String("img-123"),
+									Status:       tea.String("Running"),
+									Cpu:          tea.Int32(2),
+									Memory:       tea.Int32(8192),
+									Tags: &ecs.DescribeInstancesResponseBodyInstancesInstanceTags{
+										Tag: []*ecs.DescribeInstancesResponseBodyInstancesInstanceTagsTag{
+											{TagKey: tea.String("karpenter.sh/managed-by"), TagValue: tea.String("true")},
+										},
 									},
+									CreationTime: tea.String(time.Now().Add(-10 * time.Minute).Format(time.RFC3339)),
 								},
-								CreationTime: time.Now().Add(-10 * time.Minute).Format(time.RFC3339),
 							},
 						},
 					},
@@ -528,16 +565,20 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock other calls that List() makes to avoid panic
 			mockECSClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstanceTypesResponse{
-					InstanceTypes: ecs.InstanceTypesInDescribeInstanceTypes{
-						InstanceType: []ecs.InstanceType{},
+					Body: &ecs.DescribeInstanceTypesResponseBody{
+						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{},
+						},
 					},
 				}, nil)
 
 			// Mock DescribeInstances to return empty results since DescribeZones will error first
 			mockECSClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstancesResponse{
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: []ecs.Instance{},
+					Body: &ecs.DescribeInstancesResponseBody{
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
+						},
 					},
 				}, nil)
 
@@ -557,9 +598,11 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeZones
 			mockECSClient.On("DescribeZones", mock.Anything).Return(
 				&ecs.DescribeZonesResponse{
-					Zones: ecs.ZonesInDescribeZones{
-						Zone: []ecs.Zone{
-							{ZoneId: "cn-hangzhou-h"},
+					Body: &ecs.DescribeZonesResponseBody{
+						Zones: &ecs.DescribeZonesResponseBodyZones{
+							Zone: []*ecs.DescribeZonesResponseBodyZonesZone{
+								{ZoneId: stringPtr("cn-hangzhou-h")},
+							},
 						},
 					},
 				}, nil)
@@ -567,16 +610,20 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeInstanceTypes
 			mockECSClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstanceTypesResponse{
-					InstanceTypes: ecs.InstanceTypesInDescribeInstanceTypes{
-						InstanceType: []ecs.InstanceType{},
+					Body: &ecs.DescribeInstanceTypesResponseBody{
+						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{},
+						},
 					},
 				}, nil)
 
 			// Mock List to return empty (orphaned)
 			mockECSClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstancesResponse{
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: []ecs.Instance{},
+					Body: &ecs.DescribeInstancesResponseBody{
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
+						},
 					},
 				}, nil)
 
@@ -627,9 +674,11 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeZones
 			mockECSClient.On("DescribeZones", mock.Anything).Return(
 				&ecs.DescribeZonesResponse{
-					Zones: ecs.ZonesInDescribeZones{
-						Zone: []ecs.Zone{
-							{ZoneId: "cn-hangzhou-h"},
+					Body: &ecs.DescribeZonesResponseBody{
+						Zones: &ecs.DescribeZonesResponseBodyZones{
+							Zone: []*ecs.DescribeZonesResponseBodyZonesZone{
+								{ZoneId: stringPtr("cn-hangzhou-h")},
+							},
 						},
 					},
 				}, nil).Once()
@@ -637,24 +686,28 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeInstanceTypes
 			mockECSClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstanceTypesResponse{
-					InstanceTypes: ecs.InstanceTypesInDescribeInstanceTypes{
-						InstanceType: []ecs.InstanceType{},
+					Body: &ecs.DescribeInstanceTypesResponseBody{
+						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{},
+						},
 					},
 				}, nil).Once()
 
 			// First reconcile
 			mockECSClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstancesResponse{
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: []ecs.Instance{
-							{
-								InstanceId:   "i-test123456",
-								RegionId:     "cn-hangzhou",
-								Status:       "Running",
-								CreationTime: time.Now().Add(-10 * time.Minute).Format(time.RFC3339),
-								Tags: ecs.TagsInDescribeInstances{
-									Tag: []ecs.Tag{
-										{Key: "karpenter.sh/managed-by", Value: "true"},
+					Body: &ecs.DescribeInstancesResponseBody{
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{
+								{
+									InstanceId:   tea.String("i-test123456"),
+									RegionId:     tea.String("cn-hangzhou"),
+									Status:       tea.String("Running"),
+									CreationTime: tea.String(time.Now().Add(-10 * time.Minute).Format(time.RFC3339)),
+									Tags: &ecs.DescribeInstancesResponseBodyInstancesInstanceTags{
+										Tag: []*ecs.DescribeInstancesResponseBodyInstancesInstanceTagsTag{
+											{TagKey: tea.String("karpenter.sh/managed-by"), TagValue: tea.String("true")},
+										},
 									},
 								},
 							},
@@ -699,9 +752,11 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeZones
 			mockECSClient.On("DescribeZones", mock.Anything).Return(
 				&ecs.DescribeZonesResponse{
-					Zones: ecs.ZonesInDescribeZones{
-						Zone: []ecs.Zone{
-							{ZoneId: "cn-hangzhou-h"},
+					Body: &ecs.DescribeZonesResponseBody{
+						Zones: &ecs.DescribeZonesResponseBodyZones{
+							Zone: []*ecs.DescribeZonesResponseBodyZonesZone{
+								{ZoneId: stringPtr("cn-hangzhou-h")},
+							},
 						},
 					},
 				}, nil)
@@ -709,16 +764,20 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeInstanceTypes
 			mockECSClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstanceTypesResponse{
-					InstanceTypes: ecs.InstanceTypesInDescribeInstanceTypes{
-						InstanceType: []ecs.InstanceType{},
+					Body: &ecs.DescribeInstanceTypesResponseBody{
+						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{},
+						},
 					},
 				}, nil)
 
 			// Mock empty list (orphaned)
 			mockECSClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstancesResponse{
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: []ecs.Instance{},
+					Body: &ecs.DescribeInstancesResponseBody{
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
+						},
 					},
 				}, nil)
 
@@ -747,9 +806,11 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeZones
 			mockECSClient.On("DescribeZones", mock.Anything).Return(
 				&ecs.DescribeZonesResponse{
-					Zones: ecs.ZonesInDescribeZones{
-						Zone: []ecs.Zone{
-							{ZoneId: "cn-hangzhou-h"},
+					Body: &ecs.DescribeZonesResponseBody{
+						Zones: &ecs.DescribeZonesResponseBodyZones{
+							Zone: []*ecs.DescribeZonesResponseBodyZonesZone{
+								{ZoneId: stringPtr("cn-hangzhou-h")},
+							},
 						},
 					},
 				}, nil)
@@ -757,16 +818,20 @@ var _ = Describe("GarbageCollectionController", func() {
 			// Mock DescribeInstanceTypes
 			mockECSClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstanceTypesResponse{
-					InstanceTypes: ecs.InstanceTypesInDescribeInstanceTypes{
-						InstanceType: []ecs.InstanceType{},
+					Body: &ecs.DescribeInstanceTypesResponseBody{
+						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{},
+						},
 					},
 				}, nil)
 
 			// Mock empty list
 			mockECSClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstancesResponse{
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: []ecs.Instance{},
+					Body: &ecs.DescribeInstancesResponseBody{
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
+						},
 					},
 				}, nil)
 
@@ -825,12 +890,12 @@ func (m *MockECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesRe
 	return args.Get(0).(*ecs.DescribeZonesResponse), args.Error(1)
 }
 
-func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.Image, error) {
+func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error) {
 	args := m.Called(ctx, imageIDs, filters)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]ecs.Image), args.Error(1)
+	return args.Get(0).([]ecs.DescribeImagesResponseBodyImagesImage), args.Error(1)
 }
 
 func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {

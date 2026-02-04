@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -91,9 +91,9 @@ func (m *MockECSClient) DescribePrice(ctx context.Context, instanceType string) 
 	panic("implement me")
 }
 
-func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.Image, error) {
+func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error) {
 	args := m.Called(ctx, imageIDs, filters)
-	return args.Get(0).([]ecs.Image), args.Error(1)
+	return args.Get(0).([]ecs.DescribeImagesResponseBodyImagesImage), args.Error(1)
 }
 
 func TestResolve(t *testing.T) {
@@ -119,12 +119,14 @@ func TestResolve(t *testing.T) {
 				},
 			},
 			mockResponse: &ecs.DescribeImagesResponse{
-				Images: ecs.Images{
-					Image: []ecs.Image{
-						{
-							ImageId:      "m-1234567890abcdef0",
-							ImageName:    "test-image",
-							Architecture: "x86_64",
+				Body: &ecs.DescribeImagesResponseBody{
+					Images: &ecs.DescribeImagesResponseBodyImages{
+						Image: []*ecs.DescribeImagesResponseBodyImagesImage{
+							{
+								ImageId:      stringPtr("m-1234567890abcdef0"),
+								ImageName:    stringPtr("test-image"),
+								Architecture: stringPtr("x86_64"),
+							},
 						},
 					},
 				},
@@ -143,14 +145,16 @@ func TestResolve(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mockClient := new(MockECSClient)
 			if tt.mockResponse != nil || tt.mockError != nil {
-				// Convert ecs.DescribeImagesResponse to []Image
-				var images []ecs.Image
-				for _, img := range tt.mockResponse.Images.Image {
-					images = append(images, ecs.Image{
-						ImageId:      img.ImageId,
-						ImageName:    img.ImageName,
-						Architecture: img.Architecture,
-					})
+				// Convert ecs.DescribeImagesResponse to []DescribeImagesResponseBodyImagesImage
+				var images []ecs.DescribeImagesResponseBodyImagesImage
+				if tt.mockResponse != nil && tt.mockResponse.Body != nil && tt.mockResponse.Body.Images != nil {
+					for _, img := range tt.mockResponse.Body.Images.Image {
+						images = append(images, ecs.DescribeImagesResponseBodyImagesImage{
+							ImageId:      img.ImageId,
+							ImageName:    img.ImageName,
+							Architecture: img.Architecture,
+						})
+					}
 				}
 				mockClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return(images, tt.mockError)
 			}

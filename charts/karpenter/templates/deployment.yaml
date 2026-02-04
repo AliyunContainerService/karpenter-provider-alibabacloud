@@ -30,6 +30,22 @@ spec:
           - --region={{ .Values.settings.region }}
         env:
           {{- toYaml .Values.controller.env | nindent 10 }}
+        {{- if .Values.controller.env }}
+        {{- $hasRRSA := false }}
+        {{- range .Values.controller.env }}
+        {{- if and (eq .name "ALIBABA_CLOUD_ROLE_ARN") (ne .value "") }}
+        {{- if regexMatch "^acs:ram::[0-9]+:role/[a-zA-Z0-9_-]+$" .value }}
+        {{- $hasRRSA = true }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+        {{- if $hasRRSA }}
+        volumeMounts:
+        - mountPath: /var/run/secrets/ack.alibabacloud.com/rrsa-tokens
+          name: rrsa-oidc-token
+          readOnly: true
+        {{- end }}
+        {{- end }}
         ports:
         - name: metrics
           containerPort: {{ .Values.metrics.port }}
@@ -50,4 +66,25 @@ spec:
       {{- with .Values.controller.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.controller.env }}
+      {{- $hasRRSA := false }}
+      {{- range .Values.controller.env }}
+      {{- if and (eq .name "ALIBABA_CLOUD_ROLE_ARN") (ne .value "") }}
+      {{- if regexMatch "^acs:ram::[0-9]+:role/[a-zA-Z0-9_-]+$" .value }}
+      {{- $hasRRSA = true }}
+      {{- end }}
+      {{- end }}
+      {{- end }}
+      {{- if $hasRRSA }}
+      volumes:
+      - name: rrsa-oidc-token
+        projected:
+          defaultMode: 420
+          sources:
+          - serviceAccountToken:
+              audience: sts.aliyuncs.com
+              expirationSeconds: 3600
+              path: token
+      {{- end }}
       {{- end }}

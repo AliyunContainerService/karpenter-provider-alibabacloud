@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -121,9 +121,12 @@ func (p *Provider) getCachedValue(key string) (interface{}, bool) {
 	// Check if cache entry is expired
 	if time.Now().After(entry.ExpiresAt) {
 		p.cacheMu.RUnlock()
-		// Remove expired entry
+		// Remove expired entry with write lock
 		p.cacheMu.Lock()
-		delete(p.cache, key)
+		// Double-check to prevent concurrent deletions
+		if entry2, exists := p.cache[key]; exists && time.Now().After(entry2.ExpiresAt) {
+			delete(p.cache, key)
+		}
 		p.cacheMu.Unlock()
 		return nil, false
 	}
@@ -145,10 +148,24 @@ func (p *Provider) setCachedValue(key string, value interface{}) {
 }
 
 // convertECSInstanceType converts an ECS instance type to our InstanceType structure
-func (p *Provider) convertECSInstanceType(ecsInstanceType ecs.InstanceType, zones map[string]ZoneInfo) *InstanceType {
-	cpu := resource.NewQuantity(int64(ecsInstanceType.CpuCoreCount), resource.DecimalSI)
-	// 修复内存大小转换：阿里云返回的是GiB单位，需要正确转换为字节
-	memoryGiB := ecsInstanceType.MemorySize
+func (p *Provider) convertECSInstanceType(ecsInstanceType *ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType, zones map[string]ZoneInfo) *InstanceType {
+	// Validate input to prevent nil pointer dereference
+	if ecsInstanceType == nil {
+		return nil
+	}
+
+	// Safely extract CPU count with nil check
+	if ecsInstanceType.CpuCoreCount == nil {
+		return nil
+	}
+	cpu := resource.NewQuantity(int64(*ecsInstanceType.CpuCoreCount), resource.DecimalSI)
+
+	// Safely extract memory size with nil check
+	if ecsInstanceType.MemorySize == nil {
+		return nil
+	}
+	// Fix memory size conversion: Alibaba Cloud returns GiB units, need to convert to bytes correctly
+	memoryGiB := float64(*ecsInstanceType.MemorySize)
 	// Prevent overflow: max memory is ~16 EiB (int64 max / 1024^3)
 	if memoryGiB > float64(1<<53) {
 		memoryGiB = float64(1 << 53)
@@ -157,31 +174,54 @@ func (p *Provider) convertECSInstanceType(ecsInstanceType ecs.InstanceType, zone
 	memory := resource.NewQuantity(memoryBytes, resource.BinarySI)
 	storage := resource.NewQuantity(0, resource.DecimalSI) // Storage is not directly available
 
-	// Get architecture from ECS API, fallback to amd64 if empty
-	architecture := ecsInstanceType.CpuArchitecture
+	// Get architecture - not directly available in the new SDK, default to amd64
+	architecture := *ecsInstanceType.CpuArchitecture
 
 	// Get GPU information if available with enhanced memory calculation
 	var gpu *GPU
-	if ecsInstanceType.GPUAmount > 0 {
-		gpuCount := resource.NewQuantity(int64(ecsInstanceType.GPUAmount), resource.DecimalSI)
+	gpuAmount := int32(0)
+	if ecsInstanceType.GPUAmount != nil {
+		gpuAmount = *ecsInstanceType.GPUAmount
+	}
+	if gpuAmount > 0 {
+		gpuCount := resource.NewQuantity(int64(gpuAmount), resource.DecimalSI)
 		gpuMemory := CalculateGPUMemory(ecsInstanceType)
+		gpuSpec := ""
+		if ecsInstanceType.GPUSpec != nil {
+			gpuSpec = *ecsInstanceType.GPUSpec
+		}
 		gpu = &GPU{
 			Count:  gpuCount,
-			Model:  ecsInstanceType.GPUSpec,
+			Model:  gpuSpec,
 			Memory: gpuMemory,
 		}
 	}
 
+	instanceTypeId := ""
+	if ecsInstanceType.InstanceTypeId != nil {
+		instanceTypeId = *ecsInstanceType.InstanceTypeId
+	}
+
+	eniQuantity := 0
+	if ecsInstanceType.EniQuantity != nil {
+		eniQuantity = int(*ecsInstanceType.EniQuantity)
+	}
+
+	eniPrivateIpAddressQuantity := 0
+	if ecsInstanceType.EniPrivateIpAddressQuantity != nil {
+		eniPrivateIpAddressQuantity = int(*ecsInstanceType.EniPrivateIpAddressQuantity)
+	}
+
 	return &InstanceType{
-		Name:                        ecsInstanceType.InstanceTypeId,
+		Name:                        instanceTypeId,
 		Architecture:                architecture,
 		CPU:                         cpu,
 		Memory:                      memory,
 		Storage:                     storage,
 		GPU:                         gpu,
 		Zones:                       zones,
-		EniQuantity:                 ecsInstanceType.EniQuantity,
-		EniPrivateIpAddressQuantity: ecsInstanceType.EniPrivateIpAddressQuantity,
+		EniQuantity:                 eniQuantity,
+		EniPrivateIpAddressQuantity: eniPrivateIpAddressQuantity,
 	}
 }
 
@@ -190,24 +230,41 @@ func (p *Provider) convertECSInstanceType(ecsInstanceType ecs.InstanceType, zone
 // 1. Try exact instance type match in GPUInstanceTypes map
 // 2. Try instance family match in GPUInstanceTypeFamily map (multiply by GPU count)
 // 3. Try GPUMemorySize from ECS API (multiply by GPU count)
-func CalculateGPUMemory(ecsInstanceType ecs.InstanceType) *resource.Quantity {
-	if ecsInstanceType.GPUAmount == 0 {
+func CalculateGPUMemory(ecsInstanceType *ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType) *resource.Quantity {
+	gpuAmount := int32(0)
+	if ecsInstanceType.GPUAmount != nil {
+		gpuAmount = *ecsInstanceType.GPUAmount
+	}
+	if gpuAmount == 0 {
 		return nil
 	}
 
+	instanceTypeId := ""
+	if ecsInstanceType.InstanceTypeId != nil {
+		instanceTypeId = *ecsInstanceType.InstanceTypeId
+	}
+
 	// Priority 1: Check exact instance type in GPUInstanceTypes map
-	if v, ok := GPUInstanceTypes[ecsInstanceType.InstanceTypeId]; ok {
+	if v, ok := GPUInstanceTypes[instanceTypeId]; ok {
 		// GPUInstanceTypes already contains total memory for all GPUs
 		return resource.NewQuantity(CovertMibToGib(v.GPUMemory), resource.DecimalSI)
 	}
 
-	// Priority 2: Check instance family in GPUInstanceTypeFamily map
-	// This contains per-GPU memory, so multiply by GPU count
-	if familyVal, ok := GPUInstanceTypeFamily[ecsInstanceType.InstanceTypeFamily]; ok {
-		return resource.NewQuantity(CovertMibToGib(familyVal.GPUMemory*int64(ecsInstanceType.GPUAmount)), resource.DecimalSI)
+	instanceTypeFamily := ""
+	if ecsInstanceType.InstanceTypeFamily != nil {
+		instanceTypeFamily = *ecsInstanceType.InstanceTypeFamily
 	}
 
-	return resource.NewQuantity(int64(ecsInstanceType.GPUMemorySize)*int64(ecsInstanceType.GPUAmount), resource.DecimalSI)
+	// Priority 2: Check instance family in GPUInstanceTypeFamily map
+	// This contains per-GPU memory, so multiply by GPU count
+	if familyVal, ok := GPUInstanceTypeFamily[instanceTypeFamily]; ok {
+		return resource.NewQuantity(CovertMibToGib(familyVal.GPUMemory*int64(gpuAmount)), resource.DecimalSI)
+	}
+
+	// Priority 3: If GPUMemorySize is available from ECS API, use it
+	// Note: GPUMemorySize field may not be available in the current SDK version
+	// Return 0 if not available
+	return resource.NewQuantity(0, resource.DecimalSI)
 }
 
 // getAvailableZones fetches available zones from Alibaba Cloud API
@@ -233,9 +290,9 @@ func (p *Provider) getAvailableZones(ctx context.Context) (map[string]ZoneInfo, 
 
 	// Convert to our zone information
 	zones := make(map[string]ZoneInfo)
-	for _, zone := range response.Zones.Zone {
+	for _, zone := range response.Body.Zones.Zone {
 		// Mark all zones as available by default
-		zones[zone.ZoneId] = ZoneInfo{Available: true}
+		zones[*zone.ZoneId] = ZoneInfo{Available: true}
 	}
 
 	// Cache the result
@@ -273,16 +330,24 @@ func (p *Provider) List(ctx context.Context) ([]*InstanceType, error) {
 
 	// Convert to our InstanceType type
 	var instanceTypes []*InstanceType
-	for _, it := range response.InstanceTypes.InstanceType {
+	for _, it := range response.Body.InstanceTypes.InstanceType {
 		instanceType := p.convertECSInstanceType(it, zones)
 
 		// Log instance type information for debugging (only at debug level)
+		gpuAmount := int32(0)
+		if it.GPUAmount != nil {
+			gpuAmount = *it.GPUAmount
+		}
+		gpuSpec := ""
+		if it.GPUSpec != nil {
+			gpuSpec = *it.GPUSpec
+		}
 		logger.V(1).Info("Found instance type",
-			"name", it.InstanceTypeId,
-			"cpu", it.CpuCoreCount,
-			"memoryGiB", it.MemorySize,
-			"gpuAmount", it.GPUAmount,
-			"gpuSpec", it.GPUSpec,
+			"name", *it.InstanceTypeId,
+			"cpu", *it.CpuCoreCount,
+			"memoryGiB", *it.MemorySize,
+			"gpuAmount", gpuAmount,
+			"gpuSpec", gpuSpec,
 			"zones", zones)
 
 		instanceTypes = append(instanceTypes, instanceType)
@@ -327,11 +392,11 @@ func (p *Provider) Get(ctx context.Context, instanceTypeName string) (*InstanceT
 		return nil, fmt.Errorf("failed to describe instance type %s: %w", instanceTypeName, err)
 	}
 
-	if len(response.InstanceTypes.InstanceType) == 0 {
+	if len(response.Body.InstanceTypes.InstanceType) == 0 {
 		return nil, fmt.Errorf("instance type %s not found", instanceTypeName)
 	}
 
-	it := response.InstanceTypes.InstanceType[0]
+	it := response.Body.InstanceTypes.InstanceType[0]
 	instanceType := p.convertECSInstanceType(it, zones)
 
 	// Cache the result

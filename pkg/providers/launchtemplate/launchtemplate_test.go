@@ -22,7 +22,7 @@ import (
 	"testing"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -62,7 +62,7 @@ func (m *MockECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesRe
 	panic("implement me")
 }
 
-func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.Image, error) {
+func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -142,9 +142,11 @@ func TestCreate(t *testing.T) {
 			},
 			userData: "#!/bin/bash\\necho hello",
 			mockSetup: func(m *MockECSClient) {
+				ltID := "lt-123"
 				response := &ecs.CreateLaunchTemplateResponse{
-					LaunchTemplateId:            "lt-123",
-					LaunchTemplateVersionNumber: 1,
+					Body: &ecs.CreateLaunchTemplateResponseBody{
+						LaunchTemplateId: &ltID,
+					},
 				}
 				m.On("CreateLaunchTemplate", mock.Anything, mock.Anything).Return(response, nil)
 			},
@@ -160,9 +162,11 @@ func TestCreate(t *testing.T) {
 			},
 			userData: "",
 			mockSetup: func(m *MockECSClient) {
+				ltID := "lt-456"
 				response := &ecs.CreateLaunchTemplateResponse{
-					LaunchTemplateId:            "lt-456",
-					LaunchTemplateVersionNumber: 1,
+					Body: &ecs.CreateLaunchTemplateResponseBody{
+						LaunchTemplateId: &ltID,
+					},
 				}
 				m.On("CreateLaunchTemplate", mock.Anything, mock.Anything).Return(response, nil)
 			},
@@ -220,13 +224,18 @@ func TestGet(t *testing.T) {
 			name: "successful get",
 			id:   "lt-123",
 			mockSetup: func(m *MockECSClient) {
+				ltID := "lt-123"
+				ltName := "test-template"
+				var version int64 = 1
 				response := &ecs.DescribeLaunchTemplatesResponse{
-					LaunchTemplateSets: ecs.LaunchTemplateSets{
-						LaunchTemplateSet: []ecs.LaunchTemplateSet{
-							{
-								LaunchTemplateId:     "lt-123",
-								LaunchTemplateName:   "test-template",
-								DefaultVersionNumber: 1,
+					Body: &ecs.DescribeLaunchTemplatesResponseBody{
+						LaunchTemplateSets: &ecs.DescribeLaunchTemplatesResponseBodyLaunchTemplateSets{
+							LaunchTemplateSet: []*ecs.DescribeLaunchTemplatesResponseBodyLaunchTemplateSetsLaunchTemplateSet{
+								{
+									LaunchTemplateId:     &ltID,
+									LaunchTemplateName:   &ltName,
+									DefaultVersionNumber: &version,
+								},
 							},
 						},
 					},
@@ -244,8 +253,10 @@ func TestGet(t *testing.T) {
 			id:   "lt-notfound",
 			mockSetup: func(m *MockECSClient) {
 				response := &ecs.DescribeLaunchTemplatesResponse{
-					LaunchTemplateSets: ecs.LaunchTemplateSets{
-						LaunchTemplateSet: []ecs.LaunchTemplateSet{},
+					Body: &ecs.DescribeLaunchTemplatesResponseBody{
+						LaunchTemplateSets: &ecs.DescribeLaunchTemplatesResponseBodyLaunchTemplateSets{
+							LaunchTemplateSet: []*ecs.DescribeLaunchTemplatesResponseBodyLaunchTemplateSetsLaunchTemplateSet{},
+						},
 					},
 				}
 				m.On("DescribeLaunchTemplates", mock.Anything, mock.Anything).Return(response, nil)
@@ -343,13 +354,18 @@ func TestResolve(t *testing.T) {
 				},
 			},
 			mockSetup: func(m *MockECSClient) {
+				existingID := "lt-existing"
+				existingName := "existing-template"
+				var version int64 = 1
 				response := &ecs.DescribeLaunchTemplatesResponse{
-					LaunchTemplateSets: ecs.LaunchTemplateSets{
-						LaunchTemplateSet: []ecs.LaunchTemplateSet{
-							{
-								LaunchTemplateId:     "lt-existing",
-								LaunchTemplateName:   "existing-template",
-								DefaultVersionNumber: 1,
+					Body: &ecs.DescribeLaunchTemplatesResponseBody{
+						LaunchTemplateSets: &ecs.DescribeLaunchTemplatesResponseBodyLaunchTemplateSets{
+							LaunchTemplateSet: []*ecs.DescribeLaunchTemplatesResponseBodyLaunchTemplateSetsLaunchTemplateSet{
+								{
+									LaunchTemplateId:     &existingID,
+									LaunchTemplateName:   &existingName,
+									DefaultVersionNumber: &version,
+								},
 							},
 						},
 					},
@@ -367,9 +383,11 @@ func TestResolve(t *testing.T) {
 				},
 			},
 			mockSetup: func(m *MockECSClient) {
+				ltID := "lt-new"
 				response := &ecs.CreateLaunchTemplateResponse{
-					LaunchTemplateId:            "lt-new",
-					LaunchTemplateVersionNumber: 1,
+					Body: &ecs.CreateLaunchTemplateResponseBody{
+						LaunchTemplateId: &ltID,
+					},
 				}
 				m.On("CreateLaunchTemplate", mock.Anything, mock.Anything).Return(response, nil)
 			},
@@ -417,12 +435,14 @@ func TestCreateWithSecurityGroupsAndVSwitches(t *testing.T) {
 				},
 			},
 			mockSetup: func(m *MockECSClient) {
+				ltID := "lt-sg-test"
 				response := &ecs.CreateLaunchTemplateResponse{
-					LaunchTemplateId:            "lt-sg-test",
-					LaunchTemplateVersionNumber: 1,
+					Body: &ecs.CreateLaunchTemplateResponseBody{
+						LaunchTemplateId: &ltID,
+					},
 				}
 				m.On("CreateLaunchTemplate", mock.Anything, mock.MatchedBy(func(req *ecs.CreateLaunchTemplateRequest) bool {
-					return req.SecurityGroupIds != nil && len(*req.SecurityGroupIds) == 3
+					return req.SecurityGroupIds != nil && len(req.SecurityGroupIds) == 3
 				})).Return(response, nil)
 			},
 		},
@@ -440,12 +460,14 @@ func TestCreateWithSecurityGroupsAndVSwitches(t *testing.T) {
 				},
 			},
 			mockSetup: func(m *MockECSClient) {
+				ltID := "lt-vsw-test"
 				response := &ecs.CreateLaunchTemplateResponse{
-					LaunchTemplateId:            "lt-vsw-test",
-					LaunchTemplateVersionNumber: 1,
+					Body: &ecs.CreateLaunchTemplateResponseBody{
+						LaunchTemplateId: &ltID,
+					},
 				}
 				m.On("CreateLaunchTemplate", mock.Anything, mock.MatchedBy(func(req *ecs.CreateLaunchTemplateRequest) bool {
-					return req.VSwitchId == "vsw-123"
+					return req.VSwitchId != nil && *req.VSwitchId == "vsw-123"
 				})).Return(response, nil)
 			},
 		},

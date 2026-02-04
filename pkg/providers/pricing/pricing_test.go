@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -76,7 +76,7 @@ func (m *MockECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesRe
 	panic("implement me")
 }
 
-func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.Image, error) {
+func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error) {
 	//TODO implement me
 	panic("implement me")
 }

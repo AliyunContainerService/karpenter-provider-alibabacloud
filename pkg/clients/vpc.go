@@ -19,7 +19,7 @@ package clients
 import (
 	"context"
 
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/vpc"
+	vpc "github.com/alibabacloud-go/vpc-20160428/v7/client"
 )
 
 // VPCClient is an interface for VPC client operations
@@ -43,25 +43,31 @@ func NewDefaultVPCClient(client *vpc.Client, region string) *DefaultVPCClient {
 
 // DescribeVSwitches implements VPCClient interface
 func (c *DefaultVPCClient) DescribeVSwitches(ctx context.Context, vSwitchID string, tags map[string]string) (*vpc.DescribeVSwitchesResponse, error) {
-	request := vpc.CreateDescribeVSwitchesRequest()
-	request.Scheme = "https"
-	request.RegionId = c.region
+	request := &vpc.DescribeVSwitchesRequest{}
+	request.RegionId = &c.region
 
 	// Set VSwitch ID if provided
 	if vSwitchID != "" {
-		request.VSwitchId = vSwitchID
+		request.VSwitchId = &vSwitchID
 	}
 
 	// Set tag filters
 	if len(tags) > 0 {
-		var vpcTags []vpc.DescribeVSwitchesTag
-		for key, value := range tags {
-			vpcTags = append(vpcTags, vpc.DescribeVSwitchesTag{
-				Key:   key,
-				Value: value,
+		var vpcTags []*vpc.DescribeVSwitchesRequestTag
+		for k, v := range tags {
+			// Skip empty keys or values
+			if k == "" || v == "" {
+				continue
+			}
+			// Create local copies to avoid pointer reuse
+			key := k
+			value := v
+			vpcTags = append(vpcTags, &vpc.DescribeVSwitchesRequestTag{
+				Key:   &key,
+				Value: &value,
 			})
 		}
-		request.Tag = &vpcTags
+		request.Tag = vpcTags
 	}
 
 	response, err := c.client.DescribeVSwitches(request)

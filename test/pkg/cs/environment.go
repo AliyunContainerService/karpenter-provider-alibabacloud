@@ -61,7 +61,7 @@ func init() {
 
 var persistedSettings []corev1.EnvVar
 
-var DefaultImageID = "aliyun_4_x64_20G_container_optimized_alibase_20251106.vhd"
+var DefaultImageID = "aliyun_3_x64_20G_alibase_20260122.vhd"
 
 var (
 	CleanableObjects = []client.Object{

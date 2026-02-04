@@ -21,8 +21,7 @@ import (
 	"fmt"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	environmentcs "github.com/AliyunContainerService/karpenter-provider-alibabacloud/test/pkg/cs"
-	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"strings"
@@ -78,12 +77,14 @@ var _ = Describe("GarbageCollection", func() {
 
 		strs := strings.Split(node.Spec.ProviderID, ".")
 		// Create delete instance request
-		request := ecs.CreateDeleteInstancesRequest()
-		request.RegionId = strs[0]
-		// Set instance IDs correctly for DeleteInstances
-		request.InstanceId = &[]string{strs[1]}
-		request.Force = requests.NewBoolean(true)                 // Force deletion
-		request.TerminateSubscription = requests.NewBoolean(true) // Terminate associated subscription resources
+		request := &ecs.DeleteInstancesRequest{
+			RegionId:   &strs[0],
+			InstanceId: []*string{&strs[1]},
+		}
+		force := true
+		request.Force = &force
+		terminateSubscription := true
+		request.TerminateSubscription = &terminateSubscription
 		_, err := env.ECSAPI.DeleteInstances(context.Background(), request)
 		Expect(err).ToNot(HaveOccurred())
 		env.EventuallyExpectNotFound(node)

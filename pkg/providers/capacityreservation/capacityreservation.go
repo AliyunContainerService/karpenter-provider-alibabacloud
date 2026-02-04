@@ -85,14 +85,14 @@ func (p *Provider) getByID(ctx context.Context, id string) (v1alpha1.CapacityRes
 		return v1alpha1.CapacityReservation{}, fmt.Errorf("failed to describe capacity reservation %s: %w", id, err)
 	}
 
-	if len(response.CapacityReservationSet.CapacityReservationItem) == 0 {
+	if len(response.Body.CapacityReservationSet.CapacityReservationItem) == 0 {
 		return v1alpha1.CapacityReservation{}, fmt.Errorf("capacity reservation %s not found", id)
 	}
 
-	cr := response.CapacityReservationSet.CapacityReservationItem[0]
+	cr := response.Body.CapacityReservationSet.CapacityReservationItem[0]
 	return v1alpha1.CapacityReservation{
-		ID:   cr.PrivatePoolOptionsId,
-		Name: cr.PrivatePoolOptionsName,
+		ID:   *cr.PrivatePoolOptionsId,
+		Name: *cr.PrivatePoolOptionsName,
 	}, nil
 }
 
@@ -104,10 +104,10 @@ func (p *Provider) getByTags(ctx context.Context, tags map[string]string) ([]v1a
 	}
 
 	var capacityReservations []v1alpha1.CapacityReservation
-	for _, cr := range response.CapacityReservationSet.CapacityReservationItem {
+	for _, cr := range response.Body.CapacityReservationSet.CapacityReservationItem {
 		capacityReservations = append(capacityReservations, v1alpha1.CapacityReservation{
-			ID:   cr.PrivatePoolOptionsId,
-			Name: cr.PrivatePoolOptionsName,
+			ID:   *cr.PrivatePoolOptionsId,
+			Name: *cr.PrivatePoolOptionsName,
 		})
 	}
 

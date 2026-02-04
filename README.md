@@ -56,6 +56,96 @@ graph TD
 
 请参考 [快速开始指南](QUICK_START.md) 了解如何部署和使用 Alibaba Cloud Karpenter Provider。
 
+## RRSA 使用指导
+
+RRSA (RAM Roles for Service Accounts) 是阿里云提供的一种安全认证方式，允许 Pod 通过 ServiceAccount 获取临时凭证访问云服务，无需使用长期 AK/SK。
+
+如需使用 RRSA，请参考官方文档：
+- [中文文档](https://help.aliyun.com/zh/ack/ack-managed-and-ack-dedicated/user-guide/use-rrsa-to-authorize-pods-to-access-different-cloud-services)
+- [English Document](https://www.alibabacloud.com/help/en/cs/user-guide/use-rrsa-to-configure-ram-permissions-for-serviceaccount-to-implement)
+
+### 配置步骤
+
+#### 1. 在集群中启用 RRSA 功能
+
+首先需要在 ACK 集群中启用 RRSA 功能，请参考上述官方文档进行操作。
+
+#### 2. 创建 OIDC 身份提供商的 RAM 角色
+
+创建一个 RAM 角色，并配置 OIDC 身份提供商作为信任实体。
+
+#### 3. 给 RAM 角色授权策略
+
+为 RAM 角色添加以下自定义权限策略：
+
+```json
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "cs:DescribeClusterAttachScripts",
+        "cs:GetClusterAddonInstance",
+        "cs:DescribeClusterDetail"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecs:RunInstances",
+        "ecs:DescribeInstances",
+        "ecs:DeleteInstances",
+        "ecs:TagResources",
+        "ecs:CreateLaunchTemplate",
+        "ecs:DescribeLaunchTemplates",
+        "ecs:DeleteLaunchTemplate",
+        "ecs:DescribeInstanceTypeResource",
+        "ecs:DescribeImages",
+        "ecs:DescribeSecurityGroups",
+        "ecs:DescribeCapacityReservations",
+        "ecs:DescribePrice",
+        "ecs:DescribeInstanceTypes",
+        "ecs:DescribeZones"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "vpc:DescribeVSwitches",
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "ram:GetRole",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+#### 4. 配置 Helm Chart Values
+
+在部署 Karpenter 时，需要在 Helm chart 的 values.yaml 中配置 RRSA 相关的环境变量：
+
+```yaml
+controller:
+  env:
+    # RRSA 配置
+    - name: ALIBABA_CLOUD_ROLE_ARN
+      value: "acs:ram::<your-account-id>:role/<your-role-name>"
+    - name: ALIBABA_CLOUD_OIDC_PROVIDER_ARN
+      value: "acs:ram::<your-account-id>:oidc-provider/<your-oidc-provider-id>"
+    - name: ALIBABA_CLOUD_OIDC_TOKEN_FILE
+      value: "/var/run/secrets/ack.alibabacloud.com/rrsa-tokens/token"
+```
+
+其中：
+- `ALIBABA_CLOUD_ROLE_ARN`: RAM 角色的 ARN，格式为 `acs:ram::<账号ID>:role/<角色名称>`
+- `ALIBABA_CLOUD_OIDC_PROVIDER_ARN`: OIDC 身份提供商的 ARN，格式为 `acs:ram::<账号ID>:oidc-provider/<集群ID>`
+- `ALIBABA_CLOUD_OIDC_TOKEN_FILE`: OIDC Token 文件路径，使用默认值即可
+
 ## 配置示例
 
 ### ECSNodeClass 配置

@@ -6,9 +6,15 @@ toolchain go1.24.9
 
 require (
 	github.com/alibabacloud-go/cs-20151215/v5 v5.9.8
-	github.com/alibabacloud-go/darabonba-openapi/v2 v2.1.11
-	github.com/alibabacloud-go/tea v1.3.11
+	github.com/alibabacloud-go/darabonba-openapi v0.1.18
+	github.com/alibabacloud-go/darabonba-openapi/v2 v2.1.14
+	github.com/alibabacloud-go/ecs-20140526/v2 v2.1.3
+	github.com/alibabacloud-go/ecs-20140526/v5 v5.1.0
+	github.com/alibabacloud-go/ram-20150501/v2 v2.2.0
+	github.com/alibabacloud-go/tea v1.3.13
+	github.com/alibabacloud-go/vpc-20160428/v7 v7.0.0
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.107
+	github.com/aliyun/credentials-go v1.4.5
 	github.com/aws/karpenter-provider-aws v1.8.2
 	github.com/awslabs/operatorpkg v0.0.0-20250909182303-e8e550b6f339
 	github.com/onsi/ginkgo/v2 v2.25.3
@@ -20,6 +26,7 @@ require (
 	k8s.io/api v0.35.0-alpha.0
 	k8s.io/apimachinery v0.35.0-alpha.0
 	k8s.io/client-go v0.35.0-alpha.0
+	k8s.io/klog/v2 v2.130.1
 	k8s.io/utils v0.0.0-20250604170112-4c0f3b243397
 	sigs.k8s.io/controller-runtime v0.22.1
 	sigs.k8s.io/karpenter v1.8.0
@@ -30,9 +37,11 @@ require (
 	github.com/Pallinder/go-randomdata v1.2.0 // indirect
 	github.com/alibabacloud-go/alibabacloud-gateway-spi v0.0.5 // indirect
 	github.com/alibabacloud-go/debug v1.0.1 // indirect
-	github.com/alibabacloud-go/tea-utils v1.3.9 // indirect
+	github.com/alibabacloud-go/endpoint-util v1.1.0 // indirect
+	github.com/alibabacloud-go/openapi-util v0.1.1 // indirect
+	github.com/alibabacloud-go/tea-utils v1.4.5 // indirect
 	github.com/alibabacloud-go/tea-utils/v2 v2.0.7 // indirect
-	github.com/aliyun/credentials-go v1.4.5 // indirect
+	github.com/alibabacloud-go/tea-xml v1.1.3 // indirect
 	github.com/avast/retry-go v3.0.0+incompatible // indirect
 	github.com/aws/amazon-vpc-resource-controller-k8s v1.7.13 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.274.0 // indirect
@@ -107,7 +116,6 @@ require (
 	k8s.io/component-base v0.35.0-alpha.0 // indirect
 	k8s.io/component-helpers v0.34.1 // indirect
 	k8s.io/csi-translation-lib v0.34.1 // indirect
-	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20250710124328-f3f2b991d03b // indirect
 	sigs.k8s.io/json v0.0.0-20241014173422-cfa47c3a1cc8 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect

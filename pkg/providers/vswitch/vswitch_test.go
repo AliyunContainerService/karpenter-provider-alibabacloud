@@ -22,7 +22,7 @@ import (
 	"testing"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/vpc"
+	vpc "github.com/alibabacloud-go/vpc-20160428/v7/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -61,13 +61,18 @@ func TestResolve(t *testing.T) {
 				},
 			},
 			mockSetup: func(m *MockVPCClient) {
+				vswID := "vsw-12345"
+				zoneID := "cn-hangzhou-h"
+				availIP := int64(100)
 				response := &vpc.DescribeVSwitchesResponse{
-					VSwitches: vpc.VSwitches{
-						VSwitch: []vpc.VSwitch{
-							{
-								VSwitchId:               "vsw-12345",
-								ZoneId:                  "cn-hangzhou-h",
-								AvailableIpAddressCount: 100,
+					Body: &vpc.DescribeVSwitchesResponseBody{
+						VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+							VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{
+								{
+									VSwitchId:               &vswID,
+									ZoneId:                  &zoneID,
+									AvailableIpAddressCount: &availIP,
+								},
 							},
 						},
 					},
@@ -93,16 +98,22 @@ func TestResolve(t *testing.T) {
 				},
 			},
 			mockSetup: func(m *MockVPCClient) {
+				vswID1 := "vsw-tag-1"
+				zoneID1 := "cn-hangzhou-h"
+				vswID2 := "vsw-tag-2"
+				zoneID2 := "cn-hangzhou-i"
 				response := &vpc.DescribeVSwitchesResponse{
-					VSwitches: vpc.VSwitches{
-						VSwitch: []vpc.VSwitch{
-							{
-								VSwitchId: "vsw-tag-1",
-								ZoneId:    "cn-hangzhou-h",
-							},
-							{
-								VSwitchId: "vsw-tag-2",
-								ZoneId:    "cn-hangzhou-i",
+					Body: &vpc.DescribeVSwitchesResponseBody{
+						VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+							VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{
+								{
+									VSwitchId: &vswID1,
+									ZoneId:    &zoneID1,
+								},
+								{
+									VSwitchId: &vswID2,
+									ZoneId:    &zoneID2,
+								},
 							},
 						},
 					},
@@ -168,13 +179,18 @@ func TestGetByID(t *testing.T) {
 			name: "successful retrieval",
 			id:   "vsw-12345",
 			mockSetup: func(m *MockVPCClient) {
+				vswID := "vsw-12345"
+				zoneID := "cn-hangzhou-h"
+				availIP := int64(100)
 				response := &vpc.DescribeVSwitchesResponse{
-					VSwitches: vpc.VSwitches{
-						VSwitch: []vpc.VSwitch{
-							{
-								VSwitchId:               "vsw-12345",
-								ZoneId:                  "cn-hangzhou-h",
-								AvailableIpAddressCount: 100,
+					Body: &vpc.DescribeVSwitchesResponseBody{
+						VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+							VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{
+								{
+									VSwitchId:               &vswID,
+									ZoneId:                  &zoneID,
+									AvailableIpAddressCount: &availIP,
+								},
 							},
 						},
 					},
@@ -230,16 +246,22 @@ func TestGetByTags(t *testing.T) {
 			name: "successful retrieval with multiple results",
 			tags: map[string]string{"env": "prod"},
 			mockSetup: func(m *MockVPCClient) {
+				vswID1 := "vsw-1"
+				zoneID1 := "cn-hangzhou-h"
+				vswID2 := "vsw-2"
+				zoneID2 := "cn-hangzhou-i"
 				response := &vpc.DescribeVSwitchesResponse{
-					VSwitches: vpc.VSwitches{
-						VSwitch: []vpc.VSwitch{
-							{
-								VSwitchId: "vsw-1",
-								ZoneId:    "cn-hangzhou-h",
-							},
-							{
-								VSwitchId: "vsw-2",
-								ZoneId:    "cn-hangzhou-i",
+					Body: &vpc.DescribeVSwitchesResponseBody{
+						VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+							VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{
+								{
+									VSwitchId: &vswID1,
+									ZoneId:    &zoneID1,
+								},
+								{
+									VSwitchId: &vswID2,
+									ZoneId:    &zoneID2,
+								},
 							},
 						},
 					},
