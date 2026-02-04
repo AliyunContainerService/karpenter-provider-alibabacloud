@@ -20,11 +20,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/responses"
 	"testing"
 	"time"
 
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -60,7 +60,7 @@ func (m *MockECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesRe
 	panic("implement me")
 }
 
-func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.Image, error) {
+func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -112,6 +112,14 @@ func (m *MockECSClient) TagResources(ctx context.Context, request *ecs.TagResour
 	return args.Get(0).(*ecs.TagResourcesResponse), args.Error(1)
 }
 
+func stringPtr(s string) *string {
+	return &s
+}
+
+func int32Ptr(i int32) *int32 {
+	return &i
+}
+
 func TestCreate(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -135,9 +143,12 @@ func TestCreate(t *testing.T) {
 				},
 			},
 			mockSetup: func(m *MockECSClient) {
+				instanceID := "i-123456"
 				response := &ecs.RunInstancesResponse{
-					InstanceIdSets: ecs.InstanceIdSets{
-						InstanceIdSet: []string{"i-123456"},
+					Body: &ecs.RunInstancesResponseBody{
+						InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
+							InstanceIdSet: []*string{&instanceID},
+						},
 					},
 				}
 				m.On("RunInstances", mock.Anything, mock.Anything).Return(response, nil)
@@ -188,19 +199,27 @@ func TestList(t *testing.T) {
 			name: "successful list",
 			tags: map[string]string{"env": "test"},
 			mockSetup: func(m *MockECSClient) {
+				totalCount := int32(1)
 				response := &ecs.DescribeInstancesResponse{
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: []ecs.Instance{
-							{
-								InstanceId:         "i-123",
-								RegionId:           "cn-hangzhou",
-								ZoneId:             "cn-hangzhou-h",
-								InstanceType:       "ecs.g6.large",
-								ImageId:            "img-123",
-								Cpu:                2,
-								Memory:             8192,
-								Status:             "Running",
-								InstanceChargeType: "PostPaid",
+					Body: &ecs.DescribeInstancesResponseBody{
+						TotalCount: &totalCount,
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{
+								{
+									InstanceId:         stringPtr("i-123"),
+									RegionId:           stringPtr("cn-hangzhou"),
+									ZoneId:             stringPtr("cn-hangzhou-h"),
+									InstanceType:       stringPtr("ecs.g6.large"),
+									ImageId:            stringPtr("img-123"),
+									Cpu:                int32Ptr(2),
+									Memory:             int32Ptr(8192),
+									Status:             stringPtr("Running"),
+									InstanceChargeType: stringPtr("PostPaid"),
+									CreationTime:       stringPtr("2024-01-01T00:00:00Z"),
+									Tags: &ecs.DescribeInstancesResponseBodyInstancesInstanceTags{
+										Tag: []*ecs.DescribeInstancesResponseBodyInstancesInstanceTagsTag{},
+									},
+								},
 							},
 						},
 					},
@@ -252,22 +271,27 @@ func TestListWithPagination(t *testing.T) {
 			tags: map[string]string{"env": "test"},
 			mockSetup: func(m *MockECSClient) {
 				response := &ecs.DescribeInstancesResponse{
-					BaseResponse: &responses.BaseResponse{},
-					TotalCount:   1,
-					PageNumber:   1,
-					PageSize:     100,
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: []ecs.Instance{
-							{
-								InstanceId:         "i-123",
-								RegionId:           "cn-hangzhou",
-								ZoneId:             "cn-hangzhou-h",
-								InstanceType:       "ecs.g6.large",
-								ImageId:            "img-123",
-								Cpu:                2,
-								Memory:             8192,
-								Status:             "Running",
-								InstanceChargeType: "PostPaid",
+					Body: &ecs.DescribeInstancesResponseBody{
+						TotalCount: int32Ptr(1),
+						PageNumber: int32Ptr(1),
+						PageSize:   int32Ptr(100),
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{
+								{
+									InstanceId:         stringPtr("i-123"),
+									RegionId:           stringPtr("cn-hangzhou"),
+									ZoneId:             stringPtr("cn-hangzhou-h"),
+									InstanceType:       stringPtr("ecs.g6.large"),
+									ImageId:            stringPtr("img-123"),
+									Cpu:                int32Ptr(2),
+									Memory:             int32Ptr(8192),
+									Status:             stringPtr("Running"),
+									InstanceChargeType: stringPtr("PostPaid"),
+									CreationTime:       stringPtr("2024-01-01T00:00:00Z"),
+									Tags: &ecs.DescribeInstancesResponseBodyInstancesInstanceTags{
+										Tag: []*ecs.DescribeInstancesResponseBodyInstancesInstanceTagsTag{},
+									},
+								},
 							},
 						},
 					},
@@ -282,51 +306,53 @@ func TestListWithPagination(t *testing.T) {
 			mockSetup: func(m *MockECSClient) {
 				// First page
 				firstPage := &ecs.DescribeInstancesResponse{
-					BaseResponse: &responses.BaseResponse{},
-					TotalCount:   150, // Total 150 instances
-					PageNumber:   1,
-					PageSize:     100,
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: make([]ecs.Instance, 100), // First 100 instances
+					Body: &ecs.DescribeInstancesResponseBody{
+						TotalCount: int32Ptr(150), // Total 150 instances
+						PageNumber: int32Ptr(1),
+						PageSize:   int32Ptr(100),
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: make([]*ecs.DescribeInstancesResponseBodyInstancesInstance, 100), // First 100 instances
+						},
 					},
 				}
 				// Initialize first 100 instances
 				for i := 0; i < 100; i++ {
-					firstPage.Instances.Instance[i] = ecs.Instance{
-						InstanceId:         fmt.Sprintf("i-%d", i),
-						RegionId:           "cn-hangzhou",
-						ZoneId:             "cn-hangzhou-h",
-						InstanceType:       "ecs.g6.large",
-						ImageId:            "img-123",
-						Cpu:                2,
-						Memory:             8192,
-						Status:             "Running",
-						InstanceChargeType: "PostPaid",
+					firstPage.Body.Instances.Instance[i] = &ecs.DescribeInstancesResponseBodyInstancesInstance{
+						InstanceId:         stringPtr(fmt.Sprintf("i-%d", i)),
+						RegionId:           stringPtr("cn-hangzhou"),
+						ZoneId:             stringPtr("cn-hangzhou-h"),
+						InstanceType:       stringPtr("ecs.g6.large"),
+						ImageId:            stringPtr("img-123"),
+						Cpu:                int32Ptr(2),
+						Memory:             int32Ptr(8192),
+						Status:             stringPtr("Running"),
+						InstanceChargeType: stringPtr("PostPaid"),
 					}
 				}
 
 				// Second page
 				secondPage := &ecs.DescribeInstancesResponse{
-					BaseResponse: &responses.BaseResponse{},
-					TotalCount:   150,
-					PageNumber:   2,
-					PageSize:     100,
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: make([]ecs.Instance, 50), // Remaining 50 instances
+					Body: &ecs.DescribeInstancesResponseBody{
+						TotalCount: int32Ptr(150),
+						PageNumber: int32Ptr(2),
+						PageSize:   int32Ptr(100),
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: make([]*ecs.DescribeInstancesResponseBodyInstancesInstance, 50), // Remaining 50 instances
+						},
 					},
 				}
 				// Initialize remaining 50 instances
 				for i := 0; i < 50; i++ {
-					secondPage.Instances.Instance[i] = ecs.Instance{
-						InstanceId:         fmt.Sprintf("i-%d", i+100),
-						RegionId:           "cn-hangzhou",
-						ZoneId:             "cn-hangzhou-h",
-						InstanceType:       "ecs.g6.large",
-						ImageId:            "img-123",
-						Cpu:                2,
-						Memory:             8192,
-						Status:             "Running",
-						InstanceChargeType: "PostPaid",
+					secondPage.Body.Instances.Instance[i] = &ecs.DescribeInstancesResponseBodyInstancesInstance{
+						InstanceId:         stringPtr(fmt.Sprintf("i-%d", i+100)),
+						RegionId:           stringPtr("cn-hangzhou"),
+						ZoneId:             stringPtr("cn-hangzhou-h"),
+						InstanceType:       stringPtr("ecs.g6.large"),
+						ImageId:            stringPtr("img-123"),
+						Cpu:                int32Ptr(2),
+						Memory:             int32Ptr(8192),
+						Status:             stringPtr("Running"),
+						InstanceChargeType: stringPtr("PostPaid"),
 					}
 				}
 
@@ -350,26 +376,27 @@ func TestListWithPagination(t *testing.T) {
 			mockSetup: func(m *MockECSClient) {
 				// First page succeeds
 				firstPage := &ecs.DescribeInstancesResponse{
-					BaseResponse: &responses.BaseResponse{},
-					TotalCount:   150,
-					PageNumber:   1,
-					PageSize:     100,
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: make([]ecs.Instance, 100),
+					Body: &ecs.DescribeInstancesResponseBody{
+						TotalCount: int32Ptr(150),
+						PageNumber: int32Ptr(1),
+						PageSize:   int32Ptr(100),
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: make([]*ecs.DescribeInstancesResponseBodyInstancesInstance, 100),
+						},
 					},
 				}
 				// Initialize first 100 instances
 				for i := 0; i < 100; i++ {
-					firstPage.Instances.Instance[i] = ecs.Instance{
-						InstanceId:         fmt.Sprintf("i-%d", i),
-						RegionId:           "cn-hangzhou",
-						ZoneId:             "cn-hangzhou-h",
-						InstanceType:       "ecs.g6.large",
-						ImageId:            "img-123",
-						Cpu:                2,
-						Memory:             8192,
-						Status:             "Running",
-						InstanceChargeType: "PostPaid",
+					firstPage.Body.Instances.Instance[i] = &ecs.DescribeInstancesResponseBodyInstancesInstance{
+						InstanceId:         stringPtr(fmt.Sprintf("i-%d", i)),
+						RegionId:           stringPtr("cn-hangzhou"),
+						ZoneId:             stringPtr("cn-hangzhou-h"),
+						InstanceType:       stringPtr("ecs.g6.large"),
+						ImageId:            stringPtr("img-123"),
+						Cpu:                int32Ptr(2),
+						Memory:             int32Ptr(8192),
+						Status:             stringPtr("Running"),
+						InstanceChargeType: stringPtr("PostPaid"),
 					}
 				}
 
@@ -414,17 +441,19 @@ func TestDelete(t *testing.T) {
 			mockSetup: func(m *MockECSClient) {
 				// Mock Get call
 				getResponse := &ecs.DescribeInstancesResponse{
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: []ecs.Instance{
-							{
-								InstanceId:   "i-123",
-								RegionId:     "cn-hangzhou",
-								ZoneId:       "cn-hangzhou-h",
-								InstanceType: "ecs.g6.large",
-								ImageId:      "img-123",
-								Cpu:          2,
-								Memory:       8192,
-								Status:       "Running",
+					Body: &ecs.DescribeInstancesResponseBody{
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{
+								{
+									InstanceId:   stringPtr("i-123"),
+									RegionId:     stringPtr("cn-hangzhou"),
+									ZoneId:       stringPtr("cn-hangzhou-h"),
+									InstanceType: stringPtr("ecs.g6.large"),
+									ImageId:      stringPtr("img-123"),
+									Cpu:          int32Ptr(2),
+									Memory:       int32Ptr(8192),
+									Status:       stringPtr("Running"),
+								},
 							},
 						},
 					},
@@ -433,7 +462,9 @@ func TestDelete(t *testing.T) {
 
 				// Mock Delete call
 				deleteResponse := &ecs.DeleteInstancesResponse{
-					RequestId: "test-request-id",
+					Body: &ecs.DeleteInstancesResponseBody{
+						RequestId: stringPtr("test-request-id"),
+					},
 				}
 				m.On("DeleteInstances", mock.Anything, mock.Anything).Return(deleteResponse, nil)
 			},
@@ -443,8 +474,10 @@ func TestDelete(t *testing.T) {
 			instanceID: "i-notfound",
 			mockSetup: func(m *MockECSClient) {
 				getResponse := &ecs.DescribeInstancesResponse{
-					Instances: ecs.InstancesInDescribeInstances{
-						Instance: []ecs.Instance{},
+					Body: &ecs.DescribeInstancesResponseBody{
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
+						},
 					},
 				}
 				m.On("DescribeInstances", mock.Anything, mock.Anything).Return(getResponse, nil)
@@ -554,12 +587,12 @@ func TestSetCacheTTL(t *testing.T) {
 }
 
 func TestConvertTags(t *testing.T) {
-	ecsTags := []ecs.Tag{
-		{TagKey: "env", TagValue: "prod"},
-		{TagKey: "app", TagValue: "test"},
+	ecsTags := []*ecs.DescribeInstancesResponseBodyInstancesInstanceTagsTag{
+		{TagKey: stringPtr("env"), TagValue: stringPtr("prod")},
+		{TagKey: stringPtr("app"), TagValue: stringPtr("test")},
 	}
 
-	result := convertTags(ecsTags)
+	result := convertTags(&ecs.DescribeInstancesResponseBodyInstancesInstanceTags{Tag: ecsTags})
 
 	assert.Len(t, result, 2)
 	assert.Equal(t, "prod", result["env"])

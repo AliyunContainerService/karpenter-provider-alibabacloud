@@ -60,19 +60,27 @@ func (p *Provider) SetCacheTTL(ttl time.Duration) {
 // getCachedValue retrieves a value from cache if it exists and is not expired
 func (p *Provider) getCachedValue(key string) (interface{}, bool) {
 	p.cacheMu.RLock()
-	defer p.cacheMu.RUnlock()
-
 	entry, exists := p.cache[key]
 	if !exists {
+		p.cacheMu.RUnlock()
 		return nil, false
 	}
 
 	// Check if cache entry is expired
 	if time.Now().After(entry.ExpiresAt) {
+		p.cacheMu.RUnlock()
+		p.cacheMu.Lock()
+		// Double-check to prevent concurrent deletions
+		if entry2, exists := p.cache[key]; exists && time.Now().After(entry2.ExpiresAt) {
+			delete(p.cache, key)
+		}
+		p.cacheMu.Unlock()
 		return nil, false
 	}
 
-	return entry.Value, true
+	value := entry.Value
+	p.cacheMu.RUnlock()
+	return value, true
 }
 
 // setCachedValue stores a value in cache with expiration
@@ -139,16 +147,16 @@ func (p *Provider) getByTags(ctx context.Context, tags map[string]string) ([]v1a
 
 	// Execute request
 	response, err := p.ecsClient.DescribeSecurityGroups(ctx, tags)
-	if err != nil || response == nil || len(response.SecurityGroups.SecurityGroup) == 0 {
+	if err != nil || response == nil || len(response.Body.SecurityGroups.SecurityGroup) == 0 {
 		logger.Error(err, "failed to describe security groups")
 		return nil, fmt.Errorf("failed to describe security groups: %w", err)
 	}
 
 	// Convert to our SecurityGroup type
 	var securityGroups []v1alpha1.SecurityGroup
-	for _, sg := range response.SecurityGroups.SecurityGroup {
+	for _, sg := range response.Body.SecurityGroups.SecurityGroup {
 		securityGroups = append(securityGroups, v1alpha1.SecurityGroup{
-			ID: sg.SecurityGroupId,
+			ID: *sg.SecurityGroupId,
 		})
 	}
 

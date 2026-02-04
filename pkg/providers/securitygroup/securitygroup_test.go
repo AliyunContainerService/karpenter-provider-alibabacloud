@@ -22,7 +22,7 @@ import (
 	"testing"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -77,7 +77,7 @@ func (m *MockECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesRe
 	panic("implement me")
 }
 
-func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.Image, error) {
+func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -136,14 +136,18 @@ func TestResolve(t *testing.T) {
 				},
 			},
 			mockSetup: func(m *MockECSClient) {
+				sgID1 := "sg-tag-1"
+				sgID2 := "sg-tag-2"
 				response := &ecs.DescribeSecurityGroupsResponse{
-					SecurityGroups: ecs.SecurityGroups{
-						SecurityGroup: []ecs.SecurityGroup{
-							{
-								SecurityGroupId: "sg-tag-1",
-							},
-							{
-								SecurityGroupId: "sg-tag-2",
+					Body: &ecs.DescribeSecurityGroupsResponseBody{
+						SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+							SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{
+								{
+									SecurityGroupId: &sgID1,
+								},
+								{
+									SecurityGroupId: &sgID2,
+								},
 							},
 						},
 					},
@@ -186,11 +190,14 @@ func TestResolve(t *testing.T) {
 				},
 			},
 			mockSetup: func(m *MockECSClient) {
+				sgID := "sg-tag-1"
 				response := &ecs.DescribeSecurityGroupsResponse{
-					SecurityGroups: ecs.SecurityGroups{
-						SecurityGroup: []ecs.SecurityGroup{
-							{
-								SecurityGroupId: "sg-tag-1",
+					Body: &ecs.DescribeSecurityGroupsResponseBody{
+						SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+							SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{
+								{
+									SecurityGroupId: &sgID,
+								},
 							},
 						},
 					},
@@ -244,14 +251,18 @@ func TestGetByTags(t *testing.T) {
 			name: "successful retrieval with multiple results",
 			tags: map[string]string{"env": "prod"},
 			mockSetup: func(m *MockECSClient) {
+				sgID1 := "sg-1"
+				sgID2 := "sg-2"
 				response := &ecs.DescribeSecurityGroupsResponse{
-					SecurityGroups: ecs.SecurityGroups{
-						SecurityGroup: []ecs.SecurityGroup{
-							{
-								SecurityGroupId: "sg-1",
-							},
-							{
-								SecurityGroupId: "sg-2",
+					Body: &ecs.DescribeSecurityGroupsResponseBody{
+						SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+							SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{
+								{
+									SecurityGroupId: &sgID1,
+								},
+								{
+									SecurityGroupId: &sgID2,
+								},
 							},
 						},
 					},

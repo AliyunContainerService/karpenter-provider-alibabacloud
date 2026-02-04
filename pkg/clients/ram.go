@@ -19,7 +19,7 @@ package clients
 import (
 	"context"
 
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ram"
+	ram "github.com/alibabacloud-go/ram-20150501/v2/client"
 )
 
 // RAMClient is an interface for RAM client operations
@@ -43,8 +43,8 @@ func NewDefaultRAMClient(client *ram.Client, region string) *DefaultRAMClient {
 
 // GetRole implements RAMClient interface
 func (c *DefaultRAMClient) GetRole(ctx context.Context, roleName string) (*ram.GetRoleResponse, error) {
-	request := ram.CreateGetRoleRequest()
-	request.RoleName = roleName
+	request := &ram.GetRoleRequest{}
+	request.RoleName = &roleName
 
 	return c.client.GetRole(request)
 }

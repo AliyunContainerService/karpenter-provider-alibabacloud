@@ -60,19 +60,28 @@ func (p *Provider) SetCacheTTL(ttl time.Duration) {
 // getCachedValue retrieves a value from cache if it exists and is not expired
 func (p *Provider) getCachedValue(key string) (interface{}, bool) {
 	p.cacheMu.RLock()
-	defer p.cacheMu.RUnlock()
-
 	entry, exists := p.cache[key]
 	if !exists {
+		p.cacheMu.RUnlock()
 		return nil, false
 	}
 
 	// Check if cache entry is expired
 	if time.Now().After(entry.ExpiresAt) {
+		p.cacheMu.RUnlock()
+		// Remove expired entry with write lock
+		p.cacheMu.Lock()
+		// Double-check to prevent concurrent deletions
+		if entry2, exists := p.cache[key]; exists && time.Now().After(entry2.ExpiresAt) {
+			delete(p.cache, key)
+		}
+		p.cacheMu.Unlock()
 		return nil, false
 	}
 
-	return entry.Value, true
+	value := entry.Value
+	p.cacheMu.RUnlock()
+	return value, true
 }
 
 // setCachedValue stores a value in cache with expiration
@@ -141,15 +150,15 @@ func (p *Provider) getByID(ctx context.Context, id string) (*v1alpha1.VSwitch, e
 
 	// Execute request
 	response, err := p.vpcClient.DescribeVSwitches(ctx, id, nil)
-	if err != nil || response == nil || len(response.VSwitches.VSwitch) == 0 {
+	if err != nil || response == nil || len(response.Body.VSwitches.VSwitch) == 0 {
 		logger.Error(err, "failed to describe VSwitches by id %s", id)
 		return nil, fmt.Errorf("failed to describe VSwitches: %w", err)
 	}
 	return &v1alpha1.VSwitch{
-		ID:                      response.VSwitches.VSwitch[0].VSwitchId,
-		Zone:                    response.VSwitches.VSwitch[0].ZoneId,
-		ZoneID:                  response.VSwitches.VSwitch[0].ZoneId,
-		AvailableIPAddressCount: int(response.VSwitches.VSwitch[0].AvailableIpAddressCount),
+		ID:                      *response.Body.VSwitches.VSwitch[0].VSwitchId,
+		Zone:                    *response.Body.VSwitches.VSwitch[0].ZoneId,
+		ZoneID:                  *response.Body.VSwitches.VSwitch[0].ZoneId,
+		AvailableIPAddressCount: int(*response.Body.VSwitches.VSwitch[0].AvailableIpAddressCount),
 	}, nil
 }
 
@@ -159,17 +168,17 @@ func (p *Provider) getByTags(ctx context.Context, tags map[string]string) ([]v1a
 
 	// Execute request
 	response, err := p.vpcClient.DescribeVSwitches(ctx, "", tags)
-	if err != nil || response == nil || len(response.VSwitches.VSwitch) == 0 {
+	if err != nil || response == nil || len(response.Body.VSwitches.VSwitch) == 0 {
 		logger.Error(err, "failed to describe VSwitches")
 		return nil, fmt.Errorf("failed to describe VSwitches: %w", err)
 	}
 
 	// Convert to our VSwitch type
 	var vswitches []v1alpha1.VSwitch
-	for _, vsw := range response.VSwitches.VSwitch {
+	for _, vsw := range response.Body.VSwitches.VSwitch {
 		vswitches = append(vswitches, v1alpha1.VSwitch{
-			ID:   vsw.VSwitchId,
-			Zone: vsw.ZoneId,
+			ID:   *vsw.VSwitchId,
+			Zone: *vsw.ZoneId,
 		})
 	}
 

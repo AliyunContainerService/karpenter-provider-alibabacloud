@@ -19,9 +19,10 @@ package status_test
 import (
 	"context"
 	"fmt"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ram"
 	"path/filepath"
 	"testing"
+
+	ram "github.com/alibabacloud-go/ram-20150501/v2/client"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/controllers/nodeclass/status"
@@ -29,8 +30,8 @@ import (
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/ramrole"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/securitygroup"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/vswitch"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/vpc"
+	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
+	vpc "github.com/alibabacloud-go/vpc-20160428/v7/client"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/mock"
@@ -176,35 +177,51 @@ var _ = Describe("StatusController", func() {
 	Context("VSwitch Resolution", func() {
 		It("should resolve VSwitches successfully and set status", func() {
 			// Setup mock VPC client
+			vswitchId := "vsw-test-123"
+			zoneId := "cn-hangzhou-h"
+			availableIps := int64(100)
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
-				VSwitches: vpc.VSwitches{
-					VSwitch: []vpc.VSwitch{
-						{
-							VSwitchId:               "vsw-test-123",
-							ZoneId:                  "cn-hangzhou-h",
-							AvailableIpAddressCount: 100,
+				Body: &vpc.DescribeVSwitchesResponseBody{
+					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{
+							{
+								VSwitchId:               &vswitchId,
+								ZoneId:                  &zoneId,
+								AvailableIpAddressCount: &availableIps,
+							},
 						},
 					},
 				},
 			}, nil)
 
 			// Setup other mocks
+			sgId := "sg-test-123"
+			sgName := "test-sg"
 			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
-				SecurityGroups: ecs.SecurityGroups{
-					SecurityGroup: []ecs.SecurityGroup{
-						{SecurityGroupId: "sg-test-123", SecurityGroupName: "test-sg"},
+				Body: &ecs.DescribeSecurityGroupsResponseBody{
+					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{
+							{SecurityGroupId: &sgId, SecurityGroupName: &sgName},
+						},
 					},
 				},
 			}, nil)
 
-			mockECSClient.On("DescribeImages", mock.Anything, []string{"aliyun_3_x64_20G_alibase_20231221.vhd"}, mock.Anything).Return([]ecs.Image{
-				{ImageId: "aliyun_3_x64_20G_alibase_20231221.vhd", ImageName: "Alibaba Cloud Linux 3", Architecture: "x86_64"},
+			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			imageName := "Alibaba Cloud Linux 3"
+			arch := "x86_64"
+			mockECSClient.On("DescribeImages", mock.Anything, []string{"aliyun_3_x64_20G_alibase_20231221.vhd"}, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
+				{ImageId: &imageId, ImageName: &imageName, Architecture: &arch},
 			}, nil)
 
+			roleName := "KarpenterNodeRole"
+			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
 			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Role: ram.Role{
-					RoleName:                 "KarpenterNodeRole",
-					AssumeRolePolicyDocument: `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`,
+				Body: &ram.GetRoleResponseBody{
+					Role: &ram.GetRoleResponseBodyRole{
+						RoleName:                 &roleName,
+						AssumeRolePolicyDocument: &assumeRolePolicy,
+					},
 				},
 			}, nil)
 
@@ -234,18 +251,28 @@ var _ = Describe("StatusController", func() {
 			// Setup mock to return error
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(nil, fmt.Errorf("VPC API error"))
 
+			sgId := "sg-test-123"
 			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
-				SecurityGroups: ecs.SecurityGroups{SecurityGroup: []ecs.SecurityGroup{{SecurityGroupId: "sg-test-123"}}},
+				Body: &ecs.DescribeSecurityGroupsResponseBody{
+					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
+					},
+				},
 			}, nil)
 
-			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.Image{
-				{ImageId: "aliyun_3_x64_20G_alibase_20231221.vhd"},
+			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
+				{ImageId: &imageId},
 			}, nil)
 
+			roleName := "KarpenterNodeRole"
+			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
 			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Role: ram.Role{
-					RoleName:                 "KarpenterNodeRole",
-					AssumeRolePolicyDocument: `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`,
+				Body: &ram.GetRoleResponseBody{
+					Role: &ram.GetRoleResponseBodyRole{
+						RoleName:                 &roleName,
+						AssumeRolePolicyDocument: &assumeRolePolicy,
+					},
 				},
 			}, nil)
 
@@ -275,28 +302,46 @@ var _ = Describe("StatusController", func() {
 				{Tags: map[string]string{"env": "prod"}},
 			}
 
+			vsw1 := "vsw-1"
+			vsw2 := "vsw-2"
+			vsw3 := "vsw-3"
+			zoneH := "cn-hangzhou-h"
+			zoneI := "cn-hangzhou-i"
+			zoneJ := "cn-hangzhou-j"
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, "", map[string]string{"env": "prod"}).Return(&vpc.DescribeVSwitchesResponse{
-				VSwitches: vpc.VSwitches{
-					VSwitch: []vpc.VSwitch{
-						{VSwitchId: "vsw-1", ZoneId: "cn-hangzhou-h"},
-						{VSwitchId: "vsw-2", ZoneId: "cn-hangzhou-i"},
-						{VSwitchId: "vsw-3", ZoneId: "cn-hangzhou-j"},
+				Body: &vpc.DescribeVSwitchesResponseBody{
+					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{
+							{VSwitchId: &vsw1, ZoneId: &zoneH},
+							{VSwitchId: &vsw2, ZoneId: &zoneI},
+							{VSwitchId: &vsw3, ZoneId: &zoneJ},
+						},
 					},
 				},
 			}, nil)
 
+			sgId := "sg-test-123"
 			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
-				SecurityGroups: ecs.SecurityGroups{SecurityGroup: []ecs.SecurityGroup{{SecurityGroupId: "sg-test-123"}}},
+				Body: &ecs.DescribeSecurityGroupsResponseBody{
+					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
+					},
+				},
 			}, nil)
 
-			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.Image{
-				{ImageId: "aliyun_3_x64_20G_alibase_20231221.vhd"},
+			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
+				{ImageId: &imageId},
 			}, nil)
 
+			roleName := "KarpenterNodeRole"
+			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
 			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Role: ram.Role{
-					RoleName:                 "KarpenterNodeRole",
-					AssumeRolePolicyDocument: `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`,
+				Body: &ram.GetRoleResponseBody{
+					Role: &ram.GetRoleResponseBodyRole{
+						RoleName:                 &roleName,
+						AssumeRolePolicyDocument: &assumeRolePolicy,
+					},
 				},
 			}, nil)
 
@@ -322,29 +367,44 @@ var _ = Describe("StatusController", func() {
 				{Tags: map[string]string{"test": "true"}},
 			}
 
+			vswitchId := "vsw-test-123"
+			zoneId := "cn-hangzhou-h"
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
-				VSwitches: vpc.VSwitches{VSwitch: []vpc.VSwitch{{VSwitchId: "vsw-test-123", ZoneId: "cn-hangzhou-h"}}},
+				Body: &vpc.DescribeVSwitchesResponseBody{
+					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+					},
+				},
 			}, nil)
 
+			sgId := "sg-test-123"
+			sgName := "test-security-group"
 			mockECSClient.On("DescribeSecurityGroups", mock.Anything, map[string]string{"test": "true"}).Return(&ecs.DescribeSecurityGroupsResponse{
-				SecurityGroups: ecs.SecurityGroups{
-					SecurityGroup: []ecs.SecurityGroup{
-						{
-							SecurityGroupId:   "sg-test-123",
-							SecurityGroupName: "test-security-group",
+				Body: &ecs.DescribeSecurityGroupsResponseBody{
+					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{
+							{
+								SecurityGroupId:   &sgId,
+								SecurityGroupName: &sgName,
+							},
 						},
 					},
 				},
 			}, nil)
 
-			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.Image{
-				{ImageId: "aliyun_3_x64_20G_alibase_20231221.vhd"},
+			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
+				{ImageId: &imageId},
 			}, nil)
 
+			roleName := "KarpenterNodeRole"
+			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
 			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Role: ram.Role{
-					RoleName:                 "KarpenterNodeRole",
-					AssumeRolePolicyDocument: `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`,
+				Body: &ram.GetRoleResponseBody{
+					Role: &ram.GetRoleResponseBodyRole{
+						RoleName:                 &roleName,
+						AssumeRolePolicyDocument: &assumeRolePolicy,
+					},
 				},
 			}, nil)
 
@@ -374,20 +434,31 @@ var _ = Describe("StatusController", func() {
 				{Tags: map[string]string{"test": "error"}},
 			}
 
+			vswitchId := "vsw-test-123"
+			zoneId := "cn-hangzhou-h"
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
-				VSwitches: vpc.VSwitches{VSwitch: []vpc.VSwitch{{VSwitchId: "vsw-test-123", ZoneId: "cn-hangzhou-h"}}},
+				Body: &vpc.DescribeVSwitchesResponseBody{
+					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+					},
+				},
 			}, nil)
 
 			mockECSClient.On("DescribeSecurityGroups", mock.Anything, map[string]string{"test": "error"}).Return(nil, fmt.Errorf("ECS API error"))
 
-			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.Image{
-				{ImageId: "aliyun_3_x64_20G_alibase_20231221.vhd"},
+			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
+				{ImageId: &imageId},
 			}, nil)
 
+			roleName := "KarpenterNodeRole"
+			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
 			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Role: ram.Role{
-					RoleName:                 "KarpenterNodeRole",
-					AssumeRolePolicyDocument: `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`,
+				Body: &ram.GetRoleResponseBody{
+					Role: &ram.GetRoleResponseBodyRole{
+						RoleName:                 &roleName,
+						AssumeRolePolicyDocument: &assumeRolePolicy,
+					},
 				},
 			}, nil)
 
@@ -411,27 +482,44 @@ var _ = Describe("StatusController", func() {
 				{Tags: map[string]string{"env": "prod"}},
 			}
 
+			vswitchId := "vsw-test-123"
+			zoneId := "cn-hangzhou-h"
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
-				VSwitches: vpc.VSwitches{VSwitch: []vpc.VSwitch{{VSwitchId: "vsw-test-123", ZoneId: "cn-hangzhou-h"}}},
-			}, nil)
-
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, map[string]string{"env": "prod"}).Return(&ecs.DescribeSecurityGroupsResponse{
-				SecurityGroups: ecs.SecurityGroups{
-					SecurityGroup: []ecs.SecurityGroup{
-						{SecurityGroupId: "sg-1", SecurityGroupName: "sg-prod-1"},
-						{SecurityGroupId: "sg-2", SecurityGroupName: "sg-prod-2"},
+				Body: &vpc.DescribeVSwitchesResponseBody{
+					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
 					},
 				},
 			}, nil)
 
-			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.Image{
-				{ImageId: "aliyun_3_x64_20G_alibase_20231221.vhd"},
+			sg1 := "sg-1"
+			sg2 := "sg-2"
+			sgName1 := "sg-prod-1"
+			sgName2 := "sg-prod-2"
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, map[string]string{"env": "prod"}).Return(&ecs.DescribeSecurityGroupsResponse{
+				Body: &ecs.DescribeSecurityGroupsResponseBody{
+					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{
+							{SecurityGroupId: &sg1, SecurityGroupName: &sgName1},
+							{SecurityGroupId: &sg2, SecurityGroupName: &sgName2},
+						},
+					},
+				},
 			}, nil)
 
+			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
+				{ImageId: &imageId},
+			}, nil)
+
+			roleName := "KarpenterNodeRole"
+			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
 			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Role: ram.Role{
-					RoleName:                 "KarpenterNodeRole",
-					AssumeRolePolicyDocument: `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`,
+				Body: &ram.GetRoleResponseBody{
+					Role: &ram.GetRoleResponseBodyRole{
+						RoleName:                 &roleName,
+						AssumeRolePolicyDocument: &assumeRolePolicy,
+					},
 				},
 			}, nil)
 
@@ -452,26 +540,44 @@ var _ = Describe("StatusController", func() {
 
 	Context("Image Resolution", func() {
 		It("should resolve Images successfully and set status", func() {
+			vswitchId := "vsw-test-123"
+			zoneId := "cn-hangzhou-h"
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
-				VSwitches: vpc.VSwitches{VSwitch: []vpc.VSwitch{{VSwitchId: "vsw-test-123", ZoneId: "cn-hangzhou-h"}}},
-			}, nil)
-
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
-				SecurityGroups: ecs.SecurityGroups{SecurityGroup: []ecs.SecurityGroup{{SecurityGroupId: "sg-test-123"}}},
-			}, nil)
-
-			mockECSClient.On("DescribeImages", mock.Anything, []string{"aliyun_3_x64_20G_alibase_20231221.vhd"}, mock.Anything).Return([]ecs.Image{
-				{
-					ImageId:      "aliyun_3_x64_20G_alibase_20231221.vhd",
-					ImageName:    "Alibaba Cloud Linux 3",
-					Architecture: "x86_64",
+				Body: &vpc.DescribeVSwitchesResponseBody{
+					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+					},
 				},
 			}, nil)
 
+			sgId := "sg-test-123"
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
+				Body: &ecs.DescribeSecurityGroupsResponseBody{
+					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
+					},
+				},
+			}, nil)
+
+			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			imageName := "Alibaba Cloud Linux 3"
+			arch := "x86_64"
+			mockECSClient.On("DescribeImages", mock.Anything, []string{"aliyun_3_x64_20G_alibase_20231221.vhd"}, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
+				{
+					ImageId:      &imageId,
+					ImageName:    &imageName,
+					Architecture: &arch,
+				},
+			}, nil)
+
+			roleName := "KarpenterNodeRole"
+			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
 			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Role: ram.Role{
-					RoleName:                 "KarpenterNodeRole",
-					AssumeRolePolicyDocument: `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`,
+				Body: &ram.GetRoleResponseBody{
+					Role: &ram.GetRoleResponseBodyRole{
+						RoleName:                 &roleName,
+						AssumeRolePolicyDocument: &assumeRolePolicy,
+					},
 				},
 			}, nil)
 
@@ -495,20 +601,35 @@ var _ = Describe("StatusController", func() {
 		})
 
 		It("should set error condition when Image resolution fails", func() {
+			vswitchId := "vsw-test-123"
+			zoneId := "cn-hangzhou-h"
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
-				VSwitches: vpc.VSwitches{VSwitch: []vpc.VSwitch{{VSwitchId: "vsw-test-123", ZoneId: "cn-hangzhou-h"}}},
+				Body: &vpc.DescribeVSwitchesResponseBody{
+					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+					},
+				},
 			}, nil)
 
+			sgId := "sg-test-123"
 			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
-				SecurityGroups: ecs.SecurityGroups{SecurityGroup: []ecs.SecurityGroup{{SecurityGroupId: "sg-test-123"}}},
+				Body: &ecs.DescribeSecurityGroupsResponseBody{
+					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
+					},
+				},
 			}, nil)
 
 			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return(nil, fmt.Errorf("Image not found"))
 
+			roleName := "KarpenterNodeRole"
+			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
 			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Role: ram.Role{
-					RoleName:                 "KarpenterNodeRole",
-					AssumeRolePolicyDocument: `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`,
+				Body: &ram.GetRoleResponseBody{
+					Role: &ram.GetRoleResponseBodyRole{
+						RoleName:                 &roleName,
+						AssumeRolePolicyDocument: &assumeRolePolicy,
+					},
 				},
 			}, nil)
 
@@ -530,22 +651,38 @@ var _ = Describe("StatusController", func() {
 
 	Context("RAM Role Validation", func() {
 		It("should validate RAM role successfully and set status", func() {
+			vswitchId := "vsw-test-123"
+			zoneId := "cn-hangzhou-h"
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
-				VSwitches: vpc.VSwitches{VSwitch: []vpc.VSwitch{{VSwitchId: "vsw-test-123", ZoneId: "cn-hangzhou-h"}}},
+				Body: &vpc.DescribeVSwitchesResponseBody{
+					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+					},
+				},
 			}, nil)
 
+			sgId := "sg-test-123"
 			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
-				SecurityGroups: ecs.SecurityGroups{SecurityGroup: []ecs.SecurityGroup{{SecurityGroupId: "sg-test-123"}}},
+				Body: &ecs.DescribeSecurityGroupsResponseBody{
+					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
+					},
+				},
 			}, nil)
 
-			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.Image{
-				{ImageId: "aliyun_3_x64_20G_alibase_20231221.vhd"},
+			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
+				{ImageId: &imageId},
 			}, nil)
 
+			roleName := "KarpenterNodeRole"
+			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
 			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Role: ram.Role{
-					RoleName:                 "KarpenterNodeRole",
-					AssumeRolePolicyDocument: `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`,
+				Body: &ram.GetRoleResponseBody{
+					Role: &ram.GetRoleResponseBodyRole{
+						RoleName:                 &roleName,
+						AssumeRolePolicyDocument: &assumeRolePolicy,
+					},
 				},
 			}, nil)
 
@@ -568,16 +705,28 @@ var _ = Describe("StatusController", func() {
 		})
 
 		It("should set error condition when RAM role validation fails", func() {
+			vswitchId := "vsw-test-123"
+			zoneId := "cn-hangzhou-h"
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
-				VSwitches: vpc.VSwitches{VSwitch: []vpc.VSwitch{{VSwitchId: "vsw-test-123", ZoneId: "cn-hangzhou-h"}}},
+				Body: &vpc.DescribeVSwitchesResponseBody{
+					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+					},
+				},
 			}, nil)
 
+			sgId := "sg-test-123"
 			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
-				SecurityGroups: ecs.SecurityGroups{SecurityGroup: []ecs.SecurityGroup{{SecurityGroupId: "sg-test-123"}}},
+				Body: &ecs.DescribeSecurityGroupsResponseBody{
+					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
+					},
+				},
 			}, nil)
 
-			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.Image{
-				{ImageId: "aliyun_3_x64_20G_alibase_20231221.vhd"},
+			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
+				{ImageId: &imageId},
 			}, nil)
 
 			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(nil, fmt.Errorf("role not found"))
@@ -599,16 +748,28 @@ var _ = Describe("StatusController", func() {
 		It("should skip RAM role validation when Role is not specified", func() {
 			nodeClass.Spec.Role = nil
 
+			vswitchId := "vsw-test-123"
+			zoneId := "cn-hangzhou-h"
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
-				VSwitches: vpc.VSwitches{VSwitch: []vpc.VSwitch{{VSwitchId: "vsw-test-123", ZoneId: "cn-hangzhou-h"}}},
+				Body: &vpc.DescribeVSwitchesResponseBody{
+					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+					},
+				},
 			}, nil)
 
+			sgId := "sg-test-123"
 			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
-				SecurityGroups: ecs.SecurityGroups{SecurityGroup: []ecs.SecurityGroup{{SecurityGroupId: "sg-test-123"}}},
+				Body: &ecs.DescribeSecurityGroupsResponseBody{
+					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
+					},
+				},
 			}, nil)
 
-			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.Image{
-				{ImageId: "aliyun_3_x64_20G_alibase_20231221.vhd"},
+			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
+				{ImageId: &imageId},
 			}, nil)
 
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
@@ -627,22 +788,38 @@ var _ = Describe("StatusController", func() {
 
 	Context("Ready Condition", func() {
 		It("should set Ready to true when all resources are resolved", func() {
+			vswitchId := "vsw-test-123"
+			zoneId := "cn-hangzhou-h"
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
-				VSwitches: vpc.VSwitches{VSwitch: []vpc.VSwitch{{VSwitchId: "vsw-test-123", ZoneId: "cn-hangzhou-h"}}},
+				Body: &vpc.DescribeVSwitchesResponseBody{
+					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+					},
+				},
 			}, nil)
 
+			sgId := "sg-test-123"
 			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
-				SecurityGroups: ecs.SecurityGroups{SecurityGroup: []ecs.SecurityGroup{{SecurityGroupId: "sg-test-123"}}},
+				Body: &ecs.DescribeSecurityGroupsResponseBody{
+					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
+					},
+				},
 			}, nil)
 
-			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.Image{
-				{ImageId: "aliyun_3_x64_20G_alibase_20231221.vhd"},
+			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
+				{ImageId: &imageId},
 			}, nil)
 
+			roleName := "KarpenterNodeRole"
+			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
 			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Role: ram.Role{
-					RoleName:                 "KarpenterNodeRole",
-					AssumeRolePolicyDocument: `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`,
+				Body: &ram.GetRoleResponseBody{
+					Role: &ram.GetRoleResponseBodyRole{
+						RoleName:                 &roleName,
+						AssumeRolePolicyDocument: &assumeRolePolicy,
+					},
 				},
 			}, nil)
 
@@ -665,18 +842,28 @@ var _ = Describe("StatusController", func() {
 		It("should set Ready to false when any resource resolution fails", func() {
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(nil, fmt.Errorf("VPC error"))
 
+			sgId := "sg-test-123"
 			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
-				SecurityGroups: ecs.SecurityGroups{SecurityGroup: []ecs.SecurityGroup{{SecurityGroupId: "sg-test-123"}}},
+				Body: &ecs.DescribeSecurityGroupsResponseBody{
+					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
+					},
+				},
 			}, nil)
 
-			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.Image{
-				{ImageId: "aliyun_3_x64_20G_alibase_20231221.vhd"},
+			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
+				{ImageId: &imageId},
 			}, nil)
 
+			roleName := "KarpenterNodeRole"
+			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
 			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Role: ram.Role{
-					RoleName:                 "KarpenterNodeRole",
-					AssumeRolePolicyDocument: `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`,
+				Body: &ram.GetRoleResponseBody{
+					Role: &ram.GetRoleResponseBodyRole{
+						RoleName:                 &roleName,
+						AssumeRolePolicyDocument: &assumeRolePolicy,
+					},
 				},
 			}, nil)
 
@@ -711,22 +898,38 @@ var _ = Describe("StatusController", func() {
 		})
 
 		It("should update status on subsequent reconciliations", func() {
+			vswitchId := "vsw-test-123"
+			zoneId := "cn-hangzhou-h"
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
-				VSwitches: vpc.VSwitches{VSwitch: []vpc.VSwitch{{VSwitchId: "vsw-test-123", ZoneId: "cn-hangzhou-h"}}},
+				Body: &vpc.DescribeVSwitchesResponseBody{
+					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+					},
+				},
 			}, nil)
 
+			sgId := "sg-test-123"
 			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
-				SecurityGroups: ecs.SecurityGroups{SecurityGroup: []ecs.SecurityGroup{{SecurityGroupId: "sg-test-123"}}},
+				Body: &ecs.DescribeSecurityGroupsResponseBody{
+					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
+					},
+				},
 			}, nil)
 
-			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.Image{
-				{ImageId: "aliyun_3_x64_20G_alibase_20231221.vhd"},
+			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
+				{ImageId: &imageId},
 			}, nil)
 
+			roleName := "KarpenterNodeRole"
+			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
 			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Role: ram.Role{
-					RoleName:                 "KarpenterNodeRole",
-					AssumeRolePolicyDocument: `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`,
+				Body: &ram.GetRoleResponseBody{
+					Role: &ram.GetRoleResponseBodyRole{
+						RoleName:                 &roleName,
+						AssumeRolePolicyDocument: &assumeRolePolicy,
+					},
 				},
 			}, nil)
 
@@ -810,12 +1013,12 @@ func (m *MockECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesRe
 	return args.Get(0).(*ecs.DescribeZonesResponse), args.Error(1)
 }
 
-func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.Image, error) {
+func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error) {
 	args := m.Called(ctx, imageIDs, filters)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]ecs.Image), args.Error(1)
+	return args.Get(0).([]ecs.DescribeImagesResponseBodyImagesImage), args.Error(1)
 }
 
 func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {

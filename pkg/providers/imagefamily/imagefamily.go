@@ -67,19 +67,28 @@ func (p *Provider) SetCacheTTL(ttl time.Duration) {
 // getCachedValue retrieves a value from cache if it exists and is not expired
 func (p *Provider) getCachedValue(key string) (interface{}, bool) {
 	p.cacheMu.RLock()
-	defer p.cacheMu.RUnlock()
-
 	entry, exists := p.cache[key]
 	if !exists {
+		p.cacheMu.RUnlock()
 		return nil, false
 	}
 
 	// Check if cache entry is expired
 	if time.Now().After(entry.ExpiresAt) {
+		p.cacheMu.RUnlock()
+		// Remove expired entry with write lock
+		p.cacheMu.Lock()
+		// Double-check to prevent concurrent deletions
+		if entry2, exists := p.cache[key]; exists && time.Now().After(entry2.ExpiresAt) {
+			delete(p.cache, key)
+		}
+		p.cacheMu.Unlock()
 		return nil, false
 	}
 
-	return entry.Value, true
+	value := entry.Value
+	p.cacheMu.RUnlock()
+	return value, true
 }
 
 // setCachedValue stores a value in cache with expiration
@@ -128,9 +137,9 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.ImageSelectorTe
 
 			for _, img := range images {
 				result = append(result, v1alpha1.Image{
-					ID:           img.ImageId,
-					Name:         img.ImageName,
-					Architecture: img.Architecture,
+					ID:           *img.ImageId,
+					Name:         *img.ImageName,
+					Architecture: *img.Architecture,
 				})
 			}
 		} else if term.ID != nil {
@@ -143,9 +152,9 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.ImageSelectorTe
 
 			for _, img := range images {
 				result = append(result, v1alpha1.Image{
-					ID:           img.ImageId,
-					Name:         img.ImageName,
-					Architecture: img.Architecture,
+					ID:           *img.ImageId,
+					Name:         *img.ImageName,
+					Architecture: *img.Architecture,
 				})
 			}
 		} else if term.Name != nil {

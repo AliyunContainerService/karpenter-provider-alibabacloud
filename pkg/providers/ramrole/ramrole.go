@@ -82,7 +82,7 @@ func (p *Provider) ValidateRole(ctx context.Context, roleName string) *ValidateR
 	}
 
 	var policy AssumeRolePolicy
-	if err := json.Unmarshal([]byte(response.Role.AssumeRolePolicyDocument), &policy); err != nil {
+	if err := json.Unmarshal([]byte(*response.Body.Role.AssumeRolePolicyDocument), &policy); err != nil {
 		logger.Error(err, "failed to parse AssumeRolePolicy", "role", roleName)
 		return &ValidateRoleResult{
 			Valid:   false,

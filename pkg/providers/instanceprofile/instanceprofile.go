@@ -71,7 +71,7 @@ func (p *Provider) getByRole(ctx context.Context, roleName string) (string, erro
 	}
 
 	// Return role ARN as instance profile
-	return response.Role.Arn, nil
+	return *response.Body.Role.Arn, nil
 }
 
 // Validate validates that the instance profile exists and is valid
@@ -109,7 +109,7 @@ func (p *Provider) validateRole(ctx context.Context, roleName string) error {
 	}
 
 	// Validate trust policy to ensure it allows ECS service to assume the role
-	if err := p.validateTrustPolicy(ctx, response.Role.AssumeRolePolicyDocument); err != nil {
+	if err := p.validateTrustPolicy(ctx, *response.Body.Role.AssumeRolePolicyDocument); err != nil {
 		return fmt.Errorf("role %s has invalid trust policy: %w", roleName, err)
 	}
 
