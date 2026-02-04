@@ -5,7 +5,7 @@ controller:
   image:
     repository: registry-cn-hangzhou.ack.aliyuncs.com/acs/karpenter-provider-alibabacloud
     pullPolicy: Always
-    tag: "v1.0.0"
+    tag: "v0.2.0"
 
   resources:
     requests:
