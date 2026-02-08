@@ -15,3 +15,4 @@ sources:
 maintainers:
   - name: Alibaba Cloud Container Service Team
     email: kubernetes@alibaba-inc.com
+icon: https://raw.githubusercontent.com/kubernetes-sigs/karpenter/main/website/static/banner.png
