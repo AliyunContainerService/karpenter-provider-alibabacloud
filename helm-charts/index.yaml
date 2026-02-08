@@ -20,6 +20,6 @@ entries:
     - https://github.com/AliyunContainerService/karpenter-provider-alibabacloud
     type: application
     urls:
-    - https://gitlab.alibaba-inc.com/cos/karpenter-provider-alibabacloud/-/raw/opensource-main/helm-charts/karpenter-0.2.0.tgz
+    - https://github.com/AliyunContainerService/karpenter-provider-alibabacloud/releases/download/v0.2.0/karpenter-0.2.0.tgz
     version: 0.2.0
 generated: "2026-02-08T12:35:07.37693+08:00"
