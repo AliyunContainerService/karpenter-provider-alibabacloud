@@ -48,7 +48,7 @@ func NewProvider(region string, vpcClient clients.VPCClient) *Provider {
 		region:    region,
 		vpcClient: vpcClient,
 		cache:     make(map[string]*CacheEntry),
-		cacheTTL:  5 * time.Minute, // Cache for 5 minutes by default
+		cacheTTL:  2 * time.Hour, // Cache for 2 hours by default
 	}
 }
 
@@ -120,8 +120,7 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.VSwitchSelector
 		if term.ID != nil {
 			vsws, err := p.getByID(ctx, *term.ID)
 			if err != nil {
-				logger.Error(err, "failed to get VSwitch by ID", "id", *term.ID)
-				return nil, fmt.Errorf("failed to get VSwitch by ID %s: %w", *term.ID, err)
+				return nil, fmt.Errorf("get vswitch %s: %w", *term.ID, err)
 			}
 			// Direct ID reference
 			vswitches = append(vswitches, *vsws)
@@ -129,8 +128,7 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.VSwitchSelector
 			// Tag-based selection
 			vsws, err := p.getByTags(ctx, term.Tags)
 			if err != nil {
-				logger.Error(err, "failed to get VSwitches by tags", "tags", term.Tags)
-				return nil, fmt.Errorf("failed to get VSwitches by tags %v: %w", term.Tags, err)
+				return nil, fmt.Errorf("get vswitches by tags %v: %w", term.Tags, err)
 			}
 			vswitches = append(vswitches, vsws...)
 		}
@@ -146,12 +144,10 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.VSwitchSelector
 }
 
 func (p *Provider) getByID(ctx context.Context, id string) (*v1alpha1.VSwitch, error) {
-	logger := log.FromContext(ctx)
 
 	// Execute request
 	response, err := p.vpcClient.DescribeVSwitches(ctx, id, nil)
 	if err != nil || response == nil || len(response.Body.VSwitches.VSwitch) == 0 {
-		logger.Error(err, "failed to describe VSwitches by id %s", id)
 		return nil, fmt.Errorf("failed to describe VSwitches: %w", err)
 	}
 	return &v1alpha1.VSwitch{
@@ -164,12 +160,9 @@ func (p *Provider) getByID(ctx context.Context, id string) (*v1alpha1.VSwitch, e
 
 // getByTags gets VSwitches by tags
 func (p *Provider) getByTags(ctx context.Context, tags map[string]string) ([]v1alpha1.VSwitch, error) {
-	logger := log.FromContext(ctx)
-
 	// Execute request
 	response, err := p.vpcClient.DescribeVSwitches(ctx, "", tags)
 	if err != nil || response == nil || len(response.Body.VSwitches.VSwitch) == 0 {
-		logger.Error(err, "failed to describe VSwitches")
 		return nil, fmt.Errorf("failed to describe VSwitches: %w", err)
 	}
 

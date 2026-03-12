@@ -6,9 +6,7 @@ toolchain go1.24.9
 
 require (
 	github.com/alibabacloud-go/cs-20151215/v5 v5.9.8
-	github.com/alibabacloud-go/darabonba-openapi v0.1.18
 	github.com/alibabacloud-go/darabonba-openapi/v2 v2.1.14
-	github.com/alibabacloud-go/ecs-20140526/v2 v2.1.3
 	github.com/alibabacloud-go/ecs-20140526/v5 v5.1.0
 	github.com/alibabacloud-go/ram-20150501/v2 v2.2.0
 	github.com/alibabacloud-go/tea v1.3.13
@@ -17,12 +15,12 @@ require (
 	github.com/aliyun/credentials-go v1.4.5
 	github.com/aws/karpenter-provider-aws v1.8.2
 	github.com/awslabs/operatorpkg v0.0.0-20250909182303-e8e550b6f339
-	github.com/onsi/ginkgo/v2 v2.25.3
-	github.com/onsi/gomega v1.38.2
+	github.com/onsi/ginkgo/v2 v2.28.0
+	github.com/onsi/gomega v1.39.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/samber/lo v1.51.0
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/sync v0.17.0
+	golang.org/x/sync v0.19.0
 	k8s.io/api v0.35.0-alpha.0
 	k8s.io/apimachinery v0.35.0-alpha.0
 	k8s.io/client-go v0.35.0-alpha.0
@@ -39,9 +37,7 @@ require (
 	github.com/alibabacloud-go/debug v1.0.1 // indirect
 	github.com/alibabacloud-go/endpoint-util v1.1.0 // indirect
 	github.com/alibabacloud-go/openapi-util v0.1.1 // indirect
-	github.com/alibabacloud-go/tea-utils v1.4.5 // indirect
 	github.com/alibabacloud-go/tea-utils/v2 v2.0.7 // indirect
-	github.com/alibabacloud-go/tea-xml v1.1.3 // indirect
 	github.com/avast/retry-go v3.0.0+incompatible // indirect
 	github.com/aws/amazon-vpc-resource-controller-k8s v1.7.13 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.274.0 // indirect
@@ -64,7 +60,7 @@ require (
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/pprof v0.0.0-20250820193118-f64d9cf942d6 // indirect
+	github.com/google/pprof v0.0.0-20260115054156-294ebfa9ad83 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/imdario/mergo v0.3.16 // indirect
@@ -92,18 +88,18 @@ require (
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/tjfoc/gmsm v1.4.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	go.uber.org/automaxprocs v1.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/net v0.44.0 // indirect
+	golang.org/x/mod v0.32.0 // indirect
+	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
-	golang.org/x/sys v0.36.0 // indirect
-	golang.org/x/term v0.35.0 // indirect
-	golang.org/x/text v0.29.0 // indirect
+	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/term v0.39.0 // indirect
+	golang.org/x/text v0.33.0 // indirect
 	golang.org/x/time v0.13.0 // indirect
-	golang.org/x/tools v0.37.0 // indirect
+	golang.org/x/tools v0.41.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.5.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect

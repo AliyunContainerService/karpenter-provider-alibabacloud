@@ -1,84 +1,246 @@
-# Default values for karpenter
+# Default values for Alibaba Cloud Karpenter Provider
+# This is a Kubernetes node autoscaler for Alibaba Cloud ACK clusters
+
+# -- Number of Karpenter controller replicas to run
 replicaCount: 1
 
 controller:
   image:
+    # -- Container image repository for Karpenter controller
+    # @description --
+    # Uses Alibaba Cloud Container Registry in Hangzhou region by default
     repository: registry-cn-hangzhou.ack.aliyuncs.com/acs/karpenter-provider-alibabacloud
+    # -- Image pull policy
+    # @description --
+    # Options: Always, IfNotPresent, Never
     pullPolicy: Always
-    tag: "v0.2.0"
+    # -- Image tag/version to deploy
+    tag: "v0.2.1"
 
+  # -- Resource requests and limits for the controller pod
+  # @description --
+  # Adjust based on cluster size and workload. Larger clusters need more resources.
   resources:
     requests:
+      # -- Minimum CPU required
+      # @description --
+      # 1 CPU is recommended for small to medium clusters (< 100 nodes)
       cpu: "1"
+      # -- Minimum memory required
+      # @description --
+      # 1Gi is recommended for small to medium clusters
       memory: "1Gi"
     limits:
+      # -- Maximum CPU allowed
+      # @description --
+      # Set to prevent Karpenter from consuming excessive cluster resources
       cpu: "2"
+      # -- Maximum memory allowed
       memory: "2Gi"
 
+  # -- Node selector for pod scheduling
+  # @description --
+  # Use this to constrain Karpenter to run on specific nodes (e.g., control plane nodes)
+  # Example:
+  #   nodeSelector:
+  #     node-role.kubernetes.io/control-plane: "true"
   nodeSelector: {}
+
+  # -- Tolerations for pod scheduling
+  # @description --
+  # Allow Karpenter to run on nodes with taints
+  # Example:
+  #   tolerations:
+  #     - key: "dedicated"
+  #       operator: "Equal"
+  #       value: "karpenter"
+  #       effect: "NoSchedule"
   tolerations: []
+
+  # -- Pod affinity rules
   affinity: {}
 
+  # -- Environment variables for Alibaba Cloud authentication and configuration
+  # @description --
+  # IMPORTANT: You must configure either AccessKey credentials OR RRSA, not both.
+  # RRSA is recommended for production as it's more secure.
   env:
+    # ==========================================
+    # Option 1: AccessKey Authentication (Legacy)
+    # ==========================================
+    # WARNING: Storing AccessKey in environment variables is less secure.
+    # Consider using RRSA (Option 2) for production environments.
+    # These can also be loaded from a Kubernetes secret instead.
+
+    # -- Alibaba Cloud Access Key ID
+    # @description --
+    # Required if not using RRSA. Obtain from Alibaba Cloud Console > AccessKey Management
     - name: ALIBABA_CLOUD_ACCESS_KEY_ID
       value: ""
+
+    # -- Alibaba Cloud Access Key Secret
+    # @description --
+    # Required if not using RRSA. Keep this secret secure!
     - name: ALIBABA_CLOUD_ACCESS_KEY_SECRET
       value: ""
+
+    # -- Alibaba Cloud Region ID
+    # @description --
+    # Example: cn-hangzhou, cn-beijing, cn-shanghai
+    # Must match your ACK cluster region
     - name: ALIBABA_CLOUD_REGION
       value: ""
+
+    # ==========================================
+    # Service Endpoints (Optional)
+    # ==========================================
+    # These are auto-detected based on region. Only set if you need custom endpoints.
+
+    # -- ECS (Elastic Compute Service) API endpoint
+    # @description --
+    # Default: ecs.aliyuncs.com (auto-detected for your region)
     - name: ECS_ENDPOINT
       value: ""
+
+    # -- CS (Container Service) API endpoint
+    # @description --
+    # Default: cs.aliyuncs.com (auto-detected for your region)
     - name: CS_ENDPOINT
       value: ""
+
+    # -- VPC (Virtual Private Cloud) API endpoint
+    # @description --
+    # Default: vpc.aliyuncs.com (auto-detected for your region)
     - name: VPC_ENDPOINT
       value: ""
+
+    # -- RAM (Resource Access Management) API endpoint
+    # @description --
+    # Default: ram.aliyuncs.com (auto-detected for your region)
     - name: RAM_ENDPOINT
       value: ""
+
+    # -- STS (Security Token Service) API endpoint
+    # @description --
+    # Default: sts.aliyuncs.com (auto-detected for your region)
     - name: STS_ENDPOINT
       value: ""
-    # RRSA (RAM Roles for Service Account) configuration
-    # If RRSA is enabled, the following three environment variables must be set
+
+    # ==========================================
+    # Option 2: RRSA Authentication (Recommended)
+    # ==========================================
+    # RRSA (RAM Roles for Service Account) is the recommended authentication method
+    # for ACK clusters. It provides better security by eliminating long-term credentials.
+    #
+    # Prerequisites:
+    # 1. Enable RRSA on your ACK cluster
+    # 2. Create a RAM Role with necessary permissions
+    # 3. Configure trust policy for the service account
+    # 4. Annotate the service account with the RAM Role ARN
+
+    # -- RAM Role ARN for RRSA authentication
+    # @description --
+    # Format: acs:ram::<account-id>:role/<role-name>
+    # Example: acs:ram::1234567****:role/karpenter-rrsa-role
     - name: ALIBABA_CLOUD_ROLE_ARN
       value: ""
+
+    # -- OIDC Provider ARN for RRSA
+    # @description --
+    # Format: acs:ram::<account-id>:oidc-provider/<cluster-id>
+    # Found in ACK Console > Cluster Information > RRSA section
     - name: ALIBABA_CLOUD_OIDC_PROVIDER_ARN
       value: ""
+
+    # -- Path to OIDC token file (auto-mounted by ACK)
+    # @description --
+    # Default path is automatically set by ACK when RRSA is enabled
+    # Do not change unless you have a custom setup
     - name: ALIBABA_CLOUD_OIDC_TOKEN_FILE
       value: "/var/run/secrets/ack.alibabacloud.com/rrsa-tokens/token"
 
-
+# -- Karpenter core settings
+# @description --# These settings control Karpenter's behavior and cluster integration
 settings:
-  # ACK cluster ID, format: cd43e1dfb7*****
-  clusterName: ""
+  # ==========================================
+  # Required Settings
+  # ==========================================
+
+  # -- ACK cluster ID
+  # @description --
+  # REQUIRED. Format: cXXXXXX (e.g., c123456789)
+  # Found in ACK Console > Cluster Details
+  clusterID: ""
+
+  # -- ACK cluster API server endpoint
+  # @description --
+  # REQUIRED. The internal or external endpoint URL of your ACK cluster
+  # Example: https://123.456.***.***:6443
+  # Found in ACK Console > Cluster Information > Connection Information
   clusterEndpoint: ""
+
+  # -- Alibaba Cloud Region
+  # @description --
+  # REQUIRED. Must match your ACK cluster region
+  # Example: cn-hangzhou, cn-beijing, cn-shanghai, ap-southeast-1
   region: ""
-  
-  # Feature gates
-  featureGates:
-    spotInterruption: true
-    capacityReservation: true
 
-  # Batch processing settings
-  batchMaxDuration: "30s"
-  batchIdleDuration: "5s"
-
-imagePullSecrets:
-   - name: ""
+# -- Image pull secrets for private registries
+# @description --
+# Required if pulling from a private container registry
+# Example:
+#   imagePullSecrets:
+#     - name: my-registry-secret
+imagePullSecrets: []
 
 serviceAccount:
   create: true
   annotations: {}
   name: "karpenter"
 
+# -- RBAC configuration
+# @description --
+# Controls Kubernetes RBAC resources (ClusterRole, ClusterRoleBinding, etc.)
 rbac:
+  # -- Create RBAC resources
+  # @description --
+  # Set to false if you manage RBAC separately
   create: true
 
+# -- Metrics and monitoring configuration
+# @description --
+# Prometheus metrics endpoint settings
 metrics:
+  # -- Enable metrics endpoint
+  # @description --
+  # When enabled, Prometheus can scrape metrics from Karpenter
   enabled: true
+
+  # -- Metrics endpoint port
+  # @description --
+  # Port on which metrics are exposed
   port: 8080
 
+# -- Service configuration
+# @description --
+# Kubernetes service settings for Karpenter
 service:
+  # -- Port for metrics service
+  # @description --
+  # Should match metrics.port for proper service discovery
   metricsPort: 8080
 
+# -- Webhook configuration
+# @description --
+# Admission webhook settings for resource validation
 webhook:
+  # -- Enable admission webhook
+  # @description --
+  # When enabled, Karpenter validates NodeClass and NodePool resources
+  # Disabling may allow invalid configurations to be applied
   enabled: true
+
+  # -- Webhook service port
+  # @description --
+  # Port on which the webhook server listens
   port: 9443

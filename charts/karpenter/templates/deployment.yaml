@@ -16,16 +16,28 @@ spec:
         {{- include "karpenter.selectorLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "karpenter.serviceAccountName" . }}
-      {{- with .Values.imagePullSecrets }}
+      {{- if .Values.imagePullSecrets }}
+      {{- $hasValidSecret := false }}
+      {{- range .Values.imagePullSecrets }}
+      {{- if and .name (ne .name "") }}
+      {{- $hasValidSecret = true }}
+      {{- end }}
+      {{- end }}
+      {{- if $hasValidSecret }}
       imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
+        {{- range .Values.imagePullSecrets }}
+        {{- if and .name (ne .name "") }}
+        - name: {{ .name }}
+        {{- end }}
+        {{- end }}
+      {{- end }}
       {{- end }}
       containers:
       - name: controller
         image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag }}"
         imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
         args:
-          - --cluster-name={{ .Values.settings.clusterName }}
+          - --cluster-name={{ .Values.settings.clusterID }}
           - --cluster-endpoint={{ .Values.settings.clusterEndpoint }}
           - --region={{ .Values.settings.region }}
         env:

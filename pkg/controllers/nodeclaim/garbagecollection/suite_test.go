@@ -258,6 +258,9 @@ var _ = Describe("GarbageCollectionController", func() {
 						Instances: &ecs.DescribeInstancesResponseBodyInstances{
 							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
 						},
+						TotalCount: tea.Int32(0),
+						PageNumber: tea.Int32(1),
+						PageSize:   tea.Int32(10),
 					},
 				}, nil)
 
@@ -305,6 +308,9 @@ var _ = Describe("GarbageCollectionController", func() {
 						Instances: &ecs.DescribeInstancesResponseBodyInstances{
 							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
 						},
+						TotalCount: tea.Int32(0),
+						PageNumber: tea.Int32(1),
+						PageSize:   tea.Int32(10),
 					},
 				}, nil)
 
@@ -353,6 +359,9 @@ var _ = Describe("GarbageCollectionController", func() {
 						Instances: &ecs.DescribeInstancesResponseBodyInstances{
 							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
 						},
+						TotalCount: tea.Int32(0),
+						PageNumber: tea.Int32(1),
+						PageSize:   tea.Int32(10),
 					},
 				}, nil)
 
@@ -411,6 +420,9 @@ var _ = Describe("GarbageCollectionController", func() {
 						Instances: &ecs.DescribeInstancesResponseBodyInstances{
 							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
 						},
+						TotalCount: tea.Int32(0),
+						PageNumber: tea.Int32(1),
+						PageSize:   tea.Int32(10),
 					},
 				}, nil)
 
@@ -472,6 +484,9 @@ var _ = Describe("GarbageCollectionController", func() {
 						Instances: &ecs.DescribeInstancesResponseBodyInstances{
 							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
 						},
+						TotalCount: tea.Int32(0),
+						PageNumber: tea.Int32(1),
+						PageSize:   tea.Int32(10),
 					},
 				}, nil)
 
@@ -579,6 +594,9 @@ var _ = Describe("GarbageCollectionController", func() {
 						Instances: &ecs.DescribeInstancesResponseBodyInstances{
 							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
 						},
+						TotalCount: tea.Int32(0),
+						PageNumber: tea.Int32(1),
+						PageSize:   tea.Int32(10),
 					},
 				}, nil)
 
@@ -624,6 +642,9 @@ var _ = Describe("GarbageCollectionController", func() {
 						Instances: &ecs.DescribeInstancesResponseBodyInstances{
 							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
 						},
+						TotalCount: tea.Int32(0),
+						PageNumber: tea.Int32(1),
+						PageSize:   tea.Int32(10),
 					},
 				}, nil)
 
@@ -778,6 +799,9 @@ var _ = Describe("GarbageCollectionController", func() {
 						Instances: &ecs.DescribeInstancesResponseBodyInstances{
 							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
 						},
+						TotalCount: tea.Int32(0),
+						PageNumber: tea.Int32(1),
+						PageSize:   tea.Int32(10),
 					},
 				}, nil)
 
@@ -832,6 +856,9 @@ var _ = Describe("GarbageCollectionController", func() {
 						Instances: &ecs.DescribeInstancesResponseBodyInstances{
 							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
 						},
+						TotalCount: tea.Int32(0),
+						PageNumber: tea.Int32(1),
+						PageSize:   tea.Int32(10),
 					},
 				}, nil)
 

@@ -440,22 +440,32 @@ func TestDelete(t *testing.T) {
 			instanceID: "i-123",
 			mockSetup: func(m *MockECSClient) {
 				// Mock Get call
+				totalCount := int32(1)
+				pageNumber := int32(1)
+				pageSize := int32(10)
+				instanceChargeType := "PostPaid"
+				creationTime := "2024-01-01T00:00:00Z"
 				getResponse := &ecs.DescribeInstancesResponse{
 					Body: &ecs.DescribeInstancesResponseBody{
 						Instances: &ecs.DescribeInstancesResponseBodyInstances{
 							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{
 								{
-									InstanceId:   stringPtr("i-123"),
-									RegionId:     stringPtr("cn-hangzhou"),
-									ZoneId:       stringPtr("cn-hangzhou-h"),
-									InstanceType: stringPtr("ecs.g6.large"),
-									ImageId:      stringPtr("img-123"),
-									Cpu:          int32Ptr(2),
-									Memory:       int32Ptr(8192),
-									Status:       stringPtr("Running"),
+									InstanceId:         stringPtr("i-123"),
+									RegionId:           stringPtr("cn-hangzhou"),
+									ZoneId:             stringPtr("cn-hangzhou-h"),
+									InstanceType:       stringPtr("ecs.g6.large"),
+									ImageId:            stringPtr("img-123"),
+									Cpu:                int32Ptr(2),
+									Memory:             int32Ptr(8192),
+									Status:             stringPtr("Running"),
+									InstanceChargeType: &instanceChargeType,
+									CreationTime:       &creationTime,
 								},
 							},
 						},
+						TotalCount: &totalCount,
+						PageNumber: &pageNumber,
+						PageSize:   &pageSize,
 					},
 				}
 				m.On("DescribeInstances", mock.Anything, mock.Anything).Return(getResponse, nil)
@@ -473,11 +483,17 @@ func TestDelete(t *testing.T) {
 			name:       "instance not found",
 			instanceID: "i-notfound",
 			mockSetup: func(m *MockECSClient) {
+				totalCount := int32(0)
+				pageNumber := int32(1)
+				pageSize := int32(10)
 				getResponse := &ecs.DescribeInstancesResponse{
 					Body: &ecs.DescribeInstancesResponseBody{
 						Instances: &ecs.DescribeInstancesResponseBodyInstances{
 							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{},
 						},
+						TotalCount: &totalCount,
+						PageNumber: &pageNumber,
+						PageSize:   &pageSize,
 					},
 				}
 				m.On("DescribeInstances", mock.Anything, mock.Anything).Return(getResponse, nil)

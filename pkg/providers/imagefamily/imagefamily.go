@@ -55,7 +55,7 @@ func NewProvider(ecsClient clients.ECSClient) *Provider {
 	return &Provider{
 		ecsClient: ecsClient,
 		cache:     make(map[string]*CacheEntry),
-		cacheTTL:  5 * time.Minute, // Cache for 5 minutes by default
+		cacheTTL:  2 * time.Hour, // Cache for 2 hours by default
 	}
 }
 
@@ -116,7 +116,6 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.ImageSelectorTe
 
 	// Check cache first
 	if images, exists := p.getCachedValue(cacheKey); exists {
-		logger.Info("Found images in cache")
 		return images.([]v1alpha1.Image), nil
 	}
 
@@ -131,7 +130,6 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.ImageSelectorTe
 			}
 			images, err := p.ecsClient.DescribeImages(ctx, nil, filters)
 			if err != nil {
-				logger.Error(err, "failed to describe images by family", "family", *term.ImageFamily)
 				return nil, fmt.Errorf("failed to describe images by family %s: %w", *term.ImageFamily, err)
 			}
 
@@ -146,7 +144,6 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.ImageSelectorTe
 			// Direct ID reference
 			images, err := p.ecsClient.DescribeImages(ctx, []string{*term.ID}, nil)
 			if err != nil {
-				logger.Error(err, "failed to describe image by ID", "id", *term.ID)
 				return nil, fmt.Errorf("failed to describe image by ID %s: %w", *term.ID, err)
 			}
 

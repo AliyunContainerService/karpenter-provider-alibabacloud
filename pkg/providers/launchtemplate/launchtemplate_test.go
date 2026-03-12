@@ -143,9 +143,11 @@ func TestCreate(t *testing.T) {
 			userData: "#!/bin/bash\\necho hello",
 			mockSetup: func(m *MockECSClient) {
 				ltID := "lt-123"
+				versionNumber := int64(1)
 				response := &ecs.CreateLaunchTemplateResponse{
 					Body: &ecs.CreateLaunchTemplateResponseBody{
-						LaunchTemplateId: &ltID,
+						LaunchTemplateId:            &ltID,
+						LaunchTemplateVersionNumber: &versionNumber,
 					},
 				}
 				m.On("CreateLaunchTemplate", mock.Anything, mock.Anything).Return(response, nil)
@@ -163,9 +165,11 @@ func TestCreate(t *testing.T) {
 			userData: "",
 			mockSetup: func(m *MockECSClient) {
 				ltID := "lt-456"
+				versionNumber := int64(1)
 				response := &ecs.CreateLaunchTemplateResponse{
 					Body: &ecs.CreateLaunchTemplateResponseBody{
-						LaunchTemplateId: &ltID,
+						LaunchTemplateId:            &ltID,
+						LaunchTemplateVersionNumber: &versionNumber,
 					},
 				}
 				m.On("CreateLaunchTemplate", mock.Anything, mock.Anything).Return(response, nil)
@@ -384,9 +388,11 @@ func TestResolve(t *testing.T) {
 			},
 			mockSetup: func(m *MockECSClient) {
 				ltID := "lt-new"
+				ltVersion := int64(1)
 				response := &ecs.CreateLaunchTemplateResponse{
 					Body: &ecs.CreateLaunchTemplateResponseBody{
-						LaunchTemplateId: &ltID,
+						LaunchTemplateId:            &ltID,
+						LaunchTemplateVersionNumber: &ltVersion,
 					},
 				}
 				m.On("CreateLaunchTemplate", mock.Anything, mock.Anything).Return(response, nil)
@@ -436,9 +442,11 @@ func TestCreateWithSecurityGroupsAndVSwitches(t *testing.T) {
 			},
 			mockSetup: func(m *MockECSClient) {
 				ltID := "lt-sg-test"
+				ltVersion := int64(1)
 				response := &ecs.CreateLaunchTemplateResponse{
 					Body: &ecs.CreateLaunchTemplateResponseBody{
-						LaunchTemplateId: &ltID,
+						LaunchTemplateId:            &ltID,
+						LaunchTemplateVersionNumber: &ltVersion,
 					},
 				}
 				m.On("CreateLaunchTemplate", mock.Anything, mock.MatchedBy(func(req *ecs.CreateLaunchTemplateRequest) bool {
@@ -461,9 +469,11 @@ func TestCreateWithSecurityGroupsAndVSwitches(t *testing.T) {
 			},
 			mockSetup: func(m *MockECSClient) {
 				ltID := "lt-vsw-test"
+				ltVersion := int64(1)
 				response := &ecs.CreateLaunchTemplateResponse{
 					Body: &ecs.CreateLaunchTemplateResponseBody{
-						LaunchTemplateId: &ltID,
+						LaunchTemplateId:            &ltID,
+						LaunchTemplateVersionNumber: &ltVersion,
 					},
 				}
 				m.On("CreateLaunchTemplate", mock.Anything, mock.MatchedBy(func(req *ecs.CreateLaunchTemplateRequest) bool {

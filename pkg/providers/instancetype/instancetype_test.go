@@ -133,19 +133,23 @@ func TestList(t *testing.T) {
 				instanceTypeId2 := "ecs.c6.xlarge"
 				cpuCoreCount2 := int32(4)
 				memorySize2 := float32(8.0)
+				cpuArchitecture1 := "X86"
+				cpuArchitecture2 := "X86"
 				instanceTypesResponse := &ecs.DescribeInstanceTypesResponse{
 					Body: &ecs.DescribeInstanceTypesResponseBody{
 						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
 							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
 								{
-									InstanceTypeId: &instanceTypeId1,
-									CpuCoreCount:   &cpuCoreCount1,
-									MemorySize:     &memorySize1,
+									InstanceTypeId:  &instanceTypeId1,
+									CpuCoreCount:    &cpuCoreCount1,
+									MemorySize:      &memorySize1,
+									CpuArchitecture: &cpuArchitecture1,
 								},
 								{
-									InstanceTypeId: &instanceTypeId2,
-									CpuCoreCount:   &cpuCoreCount2,
-									MemorySize:     &memorySize2,
+									InstanceTypeId:  &instanceTypeId2,
+									CpuCoreCount:    &cpuCoreCount2,
+									MemorySize:      &memorySize2,
+									CpuArchitecture: &cpuArchitecture2,
 								},
 							},
 						},
@@ -229,14 +233,16 @@ func TestGet(t *testing.T) {
 				instanceTypeId := "ecs.g6.large"
 				cpuCoreCount := int32(2)
 				memorySize := float32(8.0)
+				cpuArchitecture := "X86"
 				instanceTypesResponse := &ecs.DescribeInstanceTypesResponse{
 					Body: &ecs.DescribeInstanceTypesResponseBody{
 						InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
 							InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
 								{
-									InstanceTypeId: &instanceTypeId,
-									CpuCoreCount:   &cpuCoreCount,
-									MemorySize:     &memorySize,
+									InstanceTypeId:  &instanceTypeId,
+									CpuCoreCount:    &cpuCoreCount,
+									MemorySize:      &memorySize,
+									CpuArchitecture: &cpuArchitecture,
 								},
 							},
 						},
@@ -499,11 +505,13 @@ func TestConvertECSInstanceTypeWithGPU(t *testing.T) {
 				cpuCoreCount := int32(2)
 				memorySize := float32(8.0)
 				gpuAmount := int32(0)
+				cpuArchitecture := "X86"
 				return &ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
-					InstanceTypeId: &instanceTypeId,
-					CpuCoreCount:   &cpuCoreCount,
-					MemorySize:     &memorySize,
-					GPUAmount:      &gpuAmount,
+					InstanceTypeId:  &instanceTypeId,
+					CpuCoreCount:    &cpuCoreCount,
+					MemorySize:      &memorySize,
+					GPUAmount:       &gpuAmount,
+					CpuArchitecture: &cpuArchitecture,
 				}
 			}(),
 			expectGPU: false,
@@ -517,6 +525,7 @@ func TestConvertECSInstanceTypeWithGPU(t *testing.T) {
 				memorySize := float32(16.0)
 				gpuAmount := int32(1)
 				gpuSpec := "Tesla T4"
+				cpuArchitecture := "X86"
 				return &ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
 					InstanceTypeId:     &instanceTypeId,
 					InstanceTypeFamily: &instanceTypeFamily,
@@ -524,6 +533,7 @@ func TestConvertECSInstanceTypeWithGPU(t *testing.T) {
 					MemorySize:         &memorySize,
 					GPUAmount:          &gpuAmount,
 					GPUSpec:            &gpuSpec,
+					CpuArchitecture:    &cpuArchitecture,
 				}
 			}(),
 			expectGPU:      true,
@@ -538,6 +548,7 @@ func TestConvertECSInstanceTypeWithGPU(t *testing.T) {
 				memorySize := float32(192.0)
 				gpuAmount := int32(4)
 				gpuSpec := "Tesla A100"
+				cpuArchitecture := "X86"
 				return &ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
 					InstanceTypeId:     &instanceTypeId,
 					InstanceTypeFamily: &instanceTypeFamily,
@@ -545,6 +556,7 @@ func TestConvertECSInstanceTypeWithGPU(t *testing.T) {
 					MemorySize:         &memorySize,
 					GPUAmount:          &gpuAmount,
 					GPUSpec:            &gpuSpec,
+					CpuArchitecture:    &cpuArchitecture,
 				}
 			}(),
 			expectGPU:      true,

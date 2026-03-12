@@ -48,7 +48,7 @@ func NewProvider(region string, ecsClient clients.ECSClient) *Provider {
 		region:    region,
 		ecsClient: ecsClient,
 		cache:     make(map[string]*CacheEntry),
-		cacheTTL:  5 * time.Minute, // Cache for 5 minutes by default
+		cacheTTL:  2 * time.Hour, // Cache for 2 hours by default
 	}
 }
 
@@ -125,7 +125,6 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.SecurityGroupSe
 			// Tag-based selection
 			sgs, err := p.getByTags(ctx, term.Tags)
 			if err != nil {
-				logger.Error(err, "failed to get security groups by tags", "tags", term.Tags)
 				return nil, fmt.Errorf("failed to get security groups by tags %v: %w", term.Tags, err)
 			}
 			securityGroups = append(securityGroups, sgs...)
@@ -143,12 +142,10 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.SecurityGroupSe
 
 // getByTags gets security groups by tags
 func (p *Provider) getByTags(ctx context.Context, tags map[string]string) ([]v1alpha1.SecurityGroup, error) {
-	logger := log.FromContext(ctx)
 
 	// Execute request
 	response, err := p.ecsClient.DescribeSecurityGroups(ctx, tags)
 	if err != nil || response == nil || len(response.Body.SecurityGroups.SecurityGroup) == 0 {
-		logger.Error(err, "failed to describe security groups")
 		return nil, fmt.Errorf("failed to describe security groups: %w", err)
 	}
 

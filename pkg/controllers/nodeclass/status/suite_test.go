@@ -248,39 +248,31 @@ var _ = Describe("StatusController", func() {
 		})
 
 		It("should set error condition when VSwitch resolution fails", func() {
-			// Setup mock to return error
+			// Setup mock to return error for VSwitch
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(nil, fmt.Errorf("VPC API error"))
 
-			sgId := "sg-test-123"
+			// Controller continues processing even after VSwitch error, so we need to mock other APIs
 			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
-						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{},
 					},
 				},
 			}, nil)
 
-			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
-			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
-				{ImageId: &imageId},
-			}, nil)
+			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{}, nil)
 
-			roleName := "KarpenterNodeRole"
-			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
-			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Body: &ram.GetRoleResponseBody{
-					Role: &ram.GetRoleResponseBodyRole{
-						RoleName:                 &roleName,
-						AssumeRolePolicyDocument: &assumeRolePolicy,
-					},
-				},
-			}, nil)
+			mockRAMClient.On("GetRole", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("role not found"))
 
+			// Note: Controller returns error when VSwitch resolution fails to trigger requeue
+			// But it still updates the status before returning the error
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			_, err := statusController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClass),
 			})
-			Expect(err).ToNot(HaveOccurred())
+			// Controller returns error to trigger rate limiter backoff
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to resolve vswitches"))
 
 			updated := &v1alpha1.ECSNodeClass{}
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
@@ -330,8 +322,10 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			imageName := "Alibaba Cloud Linux 3"
+			arch := "x86_64"
 			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
-				{ImageId: &imageId},
+				{ImageId: &imageId, ImageName: &imageName, Architecture: &arch},
 			}, nil)
 
 			roleName := "KarpenterNodeRole"
@@ -369,10 +363,11 @@ var _ = Describe("StatusController", func() {
 
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
+			availableIps := int64(100)
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
-						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
 					},
 				},
 			}, nil)
@@ -393,8 +388,10 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			imageName := "Alibaba Cloud Linux 3"
+			arch := "x86_64"
 			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
-				{ImageId: &imageId},
+				{ImageId: &imageId, ImageName: &imageName, Architecture: &arch},
 			}, nil)
 
 			roleName := "KarpenterNodeRole"
@@ -436,41 +433,38 @@ var _ = Describe("StatusController", func() {
 
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+			availableIps := int64(100)
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
-						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
 					},
 				},
 			}, nil)
 
 			mockECSClient.On("DescribeSecurityGroups", mock.Anything, map[string]string{"test": "error"}).Return(nil, fmt.Errorf("ECS API error"))
 
-			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
-			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
-				{ImageId: &imageId},
-			}, nil)
-
-			roleName := "KarpenterNodeRole"
-			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
-			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Body: &ram.GetRoleResponseBody{
-					Role: &ram.GetRoleResponseBodyRole{
-						RoleName:                 &roleName,
-						AssumeRolePolicyDocument: &assumeRolePolicy,
-					},
-				},
-			}, nil)
+			// Controller continues processing even after SecurityGroup error
+			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{}, nil)
+			mockRAMClient.On("GetRole", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("role not found"))
 
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			_, err := statusController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClass),
 			})
-			Expect(err).ToNot(HaveOccurred())
+			// Controller returns error to trigger rate limiter backoff
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to resolve security groups"))
 
 			updated := &v1alpha1.ECSNodeClass{}
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
 
+			// VSwitch should be resolved successfully
+			vswitchCondition := getCondition(updated, v1alpha1.ConditionTypeVSwitchResolved)
+			Expect(vswitchCondition).ToNot(BeNil())
+			Expect(vswitchCondition.Status).To(Equal(metav1.ConditionTrue))
+
+			// SecurityGroup should have error condition
 			condition := getCondition(updated, v1alpha1.ConditionTypeSecurityGroupResolved)
 			Expect(condition).ToNot(BeNil())
 			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
@@ -484,10 +478,11 @@ var _ = Describe("StatusController", func() {
 
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
+			availableIps := int64(100)
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
-						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
 					},
 				},
 			}, nil)
@@ -508,8 +503,10 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			imageName := "Alibaba Cloud Linux 3"
+			arch := "x86_64"
 			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
-				{ImageId: &imageId},
+				{ImageId: &imageId, ImageName: &imageName, Architecture: &arch},
 			}, nil)
 
 			roleName := "KarpenterNodeRole"
@@ -542,10 +539,11 @@ var _ = Describe("StatusController", func() {
 		It("should resolve Images successfully and set status", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
+			availableIps := int64(100)
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
-						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
 					},
 				},
 			}, nil)
@@ -603,10 +601,11 @@ var _ = Describe("StatusController", func() {
 		It("should set error condition when Image resolution fails", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+			availableIps := int64(100)
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
-						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
 					},
 				},
 			}, nil)
@@ -622,26 +621,30 @@ var _ = Describe("StatusController", func() {
 
 			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return(nil, fmt.Errorf("Image not found"))
 
-			roleName := "KarpenterNodeRole"
-			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
-			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Body: &ram.GetRoleResponseBody{
-					Role: &ram.GetRoleResponseBodyRole{
-						RoleName:                 &roleName,
-						AssumeRolePolicyDocument: &assumeRolePolicy,
-					},
-				},
-			}, nil)
+			// Controller continues processing even after Image error
+			mockRAMClient.On("GetRole", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("role not found"))
 
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			_, err := statusController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClass),
 			})
-			Expect(err).ToNot(HaveOccurred())
+			// Controller returns error to trigger rate limiter backoff
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to resolve images"))
 
 			updated := &v1alpha1.ECSNodeClass{}
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
 
+			// VSwitch and SecurityGroup should be resolved successfully
+			vswitchCondition := getCondition(updated, v1alpha1.ConditionTypeVSwitchResolved)
+			Expect(vswitchCondition).ToNot(BeNil())
+			Expect(vswitchCondition.Status).To(Equal(metav1.ConditionTrue))
+
+			sgCondition := getCondition(updated, v1alpha1.ConditionTypeSecurityGroupResolved)
+			Expect(sgCondition).ToNot(BeNil())
+			Expect(sgCondition.Status).To(Equal(metav1.ConditionTrue))
+
+			// Image should have error condition
 			condition := getCondition(updated, v1alpha1.ConditionTypeImageResolved)
 			Expect(condition).ToNot(BeNil())
 			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
@@ -653,10 +656,11 @@ var _ = Describe("StatusController", func() {
 		It("should validate RAM role successfully and set status", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
+			availableIps := int64(100)
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
-						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
 					},
 				},
 			}, nil)
@@ -671,8 +675,10 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			imageName := "Alibaba Cloud Linux 3"
+			arch := "x86_64"
 			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
-				{ImageId: &imageId},
+				{ImageId: &imageId, ImageName: &imageName, Architecture: &arch},
 			}, nil)
 
 			roleName := "KarpenterNodeRole"
@@ -707,10 +713,11 @@ var _ = Describe("StatusController", func() {
 		It("should set error condition when RAM role validation fails", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+			availableIps := int64(100)
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
-						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
 					},
 				},
 			}, nil)
@@ -725,8 +732,10 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			imageName := "Alibaba Cloud Linux 3"
+			arch := "x86_64"
 			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
-				{ImageId: &imageId},
+				{ImageId: &imageId, ImageName: &imageName, Architecture: &arch},
 			}, nil)
 
 			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(nil, fmt.Errorf("role not found"))
@@ -735,11 +744,27 @@ var _ = Describe("StatusController", func() {
 			_, err := statusController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClass),
 			})
-			Expect(err).ToNot(HaveOccurred())
+			// Controller returns error to trigger rate limiter backoff
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to validate RAM role"))
 
 			updated := &v1alpha1.ECSNodeClass{}
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
 
+			// VSwitch, SecurityGroup, and Image should be resolved successfully
+			vswitchCondition := getCondition(updated, v1alpha1.ConditionTypeVSwitchResolved)
+			Expect(vswitchCondition).ToNot(BeNil())
+			Expect(vswitchCondition.Status).To(Equal(metav1.ConditionTrue))
+
+			sgCondition := getCondition(updated, v1alpha1.ConditionTypeSecurityGroupResolved)
+			Expect(sgCondition).ToNot(BeNil())
+			Expect(sgCondition.Status).To(Equal(metav1.ConditionTrue))
+
+			imageCondition := getCondition(updated, v1alpha1.ConditionTypeImageResolved)
+			Expect(imageCondition).ToNot(BeNil())
+			Expect(imageCondition.Status).To(Equal(metav1.ConditionTrue))
+
+			// RAM role should have error condition
 			condition := getCondition(updated, v1alpha1.ConditionTypeRAMRoleResolved)
 			Expect(condition).ToNot(BeNil())
 			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
@@ -750,10 +775,11 @@ var _ = Describe("StatusController", func() {
 
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
+			availableIps := int64(100)
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
-						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
 					},
 				},
 			}, nil)
@@ -768,8 +794,10 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			imageName := "Alibaba Cloud Linux 3"
+			arch := "x86_64"
 			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
-				{ImageId: &imageId},
+				{ImageId: &imageId, ImageName: &imageName, Architecture: &arch},
 			}, nil)
 
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
@@ -790,10 +818,11 @@ var _ = Describe("StatusController", func() {
 		It("should set Ready to true when all resources are resolved", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
+			availableIps := int64(100)
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
-						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
 					},
 				},
 			}, nil)
@@ -808,8 +837,10 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			imageName := "Alibaba Cloud Linux 3"
+			arch := "x86_64"
 			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
-				{ImageId: &imageId},
+				{ImageId: &imageId, ImageName: &imageName, Architecture: &arch},
 			}, nil)
 
 			roleName := "KarpenterNodeRole"
@@ -840,38 +871,26 @@ var _ = Describe("StatusController", func() {
 		})
 
 		It("should set Ready to false when any resource resolution fails", func() {
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(nil, fmt.Errorf("VPC error"))
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(nil, fmt.Errorf("VPC error"))
 
-			sgId := "sg-test-123"
+			// Controller continues processing even after VSwitch error
 			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
-						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{},
 					},
 				},
 			}, nil)
-
-			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
-			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
-				{ImageId: &imageId},
-			}, nil)
-
-			roleName := "KarpenterNodeRole"
-			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
-			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
-				Body: &ram.GetRoleResponseBody{
-					Role: &ram.GetRoleResponseBodyRole{
-						RoleName:                 &roleName,
-						AssumeRolePolicyDocument: &assumeRolePolicy,
-					},
-				},
-			}, nil)
+			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{}, nil)
+			mockRAMClient.On("GetRole", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("role not found"))
 
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			_, err := statusController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClass),
 			})
-			Expect(err).ToNot(HaveOccurred())
+			// Controller returns error to trigger rate limiter backoff
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to resolve vswitches"))
 
 			updated := &v1alpha1.ECSNodeClass{}
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
@@ -900,10 +919,11 @@ var _ = Describe("StatusController", func() {
 		It("should update status on subsequent reconciliations", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
+			availableIps := int64(100)
 			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
-						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId}},
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
 					},
 				},
 			}, nil)
@@ -918,8 +938,10 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			imageId := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			imageName := "Alibaba Cloud Linux 3"
+			arch := "x86_64"
 			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{
-				{ImageId: &imageId},
+				{ImageId: &imageId, ImageName: &imageName, Architecture: &arch},
 			}, nil)
 
 			roleName := "KarpenterNodeRole"
