@@ -19,7 +19,10 @@ package v1alpha1
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
+
+var ramRoleNameRegex = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
 // Validate validates the ECSNodeClass spec
 func (nc *ECSNodeClass) Validate() error {
@@ -39,6 +42,9 @@ func (nc *ECSNodeClass) Validate() error {
 		return err
 	}
 	if err := nc.validateImageSelectors(); err != nil {
+		return err
+	}
+	if err := nc.validateRole(); err != nil {
 		return err
 	}
 	if err := nc.validateSystemDisk(); err != nil {
@@ -101,6 +107,26 @@ func (nc *ECSNodeClass) validateTags() error {
 		if restricted[key] {
 			return fmt.Errorf("tags contains restricted key %q", key)
 		}
+	}
+	return nil
+}
+
+func (nc *ECSNodeClass) validateRole() error {
+	if nc.Spec.Role == nil {
+		return nil
+	}
+	role := *nc.Spec.Role
+	if role != strings.TrimSpace(role) {
+		return fmt.Errorf("role must not contain leading or trailing whitespace")
+	}
+	if len(role) < 1 || len(role) > 64 {
+		return fmt.Errorf("role must be between 1 and 64 characters")
+	}
+	if strings.HasPrefix(role, "acs:ram::") && strings.Contains(role, ":role/") {
+		return fmt.Errorf("role must be a RAM role name, not an ARN")
+	}
+	if !ramRoleNameRegex.MatchString(role) {
+		return fmt.Errorf("role must match ^[A-Za-z0-9._-]{1,64}$")
 	}
 	return nil
 }

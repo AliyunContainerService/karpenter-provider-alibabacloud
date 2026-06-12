@@ -19,12 +19,13 @@ package v1alpha1
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/yaml"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
+	"sigs.k8s.io/yaml"
 )
 
 func TestECSNodeClassValidateRejectsRestrictedTags(t *testing.T) {
@@ -215,6 +216,63 @@ func TestECSNodeClassValidateRejectsLaunchTemplateConflictByField(t *testing.T) 
 			tt.mutate(nodeClass)
 
 			require.ErrorContains(t, nodeClass.Validate(), "launchTemplateID cannot be combined")
+		})
+	}
+}
+
+func TestECSNodeClassValidateRole(t *testing.T) {
+	tests := []struct {
+		name        string
+		role        *string
+		expectError bool
+	}{
+		{
+			name: "nil role",
+			role: nil,
+		},
+		{
+			name: "valid role",
+			role: ptrForUnit("KarpenterNodeRole_1.2-3"),
+		},
+		{
+			name:        "empty role",
+			role:        ptrForUnit(""),
+			expectError: true,
+		},
+		{
+			name:        "whitespace role",
+			role:        ptrForUnit(" KarpenterNodeRole"),
+			expectError: true,
+		},
+		{
+			name:        "arn role",
+			role:        ptrForUnit("acs:ram::1234567890123456:role/KarpenterNodeRole"),
+			expectError: true,
+		},
+		{
+			name:        "malformed role",
+			role:        ptrForUnit("Karpenter/NodeRole"),
+			expectError: true,
+		},
+		{
+			name:        "over length role",
+			role:        ptrForUnit(strings.Repeat("a", 65)),
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nodeClass := validValidationNodeClassForUnit()
+			nodeClass.Spec.Role = tt.role
+
+			err := nodeClass.Validate()
+			if tt.expectError && err == nil {
+				t.Fatal("expected error")
+			}
+			if !tt.expectError && err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
 		})
 	}
 }

@@ -854,6 +854,11 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClaim *
 		return "", fmt.Errorf("missing required parameters for instance creation")
 	}
 
+	ramRoleName, err := validateRAMRoleForCreate(nodeClass)
+	if err != nil {
+		return "", err
+	}
+
 	instanceType := instanceTypes[0]
 	image := images[0]
 	securityGroupIDs := make([]string, 0, len(securityGroups))
@@ -868,6 +873,7 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClaim *
 		SecurityGroupIDs: securityGroupIDs,
 		UserData:         userData,
 		Tags:             tags,
+		RAMRoleName:      ramRoleName,
 		SystemDisk: instance.SystemDisk{
 			Category:         "cloud_essd",
 			Size:             40,
@@ -949,6 +955,19 @@ func vswitchFallbackCreate(ctx context.Context, baseOpts instance.CreateOptions,
 		return "", fmt.Errorf("failed to create instance: %w", err)
 	}
 	return "", fmt.Errorf("all vSwitches exhausted, last error: %w", lastErr)
+}
+
+func validateRAMRoleForCreate(nodeClass *v1alpha1.ECSNodeClass) (string, error) {
+	if nodeClass.Spec.Role == nil {
+		return "", nil
+	}
+	if nodeClass.Status.RAMRole == nil {
+		return "", fmt.Errorf("nodeclass status.ramRole is not resolved for spec.role %q", *nodeClass.Spec.Role)
+	}
+	if *nodeClass.Status.RAMRole != *nodeClass.Spec.Role {
+		return "", fmt.Errorf("nodeclass status.ramRole %q does not match spec.role %q; status may be stale", *nodeClass.Status.RAMRole, *nodeClass.Spec.Role)
+	}
+	return *nodeClass.Status.RAMRole, nil
 }
 
 func (c *CloudProvider) convertInstanceToNodeClaim(ctx context.Context, inst *instance.Instance, original *coreapis.NodeClaim, instanceTypes []*instancetype.InstanceType, clusterID string) *coreapis.NodeClaim {

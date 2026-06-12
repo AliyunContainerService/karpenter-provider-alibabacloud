@@ -160,6 +160,33 @@ func TestCreate(t *testing.T) {
 			},
 		},
 		{
+			name: "sets RAM role name",
+			opts: CreateOptions{
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: []string{"sg-123"},
+				RAMRoleName:      "KarpenterNodeRole",
+				SystemDisk: SystemDisk{
+					Category: "cloud_essd",
+					Size:     40,
+				},
+			},
+			mockSetup: func(m *MockECSClient) {
+				instanceID := "i-123456"
+				response := &ecs.RunInstancesResponse{
+					Body: &ecs.RunInstancesResponseBody{
+						InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
+							InstanceIdSet: []*string{&instanceID},
+						},
+					},
+				}
+				m.On("RunInstances", mock.Anything, mock.MatchedBy(func(request *ecs.RunInstancesRequest) bool {
+					return request.RamRoleName != nil && *request.RamRoleName == "KarpenterNodeRole"
+				})).Return(response, nil)
+			},
+		},
+		{
 			name: "API error",
 			opts: CreateOptions{
 				InstanceType:     "ecs.g6.large",

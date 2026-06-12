@@ -64,6 +64,7 @@ type CreateOptions struct {
 	DataDisks           []DataDisk
 	SpotStrategy        string
 	SpotPriceLimit      float64
+	RAMRoleName         string
 	InstanceStorePolicy *string // Add instance store policy field
 	Ipv6AddressCount    *int32
 }
@@ -214,6 +215,10 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 
 	if opts.Ipv6AddressCount != nil && *opts.Ipv6AddressCount > 0 {
 		request.Ipv6AddressCount = opts.Ipv6AddressCount
+	}
+
+	if opts.RAMRoleName != "" {
+		request.RamRoleName = tea.String(opts.RAMRoleName)
 	}
 
 	// Set system disk
