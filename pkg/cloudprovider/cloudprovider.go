@@ -874,6 +874,7 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClaim *
 		UserData:         userData,
 		Tags:             tags,
 		RAMRoleName:      ramRoleName,
+		MetadataOptions:  convertMetadataOptions(nodeClass.Spec.MetadataOptions),
 		SystemDisk: instance.SystemDisk{
 			Category:         "cloud_essd",
 			Size:             40,
@@ -955,6 +956,26 @@ func vswitchFallbackCreate(ctx context.Context, baseOpts instance.CreateOptions,
 		return "", fmt.Errorf("failed to create instance: %w", err)
 	}
 	return "", fmt.Errorf("all vSwitches exhausted, last error: %w", lastErr)
+}
+
+func convertMetadataOptions(opts *v1alpha1.MetadataOptions) *instance.MetadataOptions {
+	if opts == nil {
+		return nil
+	}
+	converted := &instance.MetadataOptions{}
+	if opts.HttpEndpoint != nil && *opts.HttpEndpoint != "" {
+		endpoint := *opts.HttpEndpoint
+		converted.HttpEndpoint = &endpoint
+	}
+	if opts.HttpTokens != "" {
+		tokens := opts.HttpTokens
+		converted.HttpTokens = &tokens
+	}
+	if opts.HttpPutResponseHopLimit != nil {
+		hopLimit := *opts.HttpPutResponseHopLimit
+		converted.HttpPutResponseHopLimit = &hopLimit
+	}
+	return converted
 }
 
 func validateRAMRoleForCreate(nodeClass *v1alpha1.ECSNodeClass) (string, error) {
@@ -1074,6 +1095,7 @@ func calculateNodeClassHash(nodeClass *v1alpha1.ECSNodeClass) string {
 		Kubelet                    *v1alpha1.KubeletConfiguration       `json:"kubelet,omitempty"`
 		Tags                       map[string]string                    `json:"tags,omitempty"`
 		Role                       *string                              `json:"role,omitempty"`
+		MetadataOptions            *v1alpha1.MetadataOptions            `json:"metadataOptions,omitempty"`
 	}
 
 	hashInput := NodeClassHashInput{
@@ -1084,6 +1106,7 @@ func calculateNodeClassHash(nodeClass *v1alpha1.ECSNodeClass) string {
 		Kubelet:                    nodeClass.Spec.Kubelet,
 		Tags:                       nodeClass.Spec.Tags,
 		Role:                       nodeClass.Spec.Role,
+		MetadataOptions:            nodeClass.Spec.MetadataOptions,
 	}
 
 	// Serialize to JSON with deterministic ordering

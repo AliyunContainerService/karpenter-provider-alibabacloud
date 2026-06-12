@@ -73,13 +73,7 @@ func (nc *ECSNodeClass) Default(ctx context.Context, obj runtime.Object) error {
 	}
 
 	// Set default metadata options
-	if nc.Spec.MetadataOptions == nil {
-		hopLimit := int32(1)
-		nc.Spec.MetadataOptions = &MetadataOptions{
-			HttpTokens:              "optional",
-			HttpPutResponseHopLimit: &hopLimit,
-		}
-	} else {
+	if nc.Spec.MetadataOptions != nil {
 		if nc.Spec.MetadataOptions.HttpTokens == "" {
 			nc.Spec.MetadataOptions.HttpTokens = "optional"
 		}

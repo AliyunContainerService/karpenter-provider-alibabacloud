@@ -65,8 +65,16 @@ type CreateOptions struct {
 	SpotStrategy        string
 	SpotPriceLimit      float64
 	RAMRoleName         string
+	MetadataOptions     *MetadataOptions
 	InstanceStorePolicy *string // Add instance store policy field
 	Ipv6AddressCount    *int32
+}
+
+// MetadataOptions represents metadata service options for instance creation.
+type MetadataOptions struct {
+	HttpEndpoint            *string
+	HttpTokens              *string
+	HttpPutResponseHopLimit *int32
 }
 
 // SystemDisk represents system disk configuration
@@ -221,6 +229,8 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 		request.RamRoleName = tea.String(opts.RAMRoleName)
 	}
 
+	applyMetadataOptions(request, opts.MetadataOptions)
+
 	// Set system disk
 	request.SystemDisk = &ecs.RunInstancesRequestSystemDisk{
 		Category: tea.String(opts.SystemDisk.Category),
@@ -306,6 +316,21 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 	logger.Info("created instance", "instanceID", instanceID)
 
 	return instanceID, nil
+}
+
+func applyMetadataOptions(req *ecs.RunInstancesRequest, opts *MetadataOptions) {
+	if opts == nil {
+		return
+	}
+	if opts.HttpEndpoint != nil && *opts.HttpEndpoint != "" {
+		req.HttpEndpoint = tea.String(*opts.HttpEndpoint)
+	}
+	if opts.HttpTokens != nil && *opts.HttpTokens != "" {
+		req.HttpTokens = tea.String(*opts.HttpTokens)
+	}
+	if opts.HttpPutResponseHopLimit != nil {
+		req.HttpPutResponseHopLimit = tea.Int32(*opts.HttpPutResponseHopLimit)
+	}
 }
 
 // Get retrieves an ECS instance by ID

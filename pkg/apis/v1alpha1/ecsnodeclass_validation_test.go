@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -298,4 +299,89 @@ func validValidationNodeClassForUnit() *ECSNodeClass {
 
 func ptrForUnit[T any](v T) *T {
 	return &v
+}
+
+func TestECSNodeClassValidateMetadataOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		metadata    *MetadataOptions
+		expectError bool
+	}{
+		{
+			name: "valid endpoint disabled",
+			metadata: &MetadataOptions{
+				HttpEndpoint: ptrForUnit("disabled"),
+				HttpTokens:   "optional",
+			},
+		},
+		{
+			name: "invalid endpoint",
+			metadata: &MetadataOptions{
+				HttpEndpoint: ptrForUnit("not-enabled"),
+				HttpTokens:   "optional",
+			},
+			expectError: true,
+		},
+		{
+			name: "invalid tokens",
+			metadata: &MetadataOptions{
+				HttpTokens: "sometimes",
+			},
+			expectError: true,
+		},
+		{
+			name: "invalid hop limit",
+			metadata: &MetadataOptions{
+				HttpTokens:              "optional",
+				HttpPutResponseHopLimit: ptrForUnit(int32(65)),
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nodeClass := validValidationNodeClassForUnit()
+			nodeClass.Spec.MetadataOptions = tt.metadata
+
+			err := nodeClass.Validate()
+			if tt.expectError && err == nil {
+				t.Fatal("expected error")
+			}
+			if !tt.expectError && err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestECSNodeClassDefaultMetadataOptions(t *testing.T) {
+	t.Run("omitted parent remains nil", func(t *testing.T) {
+		nodeClass := validValidationNodeClassForUnit()
+
+		if err := nodeClass.Default(context.Background(), nodeClass); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if nodeClass.Spec.MetadataOptions != nil {
+			t.Fatalf("expected metadataOptions to remain nil, got %#v", nodeClass.Spec.MetadataOptions)
+		}
+	})
+
+	t.Run("provided parent defaults existing child defaults without defaulting endpoint", func(t *testing.T) {
+		nodeClass := validValidationNodeClassForUnit()
+		nodeClass.Spec.MetadataOptions = &MetadataOptions{}
+
+		if err := nodeClass.Default(context.Background(), nodeClass); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if nodeClass.Spec.MetadataOptions.HttpTokens != "optional" {
+			t.Fatalf("expected HttpTokens optional, got %q", nodeClass.Spec.MetadataOptions.HttpTokens)
+		}
+		if nodeClass.Spec.MetadataOptions.HttpPutResponseHopLimit == nil || *nodeClass.Spec.MetadataOptions.HttpPutResponseHopLimit != 1 {
+			t.Fatalf("expected HttpPutResponseHopLimit 1, got %#v", nodeClass.Spec.MetadataOptions.HttpPutResponseHopLimit)
+		}
+		if nodeClass.Spec.MetadataOptions.HttpEndpoint != nil {
+			t.Fatalf("expected HttpEndpoint to remain nil, got %q", *nodeClass.Spec.MetadataOptions.HttpEndpoint)
+		}
+	})
 }

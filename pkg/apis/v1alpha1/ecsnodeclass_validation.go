@@ -347,6 +347,12 @@ func (nc *ECSNodeClass) validateMetadataOptions() error {
 	if !validTokens[nc.Spec.MetadataOptions.HttpTokens] {
 		return fmt.Errorf("metadataOptions.httpTokens must be one of: optional, required")
 	}
+	if nc.Spec.MetadataOptions.HttpEndpoint != nil {
+		validEndpoints := map[string]bool{"enabled": true, "disabled": true}
+		if !validEndpoints[*nc.Spec.MetadataOptions.HttpEndpoint] {
+			return fmt.Errorf("metadataOptions.httpEndpoint must be one of: enabled, disabled")
+		}
+	}
 	if nc.Spec.MetadataOptions.HttpPutResponseHopLimit != nil {
 		if *nc.Spec.MetadataOptions.HttpPutResponseHopLimit < 1 || *nc.Spec.MetadataOptions.HttpPutResponseHopLimit > 64 {
 			return fmt.Errorf("metadataOptions.httpPutResponseHopLimit must be between 1 and 64")

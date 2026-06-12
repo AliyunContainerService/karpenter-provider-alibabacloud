@@ -746,3 +746,98 @@ func TestNotFoundError(t *testing.T) {
 	regularErr := errors.New("regular error")
 	assert.False(t, IsNotFoundError(regularErr))
 }
+
+func TestCreateMetadataOptions(t *testing.T) {
+	tests := []struct {
+		name   string
+		opts   CreateOptions
+		assert func(*testing.T, *ecs.RunInstancesRequest)
+	}{
+		{
+			name: "nil metadata options omits request fields",
+			opts: CreateOptions{
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: []string{"sg-123"},
+				SystemDisk: SystemDisk{
+					Category: "cloud_essd",
+					Size:     40,
+				},
+			},
+			assert: func(t *testing.T, request *ecs.RunInstancesRequest) {
+				assert.Nil(t, request.HttpEndpoint)
+				assert.Nil(t, request.HttpTokens)
+				assert.Nil(t, request.HttpPutResponseHopLimit)
+			},
+		},
+		{
+			name: "sets non-empty metadata options",
+			opts: CreateOptions{
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: []string{"sg-123"},
+				SystemDisk: SystemDisk{
+					Category: "cloud_essd",
+					Size:     40,
+				},
+				MetadataOptions: &MetadataOptions{
+					HttpEndpoint:            stringPtr("disabled"),
+					HttpTokens:              stringPtr("required"),
+					HttpPutResponseHopLimit: int32Ptr(2),
+				},
+			},
+			assert: func(t *testing.T, request *ecs.RunInstancesRequest) {
+				assert.Equal(t, "disabled", *request.HttpEndpoint)
+				assert.Equal(t, "required", *request.HttpTokens)
+				assert.Equal(t, int32(2), *request.HttpPutResponseHopLimit)
+			},
+		},
+		{
+			name: "empty metadata strings are omitted",
+			opts: CreateOptions{
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: []string{"sg-123"},
+				SystemDisk: SystemDisk{
+					Category: "cloud_essd",
+					Size:     40,
+				},
+				MetadataOptions: &MetadataOptions{
+					HttpEndpoint: stringPtr(""),
+					HttpTokens:   stringPtr(""),
+				},
+			},
+			assert: func(t *testing.T, request *ecs.RunInstancesRequest) {
+				assert.Nil(t, request.HttpEndpoint)
+				assert.Nil(t, request.HttpTokens)
+				assert.Nil(t, request.HttpPutResponseHopLimit)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := new(MockECSClient)
+			instanceID := "i-123456"
+			response := &ecs.RunInstancesResponse{
+				Body: &ecs.RunInstancesResponseBody{
+					InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
+						InstanceIdSet: []*string{&instanceID},
+					},
+				},
+			}
+			mockClient.On("RunInstances", mock.Anything, mock.MatchedBy(func(request *ecs.RunInstancesRequest) bool {
+				tt.assert(t, request)
+				return true
+			})).Return(response, nil)
+
+			provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+			_, err := provider.Create(context.Background(), tt.opts)
+			assert.NoError(t, err)
+			mockClient.AssertExpectations(t)
+		})
+	}
+}

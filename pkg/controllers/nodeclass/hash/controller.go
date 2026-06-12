@@ -71,6 +71,7 @@ func computeHash(spec v1alpha1.ECSNodeClassSpec) (string, error) {
 		Role                             *string                                    `json:"role,omitempty"`
 		CapacityReservationPreference    *string                                    `json:"capacityReservationPreference,omitempty"`
 		CapacityReservationSelectorTerms []v1alpha1.CapacityReservationSelectorTerm `json:"capacityReservationSelectorTerms,omitempty"`
+		MetadataOptions                  *v1alpha1.MetadataOptions                  `json:"metadataOptions,omitempty"`
 	}
 
 	hashInput := nodeClassHashInput{
@@ -85,6 +86,7 @@ func computeHash(spec v1alpha1.ECSNodeClassSpec) (string, error) {
 		Role:                             spec.Role,
 		CapacityReservationPreference:    spec.CapacityReservationPreference,
 		CapacityReservationSelectorTerms: spec.CapacityReservationSelectorTerms,
+		MetadataOptions:                  spec.MetadataOptions,
 	}
 	data, err := json.Marshal(hashInput)
 	if err != nil {
