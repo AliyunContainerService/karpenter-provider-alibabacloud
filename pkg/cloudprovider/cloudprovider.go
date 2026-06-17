@@ -153,10 +153,10 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
 		return nil, fmt.Errorf("no images available in nodeclass status")
 	}
 
-	// 5. Get VSwitches from NodeClass status
-	vswitches := nodeClass.Status.VSwitches
+	// 5. Get VSwitches from NodeClass status, filtered by zone requirements
+	vswitches := filterVSwitchesByZones(nodeClass.Status.VSwitches, zonesFromRequirements(nodeClaim.Spec.Requirements))
 	if len(vswitches) == 0 {
-		return nil, fmt.Errorf("no vswitches available in nodeclass status")
+		return nil, fmt.Errorf("no vswitches available matching the zone requirements")
 	}
 
 	// 6. Get SecurityGroups from NodeClass status
@@ -613,6 +613,40 @@ func buildInstanceTags(nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNod
 	}
 
 	return tags
+}
+
+// zonesFromRequirements extracts the allowed zones from a NodeClaim's requirements.
+// Returns nil when no topology.kubernetes.io/zone requirement is present (meaning any zone is allowed).
+func zonesFromRequirements(requirements []coreapis.NodeSelectorRequirementWithMinValues) []string {
+	for _, req := range requirements {
+		if req.Key == corev1.LabelTopologyZone && req.Operator == corev1.NodeSelectorOpIn {
+			return req.Values
+		}
+	}
+	return nil
+}
+
+// filterVSwitchesByZones returns only the vswitches whose zone matches one of the allowed zones.
+// When allowedZones is nil (no zone requirement), all vswitches are returned unchanged.
+func filterVSwitchesByZones(vswitches []v1alpha1.VSwitch, allowedZones []string) []v1alpha1.VSwitch {
+	if len(allowedZones) == 0 {
+		return vswitches
+	}
+	allowed := make(map[string]struct{}, len(allowedZones))
+	for _, z := range allowedZones {
+		allowed[z] = struct{}{}
+	}
+	var filtered []v1alpha1.VSwitch
+	for _, vs := range vswitches {
+		zone := vs.ZoneID
+		if zone == "" {
+			zone = vs.Zone
+		}
+		if _, ok := allowed[zone]; ok {
+			filtered = append(filtered, vs)
+		}
+	}
+	return filtered
 }
 
 // filterInstanceTypesByRequirements converts Karpenter requirements to instancetype requirements and filters
