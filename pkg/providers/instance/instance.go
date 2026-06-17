@@ -29,6 +29,7 @@ import (
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/batcher"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/errors"
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/utils/securitygroups"
 	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"github.com/alibabacloud-go/tea/tea"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -184,17 +185,23 @@ func (p *Provider) deleteCachedInstance(instanceID string) {
 func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, error) {
 	logger := log.FromContext(ctx)
 
-	// Create instance request
-	request := &ecs.RunInstancesRequest{
-		RegionId:     tea.String(p.region),
-		InstanceType: tea.String(opts.InstanceType),
-		ImageId:      tea.String(opts.ImageID),
-		VSwitchId:    tea.String(opts.VSwitchID),
+	securityGroupIDs := securitygroups.NormalizeIDs(opts.SecurityGroupIDs)
+	if len(securityGroupIDs) == 0 {
+		return "", fmt.Errorf("at least one security group ID is required")
+	}
+	for _, id := range securityGroupIDs {
+		if id == "" {
+			return "", fmt.Errorf("security group ID cannot be empty")
+		}
 	}
 
-	// Set security group IDs
-	if len(opts.SecurityGroupIDs) > 0 {
-		request.SecurityGroupId = tea.String(opts.SecurityGroupIDs[0])
+	// Create instance request
+	request := &ecs.RunInstancesRequest{
+		RegionId:         tea.String(p.region),
+		InstanceType:     tea.String(opts.InstanceType),
+		ImageId:          tea.String(opts.ImageID),
+		VSwitchId:        tea.String(opts.VSwitchID),
+		SecurityGroupIds: tea.StringSlice(securityGroupIDs),
 	}
 
 	if opts.SpotStrategy != "" {

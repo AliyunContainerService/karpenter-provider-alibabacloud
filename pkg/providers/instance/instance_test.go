@@ -162,8 +162,10 @@ func TestCreate(t *testing.T) {
 		{
 			name: "API error",
 			opts: CreateOptions{
-				InstanceType: "ecs.g6.large",
-				ImageID:      "img-123",
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: []string{"sg-123"},
 			},
 			mockSetup: func(m *MockECSClient) {
 				m.On("RunInstances", mock.Anything, mock.Anything).Return(nil, errors.New("API error"))
@@ -190,6 +192,123 @@ func TestCreate(t *testing.T) {
 			mockClient.AssertExpectations(t)
 		})
 	}
+}
+
+func TestCreateSecurityGroupIDs(t *testing.T) {
+	tests := []struct {
+		name               string
+		securityGroupIDs   []string
+		expectedRequestIDs []string
+		expectError        string
+		expectAPICall      bool
+	}{
+		{
+			name:               "single security group uses repeated field",
+			securityGroupIDs:   []string{"sg-1"},
+			expectedRequestIDs: []string{"sg-1"},
+			expectAPICall:      true,
+		},
+		{
+			name:               "multiple security groups are normalized before request",
+			securityGroupIDs:   []string{"sg-2", "sg-1", "sg-2"},
+			expectedRequestIDs: []string{"sg-1", "sg-2"},
+			expectAPICall:      true,
+		},
+		{
+			name:          "zero security groups are rejected before ECS call",
+			expectError:   "at least one security group ID is required",
+			expectAPICall: false,
+		},
+		{
+			name:             "empty security group ID is rejected before ECS call",
+			securityGroupIDs: []string{"sg-1", ""},
+			expectError:      "security group ID cannot be empty",
+			expectAPICall:    false,
+		},
+		{
+			name:               "more than five security groups are sent to ECS",
+			securityGroupIDs:   []string{"sg-6", "sg-5", "sg-4", "sg-3", "sg-2", "sg-1"},
+			expectedRequestIDs: []string{"sg-1", "sg-2", "sg-3", "sg-4", "sg-5", "sg-6"},
+			expectAPICall:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := new(MockECSClient)
+			if tt.expectAPICall {
+				instanceID := "i-123456"
+				response := &ecs.RunInstancesResponse{
+					Body: &ecs.RunInstancesResponseBody{
+						InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
+							InstanceIdSet: []*string{&instanceID},
+						},
+					},
+				}
+				mockClient.On("RunInstances", mock.Anything, mock.MatchedBy(func(request *ecs.RunInstancesRequest) bool {
+					assert.Nil(t, request.SecurityGroupId)
+					assert.Equal(t, tt.expectedRequestIDs, stringPointersToValues(request.SecurityGroupIds))
+					return true
+				})).Return(response, nil)
+			}
+
+			provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+			_, err := provider.Create(context.Background(), CreateOptions{
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: tt.securityGroupIDs,
+				SystemDisk: SystemDisk{
+					Category: "cloud_essd",
+					Size:     40,
+				},
+			})
+
+			if tt.expectError != "" {
+				assert.ErrorContains(t, err, tt.expectError)
+			} else {
+				assert.NoError(t, err)
+			}
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestCreatePreservesECSSecurityGroupErrorDetails(t *testing.T) {
+	mockClient := new(MockECSClient)
+	mockClient.On("RunInstances", mock.Anything, mock.Anything).Return(nil, errors.New("InvalidSecurityGroupLimitExceeded: attach limit exceeded"))
+
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	_, err := provider.Create(context.Background(), CreateOptions{
+		InstanceType:     "ecs.g6.large",
+		ImageID:          "img-123",
+		VSwitchID:        "vsw-123",
+		SecurityGroupIDs: []string{"sg-1", "sg-2", "sg-3", "sg-4", "sg-5", "sg-6"},
+		SystemDisk: SystemDisk{
+			Category: "cloud_essd",
+			Size:     40,
+		},
+	})
+
+	assert.ErrorContains(t, err, "failed to create instance")
+	assert.ErrorContains(t, err, "InvalidSecurityGroupLimitExceeded")
+	assert.ErrorContains(t, err, "attach limit exceeded")
+	mockClient.AssertExpectations(t)
+}
+
+func stringPointersToValues(values []*string) []string {
+	if values == nil {
+		return nil
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == nil {
+			result = append(result, "")
+			continue
+		}
+		result = append(result, *value)
+	}
+	return result
 }
 
 func TestList(t *testing.T) {

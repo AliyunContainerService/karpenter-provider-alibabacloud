@@ -41,6 +41,7 @@ import (
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/pricing"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/securitygroup"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/vswitch"
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/utils/securitygroups"
 	"github.com/awslabs/operatorpkg/status"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
@@ -855,16 +856,18 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClaim *
 
 	instanceType := instanceTypes[0]
 	image := images[0]
-	securityGroup := securityGroups[0]
+	securityGroupIDs := make([]string, 0, len(securityGroups))
+	for _, securityGroup := range securityGroups {
+		securityGroupIDs = append(securityGroupIDs, securityGroup.ID)
+	}
+	securityGroupIDs = securitygroups.NormalizeIDs(securityGroupIDs)
 
 	baseOpts := instance.CreateOptions{
-		InstanceType: instanceType.Name,
-		ImageID:      image.ID,
-		SecurityGroupIDs: []string{
-			securityGroup.ID,
-		},
-		UserData: userData,
-		Tags:     tags,
+		InstanceType:     instanceType.Name,
+		ImageID:          image.ID,
+		SecurityGroupIDs: securityGroupIDs,
+		UserData:         userData,
+		Tags:             tags,
 		SystemDisk: instance.SystemDisk{
 			Category:         "cloud_essd",
 			Size:             40,
@@ -1031,20 +1034,11 @@ func isVSwitchAllowed(vswitchID string, allowedVSwitches []v1alpha1.VSwitch) boo
 }
 
 func isSecurityGroupAllowed(instanceSGs []string, allowedSGs []v1alpha1.SecurityGroup) bool {
-	// Build allowed IDs map
-	allowedIDs := make(map[string]bool)
+	allowedIDs := make([]string, 0, len(allowedSGs))
 	for _, sg := range allowedSGs {
-		allowedIDs[sg.ID] = true
+		allowedIDs = append(allowedIDs, sg.ID)
 	}
-
-	// Check if all instance security groups are in the allowed list
-	for _, sgID := range instanceSGs {
-		if !allowedIDs[sgID] {
-			return false
-		}
-	}
-
-	return true
+	return securitygroups.EqualIDs(instanceSGs, allowedIDs)
 }
 
 // calculateNodeClassHash calculates a hash of the ECSNodeClass configuration

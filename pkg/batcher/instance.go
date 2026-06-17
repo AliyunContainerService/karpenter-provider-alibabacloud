@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/utils/securitygroups"
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
 	"github.com/samber/lo"
@@ -172,8 +173,9 @@ func ComputeRunInstancesBatchKey(req *ecs.RunInstancesRequest) string {
 
 	// Security groups (if multiple)
 	if req.SecurityGroupIds != nil {
-		for _, sg := range *req.SecurityGroupIds {
+		for _, sg := range securitygroups.NormalizeIDs(*req.SecurityGroupIds) {
 			h.Write([]byte(sg))
+			h.Write([]byte{0})
 		}
 	}
 

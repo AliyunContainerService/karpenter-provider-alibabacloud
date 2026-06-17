@@ -224,6 +224,37 @@ func TestComputeRunInstancesBatchKey(t *testing.T) {
 	}
 }
 
+func TestComputeRunInstancesBatchKeySecurityGroupIDs(t *testing.T) {
+	req1 := ecs.CreateRunInstancesRequest()
+	req1.RegionId = "cn-hangzhou"
+	req1.InstanceType = "ecs.g6.large"
+	req1.ImageId = "m-test"
+	req1.VSwitchId = "vsw-test"
+	req1.SecurityGroupIds = &[]string{"sg-2", "sg-1", "sg-2"}
+
+	req2 := ecs.CreateRunInstancesRequest()
+	req2.RegionId = "cn-hangzhou"
+	req2.InstanceType = "ecs.g6.large"
+	req2.ImageId = "m-test"
+	req2.VSwitchId = "vsw-test"
+	req2.SecurityGroupIds = &[]string{"sg-1", "sg-2"}
+
+	if key1, key2 := ComputeRunInstancesBatchKey(req1), ComputeRunInstancesBatchKey(req2); key1 != key2 {
+		t.Fatalf("expected same batch key for duplicate/order differences, got %s != %s", key1, key2)
+	}
+
+	req3 := ecs.CreateRunInstancesRequest()
+	req3.RegionId = "cn-hangzhou"
+	req3.InstanceType = "ecs.g6.large"
+	req3.ImageId = "m-test"
+	req3.VSwitchId = "vsw-test"
+	req3.SecurityGroupIds = &[]string{"sg-1"}
+
+	if key1, key3 := ComputeRunInstancesBatchKey(req1), ComputeRunInstancesBatchKey(req3); key1 == key3 {
+		t.Fatal("expected different batch key when security group set differs")
+	}
+}
+
 // TestInstanceBatcherCreateInstance tests the instance batcher
 func TestInstanceBatcherCreateInstance(t *testing.T) {
 	mockClient := &mockECSClient{
