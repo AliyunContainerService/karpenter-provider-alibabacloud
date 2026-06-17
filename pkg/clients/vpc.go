@@ -24,7 +24,7 @@ import (
 
 // VPCClient is an interface for VPC client operations
 type VPCClient interface {
-	DescribeVSwitches(ctx context.Context, vSwitchID string, tags map[string]string) (*vpc.DescribeVSwitchesResponse, error)
+	DescribeVSwitches(ctx context.Context, vSwitchID string, tags map[string]string, zoneID string) (*vpc.DescribeVSwitchesResponse, error)
 }
 
 // DefaultVPCClient implements VPCClient using Alibaba Cloud SDK
@@ -42,16 +42,27 @@ func NewDefaultVPCClient(client *vpc.Client, region string) *DefaultVPCClient {
 }
 
 // DescribeVSwitches implements VPCClient interface
-func (c *DefaultVPCClient) DescribeVSwitches(ctx context.Context, vSwitchID string, tags map[string]string) (*vpc.DescribeVSwitchesResponse, error) {
-	request := &vpc.DescribeVSwitchesRequest{}
-	request.RegionId = &c.region
+func (c *DefaultVPCClient) DescribeVSwitches(ctx context.Context, vSwitchID string, tags map[string]string, zoneID string) (*vpc.DescribeVSwitchesResponse, error) {
+	request := buildDescribeVSwitchesRequest(c.region, vSwitchID, tags, zoneID)
+	response, err := c.client.DescribeVSwitches(request)
+	if err != nil {
+		return nil, err
+	}
 
-	// Set VSwitch ID if provided
+	return response, nil
+}
+
+func buildDescribeVSwitchesRequest(region string, vSwitchID string, tags map[string]string, zoneID string) *vpc.DescribeVSwitchesRequest {
+	request := &vpc.DescribeVSwitchesRequest{RegionId: &region}
+
 	if vSwitchID != "" {
 		request.VSwitchId = &vSwitchID
 	}
+	if zoneID != "" {
+		request.ZoneId = &zoneID
+	}
 
-	// Set tag filters
+	// VPC DescribeVSwitches supports server-side exact tag filters.
 	if len(tags) > 0 {
 		var vpcTags []*vpc.DescribeVSwitchesRequestTag
 		for k, v := range tags {
@@ -70,10 +81,5 @@ func (c *DefaultVPCClient) DescribeVSwitches(ctx context.Context, vSwitchID stri
 		request.Tag = vpcTags
 	}
 
-	response, err := c.client.DescribeVSwitches(request)
-	if err != nil {
-		return nil, err
-	}
-
-	return response, nil
+	return request
 }

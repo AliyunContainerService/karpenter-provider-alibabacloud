@@ -23,6 +23,8 @@ import (
 )
 
 var ramRoleNameRegex = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+var imageOwnerIDRegex = regexp.MustCompile(`^[1-9][0-9]{5,19}$`)
+var imageIDRegex = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
 // Validate validates the ECSNodeClass spec
 func (nc *ECSNodeClass) Validate() error {
@@ -138,12 +140,18 @@ func (nc *ECSNodeClass) validateVSwitchSelectors() error {
 	if len(nc.Spec.VSwitchSelectorTerms) == 0 {
 		return fmt.Errorf("vSwitchSelectorTerms is required")
 	}
+	if len(nc.Spec.VSwitchSelectorTerms) > 30 {
+		return fmt.Errorf("vSwitchSelectorTerms may contain at most 30 terms, got %d", len(nc.Spec.VSwitchSelectorTerms))
+	}
 	for i, term := range nc.Spec.VSwitchSelectorTerms {
 		if term.ID == nil && len(term.Tags) == 0 && term.ZoneID == nil {
 			return fmt.Errorf("vSwitchSelectorTerms[%d] must specify at least one of: id, tags, or zoneID", i)
 		}
 		if term.ID != nil && (len(term.Tags) > 0 || term.ZoneID != nil) {
-			return fmt.Errorf("vSwitchSelectorTerms[%d].id cannot be combined with tags or zoneID", i)
+			return fmt.Errorf("vSwitchSelectorTerms[%d].id is mutually exclusive with tags and zoneID", i)
+		}
+		if err := validateSelectorTags(fmt.Sprintf("vSwitchSelectorTerms[%d].tags", i), term.Tags, true); err != nil {
+			return err
 		}
 		if term.ID != nil && !isValidResourceID(*term.ID, "vsw") {
 			return fmt.Errorf("vSwitchSelectorTerms[%d].id is not a valid VSwitch ID", i)
@@ -156,15 +164,21 @@ func (nc *ECSNodeClass) validateSecurityGroupSelectors() error {
 	if len(nc.Spec.SecurityGroupSelectorTerms) == 0 {
 		return fmt.Errorf("securityGroupSelectorTerms is required")
 	}
-	if len(nc.Spec.SecurityGroupSelectorTerms) > 5 {
-		return fmt.Errorf("maximum 5 security groups allowed, got %d", len(nc.Spec.SecurityGroupSelectorTerms))
+	if len(nc.Spec.SecurityGroupSelectorTerms) > 30 {
+		return fmt.Errorf("securityGroupSelectorTerms may contain at most 30 terms, got %d", len(nc.Spec.SecurityGroupSelectorTerms))
 	}
 	for i, term := range nc.Spec.SecurityGroupSelectorTerms {
 		if term.ID == nil && term.Name == nil && len(term.Tags) == 0 {
 			return fmt.Errorf("securityGroupSelectorTerms[%d] must specify at least one of: id, name, or tags", i)
 		}
 		if term.ID != nil && (term.Name != nil || len(term.Tags) > 0) {
-			return fmt.Errorf("securityGroupSelectorTerms[%d].id cannot be combined with name or tags", i)
+			return fmt.Errorf("securityGroupSelectorTerms[%d].id is mutually exclusive with name and tags", i)
+		}
+		if term.Name != nil && (term.ID != nil || len(term.Tags) > 0) {
+			return fmt.Errorf("securityGroupSelectorTerms[%d].name is mutually exclusive with id and tags", i)
+		}
+		if err := validateSelectorTags(fmt.Sprintf("securityGroupSelectorTerms[%d].tags", i), term.Tags, false); err != nil {
+			return err
 		}
 		if term.ID != nil && !isValidResourceID(*term.ID, "sg") {
 			return fmt.Errorf("securityGroupSelectorTerms[%d].id is not a valid security group ID", i)
@@ -177,9 +191,15 @@ func (nc *ECSNodeClass) validateImageSelectors() error {
 	if len(nc.Spec.ImageSelectorTerms) == 0 {
 		return fmt.Errorf("imageSelectorTerms is required")
 	}
+	if len(nc.Spec.ImageSelectorTerms) > 30 {
+		return fmt.Errorf("imageSelectorTerms may contain at most 30 terms, got %d", len(nc.Spec.ImageSelectorTerms))
+	}
 	for i, term := range nc.Spec.ImageSelectorTerms {
 		count := 0
 		if term.ID != nil {
+			count++
+		}
+		if term.ImageFamily != nil {
 			count++
 		}
 		if term.ImageOwnerAlias != nil {
@@ -195,16 +215,43 @@ func (nc *ECSNodeClass) validateImageSelectors() error {
 			count++
 		}
 		if count == 0 {
-			return fmt.Errorf("imageSelectorTerms[%d] must specify at least one of: id, alias, name, family, or tags", i)
+			if term.ImageOwnerID != nil {
+				return fmt.Errorf("imageSelectorTerms[%d].imageOwnerID cannot be the only selector", i)
+			}
+			return fmt.Errorf("imageSelectorTerms[%d] must specify at least one of: id, imageFamily, imageOwnerAlias, name, or tags", i)
 		}
-		if term.ID != nil && count > 1 {
-			return fmt.Errorf("imageSelectorTerms[%d].id cannot be combined with other filters", i)
+		if term.ID != nil && (term.ImageFamily != nil || term.ImageOwnerAlias != nil || term.Name != nil || term.ImageOwnerID != nil || len(term.Tags) > 0) {
+			return fmt.Errorf("imageSelectorTerms[%d].id is mutually exclusive with imageFamily, imageOwnerAlias, imageOwnerID, name, and tags", i)
 		}
-		if term.ID != nil && !isValidResourceID(*term.ID, "m") {
+		if err := validateSelectorTags(fmt.Sprintf("imageSelectorTerms[%d].tags", i), term.Tags, true); err != nil {
+			return err
+		}
+		if term.ID != nil && !imageIDRegex.MatchString(*term.ID) {
 			return fmt.Errorf("imageSelectorTerms[%d].id is not a valid image ID", i)
 		}
 		if term.ImageOwnerAlias != nil && !isValidImageOwnerAlias(*term.ImageOwnerAlias) {
 			return fmt.Errorf("imageSelectorTerms[%d].imageOwnerAlias must be one of: system, self, others, marketplace", i)
+		}
+		if term.ImageOwnerID != nil && !imageOwnerIDRegex.MatchString(*term.ImageOwnerID) {
+			return fmt.Errorf("imageSelectorTerms[%d].imageOwnerID must match ^[1-9][0-9]{5,19}$", i)
+		}
+	}
+	return nil
+}
+
+func validateSelectorTags(field string, tags map[string]string, limit bool) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	if limit && len(tags) > 20 {
+		return fmt.Errorf("%s may contain at most 20 entries, got %d", field, len(tags))
+	}
+	for key, value := range tags {
+		if key == "" {
+			return fmt.Errorf("%s key must be non-empty", field)
+		}
+		if value == "" {
+			return fmt.Errorf("%s[%q] value must be non-empty", field, key)
 		}
 	}
 	return nil

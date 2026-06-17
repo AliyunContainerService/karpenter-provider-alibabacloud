@@ -19,6 +19,7 @@ package securitygroup
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -34,6 +35,12 @@ type Provider struct {
 	cache     map[string]*CacheEntry
 	cacheMu   sync.RWMutex
 	cacheTTL  time.Duration
+}
+
+type SecurityGroupQuery struct {
+	ID   string
+	Name string
+	Tags map[string]string
 }
 
 // CacheEntry represents a cached result with expiration
@@ -114,21 +121,13 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.SecurityGroupSe
 
 	var securityGroups []v1alpha1.SecurityGroup
 
-	// Process each selector term
-	for _, term := range terms {
-		if term.ID != nil {
-			// Direct ID reference
-			securityGroups = append(securityGroups, v1alpha1.SecurityGroup{
-				ID: *term.ID,
-			})
-		} else if term.Tags != nil {
-			// Tag-based selection
-			sgs, err := p.getByTags(ctx, term.Tags)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get security groups by tags %v: %w", term.Tags, err)
-			}
-			securityGroups = append(securityGroups, sgs...)
+	for i, term := range terms {
+		query := securityGroupQueryFromTerm(term)
+		sgs, err := p.getByQuery(ctx, query)
+		if err != nil {
+			return nil, fmt.Errorf("resolve securityGroupSelectorTerms[%d]: %w", i, err)
 		}
+		securityGroups = append(securityGroups, sgs...)
 	}
 
 	// Remove duplicates
@@ -140,24 +139,43 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.SecurityGroupSe
 	return securityGroups, nil
 }
 
-// getByTags gets security groups by tags
-func (p *Provider) getByTags(ctx context.Context, tags map[string]string) ([]v1alpha1.SecurityGroup, error) {
+func securityGroupQueryFromTerm(term v1alpha1.SecurityGroupSelectorTerm) SecurityGroupQuery {
+	query := SecurityGroupQuery{Tags: term.Tags}
+	if term.ID != nil {
+		query.ID = *term.ID
+	}
+	if term.Name != nil {
+		query.Name = *term.Name
+	}
+	return query
+}
 
-	// Execute request
-	response, err := p.ecsClient.DescribeSecurityGroups(ctx, tags)
-	if err != nil || response == nil || len(response.Body.SecurityGroups.SecurityGroup) == 0 {
+func (p *Provider) getByQuery(ctx context.Context, query SecurityGroupQuery) ([]v1alpha1.SecurityGroup, error) {
+	response, err := p.ecsClient.DescribeSecurityGroups(ctx, query.ID, query.Name, query.Tags)
+	if err != nil {
 		return nil, fmt.Errorf("failed to describe security groups: %w", err)
 	}
-
-	// Convert to our SecurityGroup type
-	var securityGroups []v1alpha1.SecurityGroup
-	for _, sg := range response.Body.SecurityGroups.SecurityGroup {
-		securityGroups = append(securityGroups, v1alpha1.SecurityGroup{
-			ID: *sg.SecurityGroupId,
-		})
+	if response == nil || response.Body == nil || response.Body.SecurityGroups == nil || len(response.Body.SecurityGroups.SecurityGroup) == 0 {
+		return []v1alpha1.SecurityGroup{}, nil
 	}
 
+	var securityGroups []v1alpha1.SecurityGroup
+	for _, sg := range response.Body.SecurityGroups.SecurityGroup {
+		if sg == nil || sg.SecurityGroupId == nil {
+			continue
+		}
+		group := v1alpha1.SecurityGroup{ID: *sg.SecurityGroupId}
+		if sg.SecurityGroupName != nil {
+			group.Name = *sg.SecurityGroupName
+		}
+		securityGroups = append(securityGroups, group)
+	}
 	return securityGroups, nil
+}
+
+// getByTags gets security groups by tags
+func (p *Provider) getByTags(ctx context.Context, tags map[string]string) ([]v1alpha1.SecurityGroup, error) {
+	return p.getByQuery(ctx, SecurityGroupQuery{Tags: tags})
 }
 
 // removeDuplicateSecurityGroups removes duplicate security groups from a slice
@@ -166,11 +184,14 @@ func removeDuplicateSecurityGroups(sgs []v1alpha1.SecurityGroup) []v1alpha1.Secu
 	var result []v1alpha1.SecurityGroup
 
 	for _, sg := range sgs {
-		if !seen[sg.ID] {
+		if sg.ID != "" && !seen[sg.ID] {
 			seen[sg.ID] = true
 			result = append(result, sg)
 		}
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].ID < result[j].ID
+	})
 
 	return result
 }

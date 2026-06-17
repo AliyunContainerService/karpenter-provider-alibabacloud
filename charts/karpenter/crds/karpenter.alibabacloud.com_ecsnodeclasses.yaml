@@ -97,6 +97,9 @@ spec:
                     encrypted:
                       description: Encrypted specifies whether the disk is encrypted
                       type: boolean
+                    kmsKeyID:
+                      description: KMSKeyID is the KMS key ID for encryption
+                      type: string
                     performanceLevel:
                       description: PerformanceLevel is the ESSD performance level
                       type: string
@@ -112,6 +115,12 @@ spec:
                   - size
                   type: object
                 type: array
+              instanceStorePolicy:
+                description: InstanceStorePolicy specifies local instance store handling.
+                  P0 only validates the enum.
+                enum:
+                - RAID0
+                type: string
               imageSelectorTerms:
                 description: ImageSelectorTerms is a list of image selector requirements
                 items:
@@ -126,6 +135,11 @@ spec:
                     imageOwnerAlias:
                       description: Alias is the image alias (system, self, others,
                         marketplace)
+                      enum:
+                      - system
+                      - self
+                      - others
+                      - marketplace
                       type: string
                     imageOwnerID:
                       description: Owner is the image owner
@@ -136,9 +150,31 @@ spec:
                     tags:
                       additionalProperties:
                         type: string
+                        maxLength: 256
                       description: Tags is a map of tags to match
+                      maxProperties: 20
                       type: object
                   type: object
+                  x-kubernetes-validations:
+                  - message: image selector term must specify at least one of id,
+                      imageFamily, name, imageOwnerAlias, or non-empty tags
+                    rule: has(self.id) || has(self.imageFamily) || has(self.name)
+                      || has(self.imageOwnerAlias) || (has(self.tags) && self.tags.size()
+                      > 0)
+                  - message: image selector id is mutually exclusive with all other
+                      selector fields
+                    rule: '!has(self.id) || (!has(self.imageFamily) && !has(self.name)
+                      && !has(self.imageOwnerAlias) && !has(self.imageOwnerID) && !has(self.tags))'
+                  - message: imageOwnerID cannot be the only image selector
+                    rule: '!has(self.imageOwnerID) || has(self.id) || has(self.imageFamily)
+                      || has(self.name) || has(self.imageOwnerAlias) || (has(self.tags)
+                      && self.tags.size() > 0)'
+                  - message: image selector tags may contain at most 20 entries
+                    rule: '!has(self.tags) || self.tags.size() <= 20'
+                  - message: image selector tag keys and values must be non-empty
+                    rule: '!has(self.tags) || self.tags.all(k, k != '''' && self.tags[k]
+                      != '''')'
+                maxItems: 30
                 minItems: 1
                 type: array
               kubelet:
@@ -265,9 +301,26 @@ spec:
                     tags:
                       additionalProperties:
                         type: string
+                        maxLength: 256
                       description: Tags is a map of tags to match
+                      maxProperties: 20
                       type: object
                   type: object
+                  x-kubernetes-validations:
+                  - message: security group selector term must specify at least one
+                      of id, name, or non-empty tags
+                    rule: has(self.id) || has(self.name) || (has(self.tags) && self.tags.size()
+                      > 0)
+                  - message: security group selector id is mutually exclusive with
+                      name and tags
+                    rule: '!has(self.id) || (!has(self.name) && !has(self.tags))'
+                  - message: security group selector name is mutually exclusive with
+                      id and tags
+                    rule: '!has(self.name) || (!has(self.id) && !has(self.tags))'
+                  - message: security group selector tag keys and values must be non-empty
+                    rule: '!has(self.tags) || self.tags.all(k, k != '''' && self.tags[k]
+                      != '''')'
+                maxItems: 30
                 minItems: 1
                 type: array
               spotPriceLimit:
@@ -308,7 +361,9 @@ spec:
               tags:
                 additionalProperties:
                   type: string
+                  maxLength: 256
                 description: Tags are instance tags
+                maxProperties: 64
                 type: object
               userData:
                 description: UserData specifies custom user data script
@@ -324,12 +379,28 @@ spec:
                     tags:
                       additionalProperties:
                         type: string
+                        maxLength: 256
                       description: Tags is a map of tags to match
+                      maxProperties: 20
                       type: object
                     zoneID:
                       description: ZoneID is the zone ID
                       type: string
                   type: object
+                  x-kubernetes-validations:
+                  - message: vSwitch selector term must specify at least one of id,
+                      zoneID, or non-empty tags
+                    rule: has(self.id) || has(self.zoneID) || (has(self.tags) && self.tags.size()
+                      > 0)
+                  - message: vSwitch selector id is mutually exclusive with zoneID
+                      and tags
+                    rule: '!has(self.id) || (!has(self.zoneID) && !has(self.tags))'
+                  - message: vSwitch selector tags may contain at most 20 entries
+                    rule: '!has(self.tags) || self.tags.size() <= 20'
+                  - message: vSwitch selector tag keys and values must be non-empty
+                    rule: '!has(self.tags) || self.tags.all(k, k != '''' && self.tags[k]
+                      != '''')'
+                maxItems: 30
                 minItems: 1
                 type: array
             type: object

@@ -32,12 +32,41 @@ type MockVPCClient struct {
 	mock.Mock
 }
 
-func (m *MockVPCClient) DescribeVSwitches(ctx context.Context, vSwitchID string, tags map[string]string) (*vpc.DescribeVSwitchesResponse, error) {
-	args := m.Called(ctx, vSwitchID, tags)
+func (m *MockVPCClient) DescribeVSwitches(ctx context.Context, vSwitchID string, tags map[string]string, zoneID string) (*vpc.DescribeVSwitchesResponse, error) {
+	args := m.Called(ctx, vSwitchID, tags, zoneID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*vpc.DescribeVSwitchesResponse), args.Error(1)
+}
+
+func TestResolveMapsZoneIDAndSortsDeduplicatedResults(t *testing.T) {
+	mockClient := new(MockVPCClient)
+	zoneH := "cn-hangzhou-h"
+	zoneI := "cn-hangzhou-i"
+	vswB := "vsw-b"
+	vswA := "vsw-a"
+	mockClient.On("DescribeVSwitches", mock.Anything, "", map[string]string(nil), "cn-hangzhou-h").Return(&vpc.DescribeVSwitchesResponse{
+		Body: &vpc.DescribeVSwitchesResponseBody{
+			VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+				VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{
+					{VSwitchId: &vswB, ZoneId: &zoneH},
+					{VSwitchId: &vswA, ZoneId: &zoneI},
+					{VSwitchId: &vswB, ZoneId: &zoneH},
+				},
+			},
+		},
+	}, nil)
+
+	provider := NewProvider("cn-hangzhou", mockClient)
+	result, err := provider.Resolve(context.Background(), []v1alpha1.VSwitchSelectorTerm{{ZoneID: stringPtr("cn-hangzhou-h")}})
+
+	assert.NoError(t, err)
+	assert.Equal(t, []v1alpha1.VSwitch{
+		{ID: "vsw-a", Zone: "cn-hangzhou-i", ZoneID: "cn-hangzhou-i"},
+		{ID: "vsw-b", Zone: "cn-hangzhou-h", ZoneID: "cn-hangzhou-h"},
+	}, result)
+	mockClient.AssertExpectations(t)
 }
 
 func TestResolve(t *testing.T) {
@@ -77,7 +106,7 @@ func TestResolve(t *testing.T) {
 						},
 					},
 				}
-				m.On("DescribeVSwitches", mock.Anything, "vsw-12345", mock.Anything).Return(response, nil)
+				m.On("DescribeVSwitches", mock.Anything, "vsw-12345", mock.Anything, "").Return(response, nil)
 			},
 			expected: []v1alpha1.VSwitch{
 				{
@@ -118,7 +147,7 @@ func TestResolve(t *testing.T) {
 						},
 					},
 				}
-				m.On("DescribeVSwitches", mock.Anything, "", map[string]string{"env": "prod"}).Return(response, nil)
+				m.On("DescribeVSwitches", mock.Anything, "", map[string]string{"env": "prod"}, "").Return(response, nil)
 			},
 			expected: []v1alpha1.VSwitch{
 				{
@@ -141,7 +170,7 @@ func TestResolve(t *testing.T) {
 				},
 			},
 			mockSetup: func(m *MockVPCClient) {
-				m.On("DescribeVSwitches", mock.Anything, "vsw-error", mock.Anything).Return(nil, errors.New("API error"))
+				m.On("DescribeVSwitches", mock.Anything, "vsw-error", mock.Anything, "").Return(nil, errors.New("API error"))
 			},
 			expectError: true,
 		},
@@ -197,7 +226,7 @@ func TestGetByID(t *testing.T) {
 						},
 					},
 				}
-				m.On("DescribeVSwitches", mock.Anything, "vsw-12345", mock.Anything).Return(response, nil)
+				m.On("DescribeVSwitches", mock.Anything, "vsw-12345", mock.Anything, "").Return(response, nil)
 			},
 			expected: &v1alpha1.VSwitch{
 				ID:                      "vsw-12345",
@@ -210,7 +239,7 @@ func TestGetByID(t *testing.T) {
 			name: "API error",
 			id:   "vsw-error",
 			mockSetup: func(m *MockVPCClient) {
-				m.On("DescribeVSwitches", mock.Anything, "vsw-error", mock.Anything).Return(nil, errors.New("API error"))
+				m.On("DescribeVSwitches", mock.Anything, "vsw-error", mock.Anything, "").Return(nil, errors.New("API error"))
 			},
 			expectError: true,
 		},
@@ -268,7 +297,7 @@ func TestGetByTags(t *testing.T) {
 						},
 					},
 				}
-				m.On("DescribeVSwitches", mock.Anything, "", map[string]string{"env": "prod"}).Return(response, nil)
+				m.On("DescribeVSwitches", mock.Anything, "", map[string]string{"env": "prod"}, "").Return(response, nil)
 			},
 			expected: []v1alpha1.VSwitch{
 				{
@@ -287,7 +316,7 @@ func TestGetByTags(t *testing.T) {
 			name: "API error",
 			tags: map[string]string{"env": "test"},
 			mockSetup: func(m *MockVPCClient) {
-				m.On("DescribeVSwitches", mock.Anything, "", map[string]string{"env": "test"}).Return(nil, errors.New("API error"))
+				m.On("DescribeVSwitches", mock.Anything, "", map[string]string{"env": "test"}, "").Return(nil, errors.New("API error"))
 			},
 			expectError: true,
 		},

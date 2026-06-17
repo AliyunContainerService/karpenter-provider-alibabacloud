@@ -67,17 +67,20 @@ type ECSNodeClassSpec struct {
 	// VSwitchSelectorTerms is a list of VSwitch selector requirements
 	// +optional
 	// +kubebuilder:validation:MinItems=1
-	VSwitchSelectorTerms []VSwitchSelectorTerm `json:"vSwitchSelectorTerms,omitempty"`
+	// +kubebuilder:validation:MaxItems=30
+	VSwitchSelectorTerms []VSwitchSelectorTerm `json:"vSwitchSelectorTerms"`
 
 	// SecurityGroupSelectorTerms is a list of security group selector requirements
 	// +optional
 	// +kubebuilder:validation:MinItems=1
-	SecurityGroupSelectorTerms []SecurityGroupSelectorTerm `json:"securityGroupSelectorTerms,omitempty"`
+	// +kubebuilder:validation:MaxItems=30
+	SecurityGroupSelectorTerms []SecurityGroupSelectorTerm `json:"securityGroupSelectorTerms"`
 
 	// ImageSelectorTerms is a list of image selector requirements
 	// +optional
 	// +kubebuilder:validation:MinItems=1
-	ImageSelectorTerms []ImageSelectorTerm `json:"imageSelectorTerms,omitempty"`
+	// +kubebuilder:validation:MaxItems=30
+	ImageSelectorTerms []ImageSelectorTerm `json:"imageSelectorTerms"`
 
 	// Role is the name of the RAM role to use for the instance
 	// +optional
@@ -109,6 +112,7 @@ type ECSNodeClassSpec struct {
 
 	// Tags are instance tags
 	// +optional
+	// +kubebuilder:validation:MaxProperties=64
 	Tags map[string]string `json:"tags,omitempty"`
 
 	// Kubelet defines Kubelet configuration overrides
@@ -142,6 +146,7 @@ type ECSNodeClassSpec struct {
 type VSwitchSelectorTerm struct {
 	// Tags is a map of tags to match
 	// +optional
+	// +kubebuilder:validation:MaxProperties=20
 	Tags map[string]string `json:"tags,omitempty"`
 
 	// ID is the VSwitch ID
@@ -159,6 +164,7 @@ type VSwitchSelectorTerm struct {
 type SecurityGroupSelectorTerm struct {
 	// Tags is a map of tags to match
 	// +optional
+	// +kubebuilder:validation:MaxProperties=20
 	Tags map[string]string `json:"tags,omitempty"`
 
 	// ID is the security group ID
@@ -180,6 +186,7 @@ type ImageSelectorTerm struct {
 
 	// Tags is a map of tags to match
 	// +optional
+	// +kubebuilder:validation:MaxProperties=20
 	Tags map[string]string `json:"tags,omitempty"`
 
 	// ID is the image ID

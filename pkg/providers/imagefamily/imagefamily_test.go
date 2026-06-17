@@ -81,7 +81,7 @@ func (m *MockECSClient) DescribeAvailableResource(ctx context.Context, request *
 	return nil, errors.New("not implemented")
 }
 
-func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
+func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, id string, name string, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -177,6 +177,53 @@ func TestResolve(t *testing.T) {
 			mockClient.AssertExpectations(t)
 		})
 	}
+}
+
+func TestResolveMapsAllImageSelectorsAndSortsDeduplicatedResults(t *testing.T) {
+	mockClient := new(MockECSClient)
+	imageA := "m-a"
+	imageB := "m-b"
+	nameA := "app-a"
+	nameB := "app-b"
+	arch := "x86_64"
+	ownerID := int64(1234567890123456)
+
+	mockClient.On("DescribeImages", mock.Anything, []string(nil), map[string]string{
+		"ImageName":       "app-*",
+		"ImageOwnerAlias": "self",
+		"ImageOwnerID":    "1234567890123456",
+		"tag:env":         "prod",
+	}).Return([]ecs.DescribeImagesResponseBodyImagesImage{
+		{ImageId: &imageB, ImageName: &nameB, Architecture: &arch, ImageOwnerId: &ownerID},
+		{ImageId: &imageA, ImageName: &nameA, Architecture: &arch, ImageOwnerId: &ownerID},
+		{ImageId: &imageB, ImageName: &nameB, Architecture: &arch, ImageOwnerId: &ownerID},
+	}, nil)
+	mockClient.On("DescribeImages", mock.Anything, []string(nil), map[string]string{"ImageFamily": "aliyun_3"}).Return([]ecs.DescribeImagesResponseBodyImagesImage{
+		{ImageId: &imageA, ImageName: &nameA, Architecture: &arch},
+	}, nil)
+
+	provider := NewProvider(mockClient)
+	result, err := provider.Resolve(context.Background(), []v1alpha1.ImageSelectorTerm{
+		{Name: stringPtr("app-*"), ImageOwnerAlias: stringPtr("self"), ImageOwnerID: stringPtr("1234567890123456"), Tags: map[string]string{"env": "prod"}},
+		{ImageFamily: stringPtr("aliyun_3")},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, []v1alpha1.Image{
+		{ID: "m-a", Name: "app-a", Architecture: "x86_64"},
+		{ID: "m-b", Name: "app-b", Architecture: "x86_64"},
+	}, result)
+	mockClient.AssertExpectations(t)
+}
+
+func TestResolveRejectsInvalidImageOwnerIDBeforeRequest(t *testing.T) {
+	mockClient := new(MockECSClient)
+	provider := NewProvider(mockClient)
+
+	_, err := provider.Resolve(context.Background(), []v1alpha1.ImageSelectorTerm{{Name: stringPtr("app"), ImageOwnerID: stringPtr("owner-123")}})
+
+	assert.ErrorContains(t, err, "imageOwnerID")
+	mockClient.AssertNotCalled(t, "DescribeImages", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func stringPtr(s string) *string {

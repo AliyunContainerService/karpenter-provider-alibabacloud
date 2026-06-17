@@ -57,7 +57,7 @@ func TestECSNodeClassValidateRejectsIDWithAdditionalSelectorFilters(t *testing.T
 			ZoneID: ptrForUnit("cn-test-a"),
 		}}
 
-		require.ErrorContains(t, nodeClass.Validate(), "cannot be combined")
+		require.ErrorContains(t, nodeClass.Validate(), "mutually exclusive")
 	})
 
 	t.Run("security group", func(t *testing.T) {
@@ -67,7 +67,7 @@ func TestECSNodeClassValidateRejectsIDWithAdditionalSelectorFilters(t *testing.T
 			Tags: map[string]string{"env": "test"},
 		}}
 
-		require.ErrorContains(t, nodeClass.Validate(), "cannot be combined")
+		require.ErrorContains(t, nodeClass.Validate(), "mutually exclusive")
 	})
 
 	t.Run("image", func(t *testing.T) {
@@ -77,7 +77,7 @@ func TestECSNodeClassValidateRejectsIDWithAdditionalSelectorFilters(t *testing.T
 			Tags: map[string]string{"env": "test"},
 		}}
 
-		require.ErrorContains(t, nodeClass.Validate(), "cannot be combined")
+		require.ErrorContains(t, nodeClass.Validate(), "mutually exclusive")
 	})
 
 	t.Run("capacity reservation", func(t *testing.T) {
@@ -349,6 +349,120 @@ func TestECSNodeClassValidateMetadataOptions(t *testing.T) {
 				t.Fatal("expected error")
 			}
 			if !tt.expectError && err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestECSNodeClassValidateSelectorSemantics(t *testing.T) {
+	tests := []struct {
+		name        string
+		mut         func(*ECSNodeClass)
+		expectError string
+	}{
+		{
+			name: "rejects empty vswitch term",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.VSwitchSelectorTerms = []VSwitchSelectorTerm{{}}
+			},
+			expectError: "vSwitchSelectorTerms[0] must specify at least one of: id, tags, or zoneID",
+		},
+		{
+			name: "rejects vswitch id with tags",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.VSwitchSelectorTerms = []VSwitchSelectorTerm{{ID: ptrForUnit("vsw-123"), Tags: map[string]string{"env": "prod"}}}
+			},
+			expectError: "vSwitchSelectorTerms[0].id is mutually exclusive",
+		},
+		{
+			name: "rejects vswitch empty tag key",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.VSwitchSelectorTerms = []VSwitchSelectorTerm{{Tags: map[string]string{"": "prod"}}}
+			},
+			expectError: "vSwitchSelectorTerms[0].tags key must be non-empty",
+		},
+		{
+			name: "accepts vswitch zone",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.VSwitchSelectorTerms = []VSwitchSelectorTerm{{ZoneID: ptrForUnit("cn-hangzhou-h")}}
+			},
+		},
+		{
+			name: "rejects security group id with name",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.SecurityGroupSelectorTerms = []SecurityGroupSelectorTerm{{ID: ptrForUnit("sg-123"), Name: ptrForUnit("app")}}
+			},
+			expectError: "securityGroupSelectorTerms[0].id is mutually exclusive",
+		},
+		{
+			name: "rejects security group name with tags",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.SecurityGroupSelectorTerms = []SecurityGroupSelectorTerm{{Name: ptrForUnit("app"), Tags: map[string]string{"env": "prod"}}}
+			},
+			expectError: "securityGroupSelectorTerms[0].name is mutually exclusive",
+		},
+		{
+			name: "allows more than five security group selector terms",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.SecurityGroupSelectorTerms = []SecurityGroupSelectorTerm{
+					{ID: ptrForUnit("sg-1")}, {ID: ptrForUnit("sg-2")}, {ID: ptrForUnit("sg-3")},
+					{ID: ptrForUnit("sg-4")}, {ID: ptrForUnit("sg-5")}, {ID: ptrForUnit("sg-6")},
+				}
+			},
+		},
+		{
+			name: "rejects image owner ID as only selector",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.ImageSelectorTerms = []ImageSelectorTerm{{ImageOwnerID: ptrForUnit("1234567890123456")}}
+			},
+			expectError: "imageSelectorTerms[0].imageOwnerID cannot be the only selector",
+		},
+		{
+			name: "rejects invalid image owner ID",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.ImageSelectorTerms = []ImageSelectorTerm{{Name: ptrForUnit("alinux"), ImageOwnerID: ptrForUnit("owner-123")}}
+			},
+			expectError: "imageSelectorTerms[0].imageOwnerID must match",
+		},
+		{
+			name: "rejects image id with family",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.ImageSelectorTerms = []ImageSelectorTerm{{ID: ptrForUnit("m-123"), ImageFamily: ptrForUnit("aliyun_3")}}
+			},
+			expectError: "imageSelectorTerms[0].id is mutually exclusive",
+		},
+		{
+			name: "rejects invalid image owner alias",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.ImageSelectorTerms = []ImageSelectorTerm{{ImageOwnerAlias: ptrForUnit("public")}}
+			},
+			expectError: "imageSelectorTerms[0].imageOwnerAlias must be one of: system, self, others, marketplace",
+		},
+		{
+			name: "accepts image family with owner ID",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.ImageSelectorTerms = []ImageSelectorTerm{{ImageFamily: ptrForUnit("aliyun_3"), ImageOwnerID: ptrForUnit("1234567890123456")}}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nodeClass := validValidationNodeClassForUnit()
+			tt.mut(nodeClass)
+
+			err := nodeClass.Validate()
+			if tt.expectError != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q", tt.expectError)
+				}
+				if !strings.Contains(err.Error(), tt.expectError) {
+					t.Fatalf("expected error containing %q, got %q", tt.expectError, err.Error())
+				}
+				return
+			}
+			if err != nil {
 				t.Fatalf("expected no error, got %v", err)
 			}
 		})

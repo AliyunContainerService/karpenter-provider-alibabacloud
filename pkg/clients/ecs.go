@@ -19,6 +19,7 @@ package clients
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,7 +49,7 @@ type ECSClient interface {
 	DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error)
 
 	// Security group operations
-	DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error)
+	DescribeSecurityGroups(ctx context.Context, id string, name string, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error)
 
 	// Capacity reservation operations
 	DescribeCapacityReservations(ctx context.Context, id string, tags map[string]string) (*ecs.DescribeCapacityReservationsResponse, error)
@@ -171,22 +172,9 @@ func (c *DefaultECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZone
 
 // DescribeImages implements ECSClient interface
 func (c *DefaultECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error) {
-	request := &ecs.DescribeImagesRequest{
-		RegionId: tea.String(c.region),
-	}
-
-	// Set image IDs if provided
-	if len(imageIDs) > 0 {
-		request.ImageId = tea.String(strings.Join(imageIDs, ","))
-	}
-
-	// Apply filters
-	if imageFamily, ok := filters["ImageFamily"]; ok {
-		request.ImageFamily = tea.String(imageFamily)
-	}
-
-	if imageName, ok := filters["ImageName"]; ok {
-		request.ImageName = tea.String(imageName)
+	request, err := buildDescribeImagesRequest(c.region, imageIDs, filters)
+	if err != nil {
+		return nil, err
 	}
 
 	// Set page size for better performance
@@ -244,13 +232,27 @@ func (c *DefaultECSClient) DescribeImages(ctx context.Context, imageIDs []string
 }
 
 // DescribeSecurityGroups implements ECSClient interface
-func (c *DefaultECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
+func (c *DefaultECSClient) DescribeSecurityGroups(ctx context.Context, id string, name string, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
+	request := buildDescribeSecurityGroupsRequest(c.region, id, name, tags)
 
-	request := &ecs.DescribeSecurityGroupsRequest{
-		RegionId: tea.String(c.region),
+	response, err := c.client.DescribeSecurityGroups(request)
+	if err != nil {
+		return nil, err
 	}
 
-	// Set tag filters
+	return response, nil
+}
+
+func buildDescribeSecurityGroupsRequest(region string, id string, name string, tags map[string]string) *ecs.DescribeSecurityGroupsRequest {
+	request := &ecs.DescribeSecurityGroupsRequest{RegionId: tea.String(region)}
+	if id != "" {
+		request.SecurityGroupId = tea.String(id)
+	}
+	if name != "" {
+		request.SecurityGroupName = tea.String(name)
+	}
+
+	// ECS DescribeSecurityGroups supports server-side exact tag filters.
 	if len(tags) > 0 {
 		var ecsTags []*ecs.DescribeSecurityGroupsRequestTag
 		for k, v := range tags {
@@ -269,12 +271,46 @@ func (c *DefaultECSClient) DescribeSecurityGroups(ctx context.Context, tags map[
 		request.Tag = ecsTags
 	}
 
-	response, err := c.client.DescribeSecurityGroups(request)
-	if err != nil {
-		return nil, err
+	return request
+}
+
+func buildDescribeImagesRequest(region string, imageIDs []string, filters map[string]string) (*ecs.DescribeImagesRequest, error) {
+	request := &ecs.DescribeImagesRequest{RegionId: tea.String(region)}
+
+	if len(imageIDs) > 0 {
+		request.ImageId = tea.String(strings.Join(imageIDs, ","))
+	}
+	if imageFamily, ok := filters["ImageFamily"]; ok {
+		request.ImageFamily = tea.String(imageFamily)
+	}
+	if imageName, ok := filters["ImageName"]; ok {
+		request.ImageName = tea.String(imageName)
+	}
+	if imageOwnerAlias, ok := filters["ImageOwnerAlias"]; ok {
+		request.ImageOwnerAlias = tea.String(imageOwnerAlias)
+	}
+	if imageOwnerID, ok := filters["ImageOwnerID"]; ok {
+		ownerID, err := strconv.ParseInt(imageOwnerID, 10, 64)
+		if err != nil || ownerID <= 0 {
+			return nil, fmt.Errorf("invalid ImageOwnerID %q", imageOwnerID)
+		}
+		request.ImageOwnerId = tea.Int64(ownerID)
+	}
+	for k, v := range filters {
+		if !strings.HasPrefix(k, "tag:") {
+			continue
+		}
+		key := strings.TrimPrefix(k, "tag:")
+		if key == "" || v == "" {
+			continue
+		}
+		request.Tag = append(request.Tag, &ecs.DescribeImagesRequestTag{
+			Key:   tea.String(key),
+			Value: tea.String(v),
+		})
 	}
 
-	return response, nil
+	return request, nil
 }
 
 // DescribeCapacityReservations implements ECSClient interface
