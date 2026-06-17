@@ -67,6 +67,7 @@ func computeHash(spec v1alpha1.ECSNodeClassSpec) (string, error) {
 		Kubelet                          *v1alpha1.KubeletConfiguration             `json:"kubelet,omitempty"`
 		SystemDisk                       *v1alpha1.SystemDiskSpec                   `json:"systemDisk,omitempty"`
 		DataDisks                        []v1alpha1.DataDiskSpec                    `json:"dataDisks,omitempty"`
+		InstanceStorePolicy              *string                                    `json:"instanceStorePolicy,omitempty"`
 		Tags                             map[string]string                          `json:"tags,omitempty"`
 		Role                             *string                                    `json:"role,omitempty"`
 		CapacityReservationPreference    *string                                    `json:"capacityReservationPreference,omitempty"`
@@ -82,6 +83,7 @@ func computeHash(spec v1alpha1.ECSNodeClassSpec) (string, error) {
 		Kubelet:                          spec.Kubelet,
 		SystemDisk:                       spec.SystemDisk,
 		DataDisks:                        spec.DataDisks,
+		InstanceStorePolicy:              spec.InstanceStorePolicy,
 		Tags:                             spec.Tags,
 		Role:                             spec.Role,
 		CapacityReservationPreference:    spec.CapacityReservationPreference,

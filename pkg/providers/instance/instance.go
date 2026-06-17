@@ -82,14 +82,20 @@ type SystemDisk struct {
 	Category         string
 	Size             int32
 	PerformanceLevel string
+	Encrypted        *bool
+	KMSKeyID         string
 }
 
 // DataDisk represents data disk configuration
 type DataDisk struct {
-	Category         string
-	Size             int32
-	PerformanceLevel string
-	Device           string
+	Category           string
+	Size               int32
+	PerformanceLevel   string
+	Encrypted          *bool
+	KMSKeyID           string
+	SnapshotID         string
+	DeleteWithInstance *bool
+	Device             string
 }
 
 // Instance represents an ECS instance
@@ -236,6 +242,19 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 		Category: tea.String(opts.SystemDisk.Category),
 		Size:     tea.String(fmt.Sprintf("%d", opts.SystemDisk.Size)),
 	}
+	if opts.SystemDisk.Category == "cloud_essd" {
+		performanceLevel := opts.SystemDisk.PerformanceLevel
+		if performanceLevel == "" {
+			performanceLevel = "PL0"
+		}
+		request.SystemDisk.PerformanceLevel = tea.String(performanceLevel)
+	}
+	if boolValue(opts.SystemDisk.Encrypted) {
+		request.SystemDisk.Encrypted = tea.String("true")
+		if opts.SystemDisk.KMSKeyID != "" {
+			request.SystemDisk.KMSKeyId = tea.String(opts.SystemDisk.KMSKeyID)
+		}
+	}
 
 	// Set data disks
 	if len(opts.DataDisks) > 0 {
@@ -248,8 +267,24 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 			if disk.Device != "" {
 				dataDisk.Device = tea.String(disk.Device)
 			}
-			if disk.PerformanceLevel != "" {
-				dataDisk.PerformanceLevel = tea.String(disk.PerformanceLevel)
+			if disk.Category == "cloud_essd" {
+				performanceLevel := disk.PerformanceLevel
+				if performanceLevel == "" {
+					performanceLevel = "PL0"
+				}
+				dataDisk.PerformanceLevel = tea.String(performanceLevel)
+			}
+			if boolValue(disk.Encrypted) {
+				dataDisk.Encrypted = tea.String("true")
+				if disk.KMSKeyID != "" {
+					dataDisk.KMSKeyId = tea.String(disk.KMSKeyID)
+				}
+			}
+			if disk.SnapshotID != "" {
+				dataDisk.SnapshotId = tea.String(disk.SnapshotID)
+			}
+			if disk.DeleteWithInstance != nil && !*disk.DeleteWithInstance {
+				dataDisk.DeleteWithInstance = tea.Bool(false)
 			}
 			dataDisks = append(dataDisks, dataDisk)
 		}
@@ -316,6 +351,10 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 	logger.Info("created instance", "instanceID", instanceID)
 
 	return instanceID, nil
+}
+
+func boolValue(value *bool) bool {
+	return value != nil && *value
 }
 
 func applyMetadataOptions(req *ecs.RunInstancesRequest, opts *MetadataOptions) {

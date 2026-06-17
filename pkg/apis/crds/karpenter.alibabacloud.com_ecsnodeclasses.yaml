@@ -97,6 +97,9 @@ spec:
                     encrypted:
                       description: Encrypted specifies whether the disk is encrypted
                       type: boolean
+                    kmsKeyID:
+                      description: KMSKeyID is the KMS key ID for encryption
+                      type: string
                     performanceLevel:
                       description: PerformanceLevel is the ESSD performance level
                       type: string
@@ -112,6 +115,12 @@ spec:
                   - size
                   type: object
                 type: array
+              instanceStorePolicy:
+                description: InstanceStorePolicy specifies local instance store handling.
+                  P0 only validates the enum.
+                enum:
+                - RAID0
+                type: string
               imageSelectorTerms:
                 description: ImageSelectorTerms is a list of image selector requirements
                 items:

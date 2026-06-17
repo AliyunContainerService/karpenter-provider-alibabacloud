@@ -91,6 +91,10 @@ type ECSNodeClassSpec struct {
 	// +optional
 	DataDisks []DataDiskSpec `json:"dataDisks,omitempty"`
 
+	// InstanceStorePolicy specifies local instance store handling. P0 only validates the enum.
+	// +optional
+	InstanceStorePolicy *string `json:"instanceStorePolicy,omitempty"`
+
 	// SpotStrategy specifies the spot instance strategy (SpotAsPriceGo or SpotWithPriceLimit)
 	// +optional
 	SpotStrategy *string `json:"spotStrategy,omitempty"`
@@ -268,6 +272,10 @@ type DataDiskSpec struct {
 	// Encrypted specifies whether the disk is encrypted
 	// +optional
 	Encrypted *bool `json:"encrypted,omitempty"`
+
+	// KMSKeyID is the KMS key ID for encryption
+	// +optional
+	KMSKeyID *string `json:"kmsKeyID,omitempty"`
 
 	// SnapshotID is the snapshot ID to create from
 	// +optional

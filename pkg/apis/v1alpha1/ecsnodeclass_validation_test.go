@@ -355,6 +355,55 @@ func TestECSNodeClassValidateMetadataOptions(t *testing.T) {
 	}
 }
 
+func TestECSNodeClassValidateDiskOptions(t *testing.T) {
+	tests := []struct {
+		name string
+		mut  func(*ECSNodeClass)
+	}{
+		{
+			name: "rejects non ESSD system disk performance level",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.SystemDisk = &SystemDiskSpec{Category: "cloud_ssd", Size: ptrForUnit(int32(40)), PerformanceLevel: ptrForUnit("PL1")}
+			},
+		},
+		{
+			name: "rejects system disk kms without encryption",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.SystemDisk = &SystemDiskSpec{Category: "cloud_essd", Size: ptrForUnit(int32(40)), KMSKeyID: ptrForUnit("kms-1")}
+			},
+		},
+		{
+			name: "rejects non ESSD data disk performance level",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.DataDisks = []DataDiskSpec{{Category: "cloud_ssd", Size: 40, PerformanceLevel: ptrForUnit("PL1")}}
+			},
+		},
+		{
+			name: "rejects data disk kms without encryption",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.DataDisks = []DataDiskSpec{{Category: "cloud_essd", Size: 40, KMSKeyID: ptrForUnit("kms-1")}}
+			},
+		},
+		{
+			name: "rejects invalid instance store policy",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.InstanceStorePolicy = ptrForUnit("None")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nodeClass := validValidationNodeClassForUnit()
+			tt.mut(nodeClass)
+
+			if err := nodeClass.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
 func TestECSNodeClassDefaultMetadataOptions(t *testing.T) {
 	t.Run("omitted parent remains nil", func(t *testing.T) {
 		nodeClass := validValidationNodeClassForUnit()

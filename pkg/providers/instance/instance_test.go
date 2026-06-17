@@ -323,6 +323,83 @@ func TestCreatePreservesECSSecurityGroupErrorDetails(t *testing.T) {
 	mockClient.AssertExpectations(t)
 }
 
+func TestCreateDiskOptionsOmitSendSemantics(t *testing.T) {
+	encrypted := true
+	deleteWithInstanceFalse := false
+	mockClient := new(MockECSClient)
+	instanceID := "i-123456"
+	response := &ecs.RunInstancesResponse{
+		Body: &ecs.RunInstancesResponseBody{
+			InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
+				InstanceIdSet: []*string{&instanceID},
+			},
+		},
+	}
+	mockClient.On("RunInstances", mock.Anything, mock.MatchedBy(func(request *ecs.RunInstancesRequest) bool {
+		assert.Equal(t, "cloud_essd", *request.SystemDisk.Category)
+		assert.Equal(t, "40", *request.SystemDisk.Size)
+		assert.Equal(t, "PL0", *request.SystemDisk.PerformanceLevel)
+		assert.Equal(t, "true", *request.SystemDisk.Encrypted)
+		assert.Equal(t, "kms-system", *request.SystemDisk.KMSKeyId)
+
+		if assert.Len(t, request.DataDisk, 2) {
+			essd := request.DataDisk[0]
+			assert.Equal(t, "cloud_essd", *essd.Category)
+			assert.Equal(t, int32(120), *essd.Size)
+			assert.Equal(t, "/dev/xvdb", *essd.Device)
+			assert.Equal(t, "PL1", *essd.PerformanceLevel)
+			assert.Equal(t, "true", *essd.Encrypted)
+			assert.Equal(t, "kms-data", *essd.KMSKeyId)
+			assert.Equal(t, "s-123", *essd.SnapshotId)
+			assert.Equal(t, false, *essd.DeleteWithInstance)
+
+			ssd := request.DataDisk[1]
+			assert.Equal(t, "cloud_ssd", *ssd.Category)
+			assert.Equal(t, int32(80), *ssd.Size)
+			assert.Nil(t, ssd.PerformanceLevel)
+			assert.Nil(t, ssd.Encrypted)
+			assert.Nil(t, ssd.KMSKeyId)
+			assert.Nil(t, ssd.SnapshotId)
+			assert.Nil(t, ssd.Device)
+			assert.Nil(t, ssd.DeleteWithInstance)
+		}
+		return true
+	})).Return(response, nil)
+
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	_, err := provider.Create(context.Background(), CreateOptions{
+		InstanceType:     "ecs.g6.large",
+		ImageID:          "img-123",
+		VSwitchID:        "vsw-123",
+		SecurityGroupIDs: []string{"sg-123"},
+		SystemDisk: SystemDisk{
+			Category:         "cloud_essd",
+			Size:             40,
+			PerformanceLevel: "PL0",
+			Encrypted:        &encrypted,
+			KMSKeyID:         "kms-system",
+		},
+		DataDisks: []DataDisk{
+			{
+				Category:           "cloud_essd",
+				Size:               120,
+				Device:             "/dev/xvdb",
+				PerformanceLevel:   "PL1",
+				Encrypted:          &encrypted,
+				KMSKeyID:           "kms-data",
+				SnapshotID:         "s-123",
+				DeleteWithInstance: &deleteWithInstanceFalse,
+			},
+			{
+				Category: "cloud_ssd",
+				Size:     80,
+			},
+		},
+	})
+	assert.NoError(t, err)
+	mockClient.AssertExpectations(t)
+}
+
 func stringPointersToValues(values []*string) []string {
 	if values == nil {
 		return nil

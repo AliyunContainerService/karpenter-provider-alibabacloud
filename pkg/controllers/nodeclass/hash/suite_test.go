@@ -553,6 +553,9 @@ var _ = Describe("HashController", func() {
 			Expect(newHash).ToNot(Equal(originalHash))
 		})
 
+	})
+
+	Context("Dynamic Field Changes", func() {
 		It("should NOT update hash when ClusterName changes", func() {
 			// Create and get initial hash
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())

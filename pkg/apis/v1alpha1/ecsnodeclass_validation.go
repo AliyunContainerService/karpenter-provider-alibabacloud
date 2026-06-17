@@ -53,6 +53,9 @@ func (nc *ECSNodeClass) Validate() error {
 	if err := nc.validateDataDisks(); err != nil {
 		return err
 	}
+	if _, err := NormalizeDisks(nc.Spec); err != nil {
+		return err
+	}
 	if err := nc.validateSpotConfig(); err != nil {
 		return err
 	}

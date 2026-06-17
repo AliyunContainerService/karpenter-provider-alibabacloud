@@ -858,6 +858,10 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClaim *
 	if err != nil {
 		return "", err
 	}
+	disks, err := v1alpha1.NormalizeDisks(nodeClass.Spec)
+	if err != nil {
+		return "", err
+	}
 
 	instanceType := instanceTypes[0]
 	image := images[0]
@@ -876,34 +880,27 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClaim *
 		RAMRoleName:      ramRoleName,
 		MetadataOptions:  convertMetadataOptions(nodeClass.Spec.MetadataOptions),
 		SystemDisk: instance.SystemDisk{
-			Category:         "cloud_essd",
-			Size:             40,
-			PerformanceLevel: "PL0",
+			Category:         disks.SystemDisk.Category,
+			Size:             disks.SystemDisk.Size,
+			PerformanceLevel: disks.SystemDisk.PerformanceLevel,
+			Encrypted:        disks.SystemDisk.Encrypted,
+			KMSKeyID:         disks.SystemDisk.KMSKeyID,
 		},
+		InstanceStorePolicy: disks.InstanceStorePolicy,
 	}
-	if nodeClass.Spec.SystemDisk != nil {
-		baseOpts.SystemDisk.Category = nodeClass.Spec.SystemDisk.Category
-		if nodeClass.Spec.SystemDisk.Size != nil {
-			baseOpts.SystemDisk.Size = *nodeClass.Spec.SystemDisk.Size
-		}
-		if nodeClass.Spec.SystemDisk.PerformanceLevel != nil {
-			baseOpts.SystemDisk.PerformanceLevel = *nodeClass.Spec.SystemDisk.PerformanceLevel
-		}
-	}
-	if nodeClass.Spec.DataDisks != nil {
-		baseOpts.DataDisks = []instance.DataDisk{}
-		for _, disk := range nodeClass.Spec.DataDisks {
-			dataDisk := instance.DataDisk{
-				Category: disk.Category,
-				Size:     disk.Size,
-			}
-			if disk.Device != nil {
-				dataDisk.Device = *disk.Device
-			}
-			if disk.PerformanceLevel != nil {
-				dataDisk.PerformanceLevel = *disk.PerformanceLevel
-			}
-			baseOpts.DataDisks = append(baseOpts.DataDisks, dataDisk)
+	if len(disks.DataDisks) > 0 {
+		baseOpts.DataDisks = make([]instance.DataDisk, 0, len(disks.DataDisks))
+		for _, disk := range disks.DataDisks {
+			baseOpts.DataDisks = append(baseOpts.DataDisks, instance.DataDisk{
+				Category:           disk.Category,
+				Size:               disk.Size,
+				Device:             disk.Device,
+				PerformanceLevel:   disk.PerformanceLevel,
+				Encrypted:          disk.Encrypted,
+				KMSKeyID:           disk.KMSKeyID,
+				SnapshotID:         disk.SnapshotID,
+				DeleteWithInstance: disk.DeleteWithInstance,
+			})
 		}
 	}
 	// Derive capacity type from NodeClaim requirements (karpenter.sh/capacity-type).
@@ -1096,6 +1093,9 @@ func calculateNodeClassHash(nodeClass *v1alpha1.ECSNodeClass) string {
 		Tags                       map[string]string                    `json:"tags,omitempty"`
 		Role                       *string                              `json:"role,omitempty"`
 		MetadataOptions            *v1alpha1.MetadataOptions            `json:"metadataOptions,omitempty"`
+		SystemDisk                 *v1alpha1.SystemDiskSpec             `json:"systemDisk,omitempty"`
+		DataDisks                  []v1alpha1.DataDiskSpec              `json:"dataDisks,omitempty"`
+		InstanceStorePolicy        *string                              `json:"instanceStorePolicy,omitempty"`
 	}
 
 	hashInput := NodeClassHashInput{
@@ -1107,6 +1107,9 @@ func calculateNodeClassHash(nodeClass *v1alpha1.ECSNodeClass) string {
 		Tags:                       nodeClass.Spec.Tags,
 		Role:                       nodeClass.Spec.Role,
 		MetadataOptions:            nodeClass.Spec.MetadataOptions,
+		SystemDisk:                 nodeClass.Spec.SystemDisk,
+		DataDisks:                  nodeClass.Spec.DataDisks,
+		InstanceStorePolicy:        nodeClass.Spec.InstanceStorePolicy,
 	}
 
 	// Serialize to JSON with deterministic ordering

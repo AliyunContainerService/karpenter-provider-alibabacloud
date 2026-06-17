@@ -86,6 +86,11 @@ func (in *DataDiskSpec) DeepCopyInto(out *DataDiskSpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.KMSKeyID != nil {
+		in, out := &in.KMSKeyID, &out.KMSKeyID
+		*out = new(string)
+		**out = **in
+	}
 	if in.SnapshotID != nil {
 		in, out := &in.SnapshotID, &out.SnapshotID
 		*out = new(string)
@@ -207,6 +212,11 @@ func (in *ECSNodeClassSpec) DeepCopyInto(out *ECSNodeClassSpec) {
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
+	}
+	if in.InstanceStorePolicy != nil {
+		in, out := &in.InstanceStorePolicy, &out.InstanceStorePolicy
+		*out = new(string)
+		**out = **in
 	}
 	if in.SpotStrategy != nil {
 		in, out := &in.SpotStrategy, &out.SpotStrategy

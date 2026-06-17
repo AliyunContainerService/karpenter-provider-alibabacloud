@@ -255,6 +255,66 @@ func TestComputeRunInstancesBatchKeySecurityGroupIDs(t *testing.T) {
 	}
 }
 
+func TestComputeRunInstancesBatchKeyDiskOptions(t *testing.T) {
+	base := ecs.CreateRunInstancesRequest()
+	base.RegionId = "cn-hangzhou"
+	base.InstanceType = "ecs.g6.large"
+	base.ImageId = "m-test"
+	base.VSwitchId = "vsw-test"
+	base.SystemDiskCategory = "cloud_essd"
+	base.SystemDiskSize = "40"
+	base.SystemDiskPerformanceLevel = "PL0"
+	base.DataDisk = &[]ecs.RunInstancesDataDisk{
+		{
+			Category:           "cloud_essd",
+			Size:               "120",
+			PerformanceLevel:   "PL1",
+			Encrypted:          "true",
+			KMSKeyId:           "kms-1",
+			SnapshotId:         "s-1",
+			Device:             "/dev/xvdb",
+			DeleteWithInstance: "false",
+		},
+	}
+
+	changed := ecs.CreateRunInstancesRequest()
+	*changed = *base
+	changed.DataDisk = &[]ecs.RunInstancesDataDisk{
+		{
+			Category:           "cloud_essd",
+			Size:               "120",
+			PerformanceLevel:   "PL1",
+			Encrypted:          "true",
+			KMSKeyId:           "kms-2",
+			SnapshotId:         "s-1",
+			Device:             "/dev/xvdb",
+			DeleteWithInstance: "false",
+		},
+	}
+
+	if ComputeRunInstancesBatchKey(base) == ComputeRunInstancesBatchKey(changed) {
+		t.Fatal("expected disk field differences to produce different batch keys")
+	}
+}
+
+func TestComputeRunInstancesBatchKeyESSDPL0DefaultEquivalence(t *testing.T) {
+	implicit := ecs.CreateRunInstancesRequest()
+	implicit.RegionId = "cn-hangzhou"
+	implicit.InstanceType = "ecs.g6.large"
+	implicit.ImageId = "m-test"
+	implicit.VSwitchId = "vsw-test"
+	implicit.SystemDiskCategory = "cloud_essd"
+	implicit.SystemDiskSize = "40"
+
+	explicit := ecs.CreateRunInstancesRequest()
+	*explicit = *implicit
+	explicit.SystemDiskPerformanceLevel = "PL0"
+
+	if ComputeRunInstancesBatchKey(implicit) != ComputeRunInstancesBatchKey(explicit) {
+		t.Fatal("expected implicit and explicit ESSD PL0 to produce the same batch key")
+	}
+}
+
 // TestInstanceBatcherCreateInstance tests the instance batcher
 func TestInstanceBatcherCreateInstance(t *testing.T) {
 	mockClient := &mockECSClient{
