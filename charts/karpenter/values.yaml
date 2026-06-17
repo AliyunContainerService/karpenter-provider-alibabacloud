@@ -186,9 +186,38 @@ settings:
   # Example: cn-hangzhou, cn-beijing, cn-shanghai, ap-southeast-1
   region: ""
 
-  # -- Karpenter core feature gates.
-  # @description --
-  # Example: NodeOverlay=true
+  # -- SLS queue name for spot interruption events
+  interruptionQueue: ""
+
+  pricingRefresh:
+    # -- Enable background ECS pricing refresh
+    enabled: true
+    # -- Pricing refresh interval
+    interval: "12h"
+    # -- Max concurrent pricing calls
+    concurrency: 8
+
+  pricing:
+    # -- Allow static price fallback to cn-hangzhou
+    staticDefaultRegionFallbackEnabled: false
+
+  # -- TTL for capacity failure cache
+  unavailableOfferingCacheTTL: "5m"
+
+  # -- Bound create fallback attempts
+  maxCreateCandidateAttempts: 20
+
+  podDensity:
+    # -- Pod density mode: kubelet, terway-eni, terway-eni-multi-ip, exclusive-eni
+    mode: "kubelet"
+    # -- Reserved ENIs for host/system networking
+    terwayReservedENIs: 1
+    # -- Reserved IPs per ENI
+    terwayReservedIPsPerENI: 1
+    # -- Optional upper bound for Terway calculated maxPods; 0 disables
+    terwayMaxPodsCap: 0
+
+  # -- Comma-separated provider feature gates (also accepts Karpenter core gates, e.g. NodeOverlay=true)
   featureGates: ""
 
 # -- Image pull secrets for private registries
