@@ -17,9 +17,13 @@ limitations under the License.
 package cloudprovider
 
 import (
+	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/instance"
 	corev1 "k8s.io/api/core/v1"
 	coreapis "sigs.k8s.io/karpenter/pkg/apis/v1"
 )
@@ -191,5 +195,78 @@ func TestVSwitchZoneFilteringBug(t *testing.T) {
 	}
 	if filtered[0].ID != "vsw-n" {
 		t.Errorf("expected vswitch vsw-n (zone cn-shanghai-n), got %q (zone %q)", filtered[0].ID, filtered[0].Zone)
+	}
+}
+
+// TestVSwitchFallbackOnNoStock verifies that vswitchFallbackCreate falls back to the next vswitch
+// when the first one returns a NoStock capacity error (issue #9).
+func TestVSwitchFallbackOnNoStock(t *testing.T) {
+	vswitches := []v1alpha1.VSwitch{
+		{ID: "vsw-l", Zone: "cn-shanghai-l"},
+		{ID: "vsw-n", Zone: "cn-shanghai-n"},
+	}
+
+	callOrder := []string{}
+	createFn := func(_ context.Context, opts instance.CreateOptions) (string, error) {
+		callOrder = append(callOrder, opts.VSwitchID)
+		if opts.VSwitchID == "vsw-l" {
+			return "", fmt.Errorf("OperationDenied.NoStock: no available instance in zone")
+		}
+		return "i-success", nil
+	}
+
+	id, err := vswitchFallbackCreate(context.Background(), instance.CreateOptions{}, vswitches, createFn)
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if id != "i-success" {
+		t.Errorf("expected instanceID i-success, got %q", id)
+	}
+	if len(callOrder) != 2 || callOrder[0] != "vsw-l" || callOrder[1] != "vsw-n" {
+		t.Errorf("unexpected call order: %v", callOrder)
+	}
+}
+
+// TestVSwitchFallbackFailFastOnQuotaError verifies that a non-retryable error causes an immediate
+// failure without trying additional vswitches.
+func TestVSwitchFallbackFailFastOnQuotaError(t *testing.T) {
+	vswitches := []v1alpha1.VSwitch{
+		{ID: "vsw-l", Zone: "cn-shanghai-l"},
+		{ID: "vsw-n", Zone: "cn-shanghai-n"},
+	}
+
+	calls := 0
+	createFn := func(_ context.Context, opts instance.CreateOptions) (string, error) {
+		calls++
+		return "", fmt.Errorf("QuotaExceed.Instance: quota exceeded")
+	}
+
+	_, err := vswitchFallbackCreate(context.Background(), instance.CreateOptions{}, vswitches, createFn)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if calls != 1 {
+		t.Errorf("expected exactly 1 create call on quota error, got %d", calls)
+	}
+}
+
+// TestVSwitchFallbackAllExhausted verifies that when all vswitches report IP exhaustion, the
+// function returns a descriptive error including the last failure.
+func TestVSwitchFallbackAllExhausted(t *testing.T) {
+	vswitches := []v1alpha1.VSwitch{
+		{ID: "vsw-l", Zone: "cn-shanghai-l"},
+		{ID: "vsw-n", Zone: "cn-shanghai-n"},
+	}
+
+	createFn := func(_ context.Context, opts instance.CreateOptions) (string, error) {
+		return "", fmt.Errorf("InvalidVSwitchId.IpNotEnough: vswitch %s has no available IPs", opts.VSwitchID)
+	}
+
+	_, err := vswitchFallbackCreate(context.Background(), instance.CreateOptions{}, vswitches, createFn)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "all vSwitches exhausted") {
+		t.Errorf("expected 'all vSwitches exhausted' in error, got: %v", err)
 	}
 }

@@ -122,12 +122,14 @@ func TestResolve(t *testing.T) {
 			},
 			expected: []v1alpha1.VSwitch{
 				{
-					ID:   "vsw-tag-1",
-					Zone: "cn-hangzhou-h",
+					ID:     "vsw-tag-1",
+					Zone:   "cn-hangzhou-h",
+					ZoneID: "cn-hangzhou-h",
 				},
 				{
-					ID:   "vsw-tag-2",
-					Zone: "cn-hangzhou-i",
+					ID:     "vsw-tag-2",
+					Zone:   "cn-hangzhou-i",
+					ZoneID: "cn-hangzhou-i",
 				},
 			},
 		},
@@ -270,12 +272,14 @@ func TestGetByTags(t *testing.T) {
 			},
 			expected: []v1alpha1.VSwitch{
 				{
-					ID:   "vsw-1",
-					Zone: "cn-hangzhou-h",
+					ID:     "vsw-1",
+					Zone:   "cn-hangzhou-h",
+					ZoneID: "cn-hangzhou-h",
 				},
 				{
-					ID:   "vsw-2",
-					Zone: "cn-hangzhou-i",
+					ID:     "vsw-2",
+					Zone:   "cn-hangzhou-i",
+					ZoneID: "cn-hangzhou-i",
 				},
 			},
 		},
