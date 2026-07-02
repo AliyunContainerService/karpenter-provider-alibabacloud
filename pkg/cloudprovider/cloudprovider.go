@@ -23,11 +23,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/errors"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/operator/options"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/bootstrap"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/cluster"
@@ -153,10 +155,10 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
 		return nil, fmt.Errorf("no images available in nodeclass status")
 	}
 
-	// 5. Get VSwitches from NodeClass status
-	vswitches := nodeClass.Status.VSwitches
+	// 5. Get VSwitches from NodeClass status, filtered by zone requirements
+	vswitches := filterVSwitchesByZones(nodeClass.Status.VSwitches, zonesFromRequirements(nodeClaim.Spec.Requirements))
 	if len(vswitches) == 0 {
-		return nil, fmt.Errorf("no vswitches available in nodeclass status")
+		return nil, fmt.Errorf("no vswitches available matching the zone requirements")
 	}
 
 	// 6. Get SecurityGroups from NodeClass status
@@ -615,6 +617,40 @@ func buildInstanceTags(nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNod
 	return tags
 }
 
+// zonesFromRequirements extracts the allowed zones from a NodeClaim's requirements.
+// Returns nil when no topology.kubernetes.io/zone requirement is present (meaning any zone is allowed).
+func zonesFromRequirements(requirements []coreapis.NodeSelectorRequirementWithMinValues) []string {
+	for _, req := range requirements {
+		if req.Key == corev1.LabelTopologyZone && req.Operator == corev1.NodeSelectorOpIn {
+			return req.Values
+		}
+	}
+	return nil
+}
+
+// filterVSwitchesByZones returns only the vswitches whose zone matches one of the allowed zones.
+// When allowedZones is nil (no zone requirement), all vswitches are returned unchanged.
+func filterVSwitchesByZones(vswitches []v1alpha1.VSwitch, allowedZones []string) []v1alpha1.VSwitch {
+	if len(allowedZones) == 0 {
+		return vswitches
+	}
+	allowed := make(map[string]struct{}, len(allowedZones))
+	for _, z := range allowedZones {
+		allowed[z] = struct{}{}
+	}
+	var filtered []v1alpha1.VSwitch
+	for _, vs := range vswitches {
+		zone := vs.ZoneID
+		if zone == "" {
+			zone = vs.Zone
+		}
+		if _, ok := allowed[zone]; ok {
+			filtered = append(filtered, vs)
+		}
+	}
+	return filtered
+}
+
 // filterInstanceTypesByRequirements converts Karpenter requirements to instancetype requirements and filters
 func (c *CloudProvider) filterInstanceTypesByRequirements(ctx context.Context, instanceTypes []*instancetype.InstanceType, requirements []coreapis.NodeSelectorRequirementWithMinValues) []*instancetype.InstanceType {
 	// Convert Karpenter requirements to instancetype requirements
@@ -648,47 +684,39 @@ func (c *CloudProvider) filterInstanceTypesByRequirements(ctx context.Context, i
 }
 
 func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClass *v1alpha1.ECSNodeClass, instanceTypes []*instancetype.InstanceType, images []v1alpha1.Image, vswitches []v1alpha1.VSwitch, securityGroups []v1alpha1.SecurityGroup, userData string, tags map[string]string) (string, error) {
-	// This is a simplified implementation that delegates to the instance provider
-	// In a production implementation, this should implement retry logic and capacity fallback
-
 	if len(instanceTypes) == 0 || len(images) == 0 || len(vswitches) == 0 || len(securityGroups) == 0 {
 		return "", fmt.Errorf("missing required parameters for instance creation")
 	}
 
-	// Select the first instance type, image, vswitch, and security group for simplicity
-	// In a real implementation, this should implement proper selection logic
 	instanceType := instanceTypes[0]
 	image := images[0]
-	vswitch := vswitches[0]
 	securityGroup := securityGroups[0]
 
-	// Build CreateOptions
-	opts := instance.CreateOptions{
+	baseOpts := instance.CreateOptions{
 		InstanceType: instanceType.Name,
 		ImageID:      image.ID,
-		VSwitchID:    vswitch.ID,
 		SecurityGroupIDs: []string{
 			securityGroup.ID,
 		},
 		UserData: userData,
 		Tags:     tags,
 		SystemDisk: instance.SystemDisk{
-			Category:         "cloud_essd", // Default category
-			Size:             40,           // Default size in GB
+			Category:         "cloud_essd",
+			Size:             40,
 			PerformanceLevel: "PL0",
 		},
 	}
 	if nodeClass.Spec.SystemDisk != nil {
-		opts.SystemDisk.Category = nodeClass.Spec.SystemDisk.Category
+		baseOpts.SystemDisk.Category = nodeClass.Spec.SystemDisk.Category
 		if nodeClass.Spec.SystemDisk.Size != nil {
-			opts.SystemDisk.Size = *nodeClass.Spec.SystemDisk.Size
+			baseOpts.SystemDisk.Size = *nodeClass.Spec.SystemDisk.Size
 		}
 		if nodeClass.Spec.SystemDisk.PerformanceLevel != nil {
-			opts.SystemDisk.PerformanceLevel = *nodeClass.Spec.SystemDisk.PerformanceLevel
+			baseOpts.SystemDisk.PerformanceLevel = *nodeClass.Spec.SystemDisk.PerformanceLevel
 		}
 	}
 	if nodeClass.Spec.DataDisks != nil {
-		opts.DataDisks = []instance.DataDisk{}
+		baseOpts.DataDisks = []instance.DataDisk{}
 		for _, disk := range nodeClass.Spec.DataDisks {
 			dataDisk := instance.DataDisk{
 				Category: disk.Category,
@@ -700,26 +728,48 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClass *
 			if disk.PerformanceLevel != nil {
 				dataDisk.PerformanceLevel = *disk.PerformanceLevel
 			}
-			opts.DataDisks = append(opts.DataDisks, dataDisk)
+			baseOpts.DataDisks = append(baseOpts.DataDisks, dataDisk)
 		}
 	}
 	if nodeClass.Spec.Tags != nil {
-		opts.Tags = nodeClass.Spec.Tags
+		baseOpts.Tags = nodeClass.Spec.Tags
 	}
 	if nodeClass.Spec.SpotStrategy != nil {
-		opts.SpotStrategy = *nodeClass.Spec.SpotStrategy
+		baseOpts.SpotStrategy = *nodeClass.Spec.SpotStrategy
 	}
 	if nodeClass.Spec.SpotPriceLimit != nil {
-		opts.SpotPriceLimit = *nodeClass.Spec.SpotPriceLimit
+		baseOpts.SpotPriceLimit = *nodeClass.Spec.SpotPriceLimit
 	}
 
-	// Call the instance provider's Create method
-	instanceID, err := c.instanceProvider.Create(ctx, opts)
-	if err != nil {
+	return vswitchFallbackCreate(ctx, baseOpts, vswitches, c.instanceProvider.Create)
+}
+
+// vswitchFallbackCreate tries vswitches in order, falling back to the next on capacity or IP-exhaustion
+// errors. Non-retryable errors cause an immediate return.
+func vswitchFallbackCreate(ctx context.Context, baseOpts instance.CreateOptions, vswitches []v1alpha1.VSwitch, createFn func(context.Context, instance.CreateOptions) (string, error)) (string, error) {
+	sorted := make([]v1alpha1.VSwitch, len(vswitches))
+	copy(sorted, vswitches)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].AvailableIPAddressCount > sorted[j].AvailableIPAddressCount
+	})
+
+	var lastErr error
+	for _, vsw := range sorted {
+		opts := baseOpts
+		opts.VSwitchID = vsw.ID
+		instanceID, err := createFn(ctx, opts)
+		if err == nil {
+			return instanceID, nil
+		}
+		if errors.IsInsufficientCapacityError(err) {
+			log.FromContext(ctx).Info("vSwitch capacity/IP exhausted, trying next",
+				"vswitch", vsw.ID, "zone", vsw.Zone, "error", err)
+			lastErr = err
+			continue
+		}
 		return "", fmt.Errorf("failed to create instance: %w", err)
 	}
-
-	return instanceID, nil
+	return "", fmt.Errorf("all vSwitches exhausted, last error: %w", lastErr)
 }
 
 func (c *CloudProvider) convertInstanceToNodeClaim(ctx context.Context, inst *instance.Instance, original *coreapis.NodeClaim, instanceTypes []*instancetype.InstanceType, clusterID string) *coreapis.NodeClaim {
