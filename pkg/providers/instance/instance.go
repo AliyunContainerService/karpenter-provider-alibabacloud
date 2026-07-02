@@ -457,48 +457,29 @@ func (p *Provider) describeInstances(ctx context.Context, instanceIDs []string) 
 func (p *Provider) Delete(ctx context.Context, instanceID string) error {
 	logger := log.FromContext(ctx)
 
-	// Log the deletion attempt for debugging (only at debug level)
-	logger.Info("Attempting to delete instance", "instanceID", instanceID, "region", p.region)
-
-	// Check instance status before attempting deletion using batcher
-	logger.Info("Getting instance info before deletion", "instanceID", instanceID)
-	inst, err := p.Get(ctx, instanceID)
-	if err != nil {
-		return err
-	}
-
-	logger.Info("Instance info retrieved", "instanceID", instanceID, "status", inst.Status)
-
-	// Create delete instance request
 	request := &ecs.DeleteInstancesRequest{
 		RegionId:   tea.String(p.region),
 		InstanceId: []*string{tea.String(instanceID)},
 		Force:      tea.Bool(true),
 	}
 
-	// Log the delete request for debugging
-	logger.Info("DeleteInstances request prepared", "regionId", *request.RegionId, "instanceIds", instanceID, "force", *request.Force)
-
-	resp, deleteErr := p.ecsClient.DeleteInstances(ctx, request)
-	if deleteErr == nil {
-		requestId := ""
-		if resp.Body != nil && resp.Body.RequestId != nil {
-			requestId = *resp.Body.RequestId
+	resp, err := p.ecsClient.DeleteInstances(ctx, request)
+	if err != nil {
+		if errors.IsNotFound(err) ||
+			strings.Contains(err.Error(), "InvalidInstanceId.NotFound") ||
+			strings.Contains(err.Error(), "InstanceNotFound") {
+			logger.Info("instance already deleted or not found", "instanceID", instanceID)
+			return cloudprovider.NewNodeClaimNotFoundError(fmt.Errorf("instance delete with err %w", err))
 		}
-		logger.Info("Successfully deleted instance", "instanceID", instanceID, "requestId", requestId)
-		p.deleteCachedInstance(instanceID)
-	}
-	if deleteErr != nil {
-		if errors.IsNotFound(deleteErr) ||
-			strings.Contains(deleteErr.Error(), "InvalidInstanceId.NotFound") ||
-			strings.Contains(deleteErr.Error(), "InstanceNotFound") ||
-			strings.Contains(deleteErr.Error(), "not found") {
-			logger.Info("instance already deleted or not found, returning NodeClaimNotFoundError", "instanceID", instanceID, "error", deleteErr.Error())
-			return cloudprovider.NewNodeClaimNotFoundError(fmt.Errorf("instance delete with err %w", deleteErr))
-		}
-		return fmt.Errorf("delete instance failed with err %w", deleteErr)
+		return fmt.Errorf("delete instance failed: %w", err)
 	}
 
+	requestId := ""
+	if resp.Body != nil && resp.Body.RequestId != nil {
+		requestId = *resp.Body.RequestId
+	}
+	logger.Info("deleted instance", "instanceID", instanceID, "requestId", requestId)
+	p.deleteCachedInstance(instanceID)
 	return nil
 }
 
