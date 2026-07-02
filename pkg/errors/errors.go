@@ -148,11 +148,11 @@ func GetRetryStrategy(err error) *RetryStrategy {
 	}
 
 	if IsThrottlingError(err) {
-		// Exponential backoff for throttling
+		// Short retry as safety net; token bucket in ECSClient handles the bulk.
 		return &RetryStrategy{
-			MaxAttempts:       5,
-			InitialBackoff:    1000,  // 1s
-			MaxBackoff:        16000, // 16s
+			MaxAttempts:       2,    // was 5; goroutine blocks at most ~2s total
+			InitialBackoff:    1000, // 1s
+			MaxBackoff:        2000, // 2s max (was 16s)
 			BackoffMultiplier: 2.0,
 		}
 	}
