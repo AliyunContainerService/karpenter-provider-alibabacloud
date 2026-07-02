@@ -24,7 +24,6 @@ import (
 
 	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"github.com/alibabacloud-go/tea/tea"
-	"golang.org/x/time/rate"
 )
 
 // ECSClient is a unified interface for all ECS client operations across different providers
@@ -67,116 +66,64 @@ type Image struct {
 }
 
 // DefaultECSClient implements ECSClient using Alibaba Cloud SDK.
-// All API calls are gated by a shared token bucket to prevent thundering-herd
-// throttling when many NodeClaims are provisioned concurrently. Default: 10 QPS, burst 20.
 type DefaultECSClient struct {
-	client  *ecs.Client
-	region  string
-	limiter *rate.Limiter
+	client *ecs.Client
+	region string
 }
 
-// clientOption configures DefaultECSClient.
-type clientOption func(*DefaultECSClient)
-
-// WithRateLimit overrides the default token bucket. qps is the sustained
-// requests per second; burst is the maximum accumulated tokens.
-// Pass (0, 0) or negative values to disable rate limiting.
-func WithRateLimit(qps float64, burst int) clientOption {
-	return func(c *DefaultECSClient) {
-		if qps <= 0 || burst <= 0 {
-			c.limiter = rate.NewLimiter(rate.Inf, 0)
-		} else {
-			c.limiter = rate.NewLimiter(rate.Limit(qps), burst)
-		}
+// NewDefaultECSClient creates a new default ECS client.
+func NewDefaultECSClient(client *ecs.Client, region string) ECSClient {
+	return &DefaultECSClient{
+		client: client,
+		region: region,
 	}
-}
-
-// NewLimiter creates a rate.Limiter with the given QPS and burst.
-// Exported for white-box tests.
-func NewLimiter(qps float64, burst int) *rate.Limiter {
-	return rate.NewLimiter(rate.Limit(qps), burst)
-}
-
-// NewDefaultECSClient creates a new default ECS client with a 10 QPS / burst-20
-// token bucket. Pass WithRateLimit to override.
-func NewDefaultECSClient(client *ecs.Client, region string, opts ...clientOption) ECSClient {
-	c := &DefaultECSClient{
-		client:  client,
-		region:  region,
-		limiter: rate.NewLimiter(rate.Limit(10), 20),
-	}
-	for _, o := range opts {
-		o(c)
-	}
-	return c
-}
-
-// wait blocks until a rate-limit token is available or ctx is cancelled.
-func (c *DefaultECSClient) wait(ctx context.Context) error {
-	return c.limiter.Wait(ctx)
 }
 
 // RunInstances implements ECSClient interface
 func (c *DefaultECSClient) RunInstances(ctx context.Context, request *ecs.RunInstancesRequest) (*ecs.RunInstancesResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
+
 	return c.client.RunInstances(request)
 }
 
 // DescribeInstances implements ECSClient interface
 func (c *DefaultECSClient) DescribeInstances(ctx context.Context, request *ecs.DescribeInstancesRequest) (*ecs.DescribeInstancesResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
+
 	return c.client.DescribeInstances(request)
 }
 
 // DeleteInstances implements ECSClient interface
 func (c *DefaultECSClient) DeleteInstances(ctx context.Context, request *ecs.DeleteInstancesRequest) (*ecs.DeleteInstancesResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
+
 	return c.client.DeleteInstances(request)
 }
 
 // TagResources implements ECSClient interface
 func (c *DefaultECSClient) TagResources(ctx context.Context, request *ecs.TagResourcesRequest) (*ecs.TagResourcesResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
+
 	return c.client.TagResources(request)
 }
 
 // CreateLaunchTemplate implements ECSClient interface
 func (c *DefaultECSClient) CreateLaunchTemplate(ctx context.Context, request *ecs.CreateLaunchTemplateRequest) (*ecs.CreateLaunchTemplateResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
+
 	return c.client.CreateLaunchTemplate(request)
 }
 
 // DescribeLaunchTemplates implements ECSClient interface
 func (c *DefaultECSClient) DescribeLaunchTemplates(ctx context.Context, request *ecs.DescribeLaunchTemplatesRequest) (*ecs.DescribeLaunchTemplatesResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
+
 	return c.client.DescribeLaunchTemplates(request)
 }
 
 // DeleteLaunchTemplate implements ECSClient interface
 func (c *DefaultECSClient) DeleteLaunchTemplate(ctx context.Context, request *ecs.DeleteLaunchTemplateRequest) (*ecs.DeleteLaunchTemplateResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
+
 	return c.client.DeleteLaunchTemplate(request)
 }
 
 // DescribeInstanceTypes implements ECSClient interface
 func (c *DefaultECSClient) DescribeInstanceTypes(ctx context.Context, instanceTypes []string) (*ecs.DescribeInstanceTypesResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
+
 	request := &ecs.DescribeInstanceTypesRequest{}
 
 	if len(instanceTypes) > 0 {
@@ -198,9 +145,7 @@ func (c *DefaultECSClient) DescribeInstanceTypes(ctx context.Context, instanceTy
 
 // DescribeZones implements ECSClient interface
 func (c *DefaultECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
+
 	request := &ecs.DescribeZonesRequest{
 		RegionId: tea.String(c.region),
 	}
@@ -243,9 +188,6 @@ func (c *DefaultECSClient) DescribeImages(ctx context.Context, imageIDs []string
 	for {
 		request.PageNumber = tea.Int32(int32(pageNumber))
 
-		if err := c.wait(ctx); err != nil {
-			return nil, err
-		}
 		response, err := c.client.DescribeImages(request)
 		if err != nil {
 			return nil, fmt.Errorf("failed to describe images (page %d): %w", pageNumber, err)
@@ -292,9 +234,7 @@ func (c *DefaultECSClient) DescribeImages(ctx context.Context, imageIDs []string
 
 // DescribeSecurityGroups implements ECSClient interface
 func (c *DefaultECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
+
 	request := &ecs.DescribeSecurityGroupsRequest{
 		RegionId: tea.String(c.region),
 	}
@@ -328,9 +268,7 @@ func (c *DefaultECSClient) DescribeSecurityGroups(ctx context.Context, tags map[
 
 // DescribeCapacityReservations implements ECSClient interface
 func (c *DefaultECSClient) DescribeCapacityReservations(ctx context.Context, id string, tags map[string]string) (*ecs.DescribeCapacityReservationsResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
+
 	request := &ecs.DescribeCapacityReservationsRequest{
 		RegionId: tea.String(c.region),
 	}
@@ -356,9 +294,7 @@ func (c *DefaultECSClient) DescribeCapacityReservations(ctx context.Context, id 
 
 // DescribePrice implements ECSClient interface
 func (c *DefaultECSClient) DescribePrice(ctx context.Context, instanceType string) (*ecs.DescribePriceResponse, error) {
-	if err := c.wait(ctx); err != nil {
-		return nil, err
-	}
+
 	request := &ecs.DescribePriceRequest{
 		RegionId:     tea.String(c.region),
 		ResourceType: tea.String("instance"),

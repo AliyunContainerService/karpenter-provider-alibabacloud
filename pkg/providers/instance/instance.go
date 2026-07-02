@@ -266,9 +266,7 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 		}
 	}
 
-	response, err := withThrottlingRetry(ctx, "RunInstances", func() (*ecs.RunInstancesResponse, error) {
-		return p.ecsClient.RunInstances(ctx, request)
-	})
+	response, err := p.ecsClient.RunInstances(ctx, request)
 	if err != nil {
 		logger.Error(err, "failed to create instance")
 		return "", fmt.Errorf("failed to create instance: %w", err)
@@ -440,9 +438,7 @@ func (p *Provider) describeInstances(ctx context.Context, instanceIDs []string) 
 	// Log the request for debugging (only at debug level)
 	logger.V(1).Info("DescribeInstances request", "regionId", *request.RegionId, "instanceIds", *request.InstanceIds)
 
-	response, err := withThrottlingRetry(ctx, "DescribeInstances", func() (*ecs.DescribeInstancesResponse, error) {
-		return p.ecsClient.DescribeInstances(ctx, request)
-	})
+	response, err := p.ecsClient.DescribeInstances(ctx, request)
 	if err != nil {
 		if strings.Contains(err.Error(), "InvalidInstanceId.NotFound") ||
 			strings.Contains(err.Error(), "InstanceNotFound") ||
@@ -483,20 +479,15 @@ func (p *Provider) Delete(ctx context.Context, instanceID string) error {
 	// Log the delete request for debugging
 	logger.Info("DeleteInstances request prepared", "regionId", *request.RegionId, "instanceIds", instanceID, "force", *request.Force)
 
-	_, deleteErr := withThrottlingRetry(ctx, "DeleteInstances", func() (struct{}, error) {
-		resp, err := p.ecsClient.DeleteInstances(ctx, request)
-		if err != nil {
-			logger.Info("DeleteInstances API call failed", "instanceID", instanceID, "error", err.Error())
-			return struct{}{}, err
-		}
+	resp, deleteErr := p.ecsClient.DeleteInstances(ctx, request)
+	if deleteErr == nil {
 		requestId := ""
 		if resp.Body != nil && resp.Body.RequestId != nil {
 			requestId = *resp.Body.RequestId
 		}
 		logger.Info("Successfully deleted instance", "instanceID", instanceID, "requestId", requestId)
 		p.deleteCachedInstance(instanceID)
-		return struct{}{}, nil
-	})
+	}
 	if deleteErr != nil {
 		if errors.IsNotFound(deleteErr) ||
 			strings.Contains(deleteErr.Error(), "InvalidInstanceId.NotFound") ||
@@ -541,9 +532,7 @@ func (p *Provider) List(ctx context.Context, tags map[string]string) ([]*Instanc
 	for {
 		request.PageNumber = tea.Int32(pageNumber)
 
-		response, err := withThrottlingRetry(ctx, "DescribeInstances(list)", func() (*ecs.DescribeInstancesResponse, error) {
-			return p.ecsClient.DescribeInstances(ctx, request)
-		})
+		response, err := p.ecsClient.DescribeInstances(ctx, request)
 		if err != nil {
 			logger.Error(err, "failed to list instances")
 			return nil, fmt.Errorf("failed to list instances: %w", err)

@@ -58,10 +58,6 @@ const (
 	ErrCodeDeletionProtection      = "OperationDenied.DeletionProtection"
 )
 
-// ErrThrottling is a sentinel error whose message matches IsThrottlingError ("Throttling", capital T).
-// Use it to obtain the correct RetryStrategy: errors.GetRetryStrategy(errors.ErrThrottling).
-var ErrThrottling = fmt.Errorf(ErrCodeThrottling)
-
 // IsInsufficientCapacityError checks if the error is due to insufficient capacity
 func IsInsufficientCapacityError(err error) bool {
 	if err == nil {
@@ -131,55 +127,6 @@ func NewInsufficientCapacityError(instanceType, zone string) error {
 // NewNotFoundError creates a new not found error
 func NewNotFoundError(resourceType, identifier string) error {
 	return fmt.Errorf("%s not found: %s", resourceType, identifier)
-}
-
-// RetryStrategy defines retry behavior for different error types
-type RetryStrategy struct {
-	MaxAttempts       int
-	InitialBackoff    int // milliseconds
-	MaxBackoff        int // milliseconds
-	BackoffMultiplier float64
-}
-
-// GetRetryStrategy returns the retry strategy for a given error
-func GetRetryStrategy(err error) *RetryStrategy {
-	if err == nil {
-		return nil
-	}
-
-	if IsThrottlingError(err) {
-		// Short retry as safety net; token bucket in ECSClient handles the bulk.
-		return &RetryStrategy{
-			MaxAttempts:       2,    // was 5; goroutine blocks at most ~2s total
-			InitialBackoff:    1000, // 1s
-			MaxBackoff:        2000, // 2s max (was 16s)
-			BackoffMultiplier: 2.0,
-		}
-	}
-
-	if IsInsufficientCapacityError(err) {
-		// Quick retry for capacity errors (should try different zone/type)
-		return &RetryStrategy{
-			MaxAttempts:       3,
-			InitialBackoff:    500,  // 0.5s
-			MaxBackoff:        2000, // 2s
-			BackoffMultiplier: 1.5,
-		}
-	}
-
-	// Internal errors
-	if strings.Contains(err.Error(), ErrCodeInternalError) ||
-		strings.Contains(err.Error(), ErrCodeServiceUnavailable) {
-		return &RetryStrategy{
-			MaxAttempts:       3,
-			InitialBackoff:    2000, // 2s
-			MaxBackoff:        8000, // 8s
-			BackoffMultiplier: 2.0,
-		}
-	}
-
-	// No retry for other errors
-	return nil
 }
 
 // IsNotFound checks if error is a not found error
