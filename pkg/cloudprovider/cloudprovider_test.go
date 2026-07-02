@@ -200,6 +200,64 @@ func TestVSwitchZoneFilteringBug(t *testing.T) {
 
 // TestVSwitchFallbackOnNoStock verifies that vswitchFallbackCreate falls back to the next vswitch
 // when the first one returns a NoStock capacity error (issue #9).
+// TestVSwitchFallbackSortsByIPCount verifies that vswitches are tried in descending order of
+// AvailableIPAddressCount, so the one with the most IPs is attempted first.
+func TestVSwitchFallbackSortsByIPCount(t *testing.T) {
+	vswitches := []v1alpha1.VSwitch{
+		{ID: "vsw-low", Zone: "cn-shanghai-a", AvailableIPAddressCount: 5},
+		{ID: "vsw-high", Zone: "cn-shanghai-b", AvailableIPAddressCount: 50},
+		{ID: "vsw-mid", Zone: "cn-shanghai-c", AvailableIPAddressCount: 20},
+	}
+
+	// Make the two highest-IP vswitches fail with capacity errors so the loop
+	// visits all three in order, letting us verify the sort.
+	callOrder := []string{}
+	createFn := func(_ context.Context, opts instance.CreateOptions) (string, error) {
+		callOrder = append(callOrder, opts.VSwitchID)
+		if opts.VSwitchID == "vsw-high" || opts.VSwitchID == "vsw-mid" {
+			return "", fmt.Errorf("OperationDenied.NoStock: no stock in zone")
+		}
+		return "i-success", nil
+	}
+
+	if _, err := vswitchFallbackCreate(context.Background(), instance.CreateOptions{}, vswitches, createFn); err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	want := []string{"vsw-high", "vsw-mid", "vsw-low"}
+	if len(callOrder) != len(want) {
+		t.Fatalf("expected %d calls, got %d: %v", len(want), len(callOrder), callOrder)
+	}
+	for i, id := range want {
+		if callOrder[i] != id {
+			t.Errorf("call[%d]: want %q, got %q", i, id, callOrder[i])
+		}
+	}
+}
+
+// TestVSwitchFallbackDoesNotMutateInputSlice verifies that the original vswitches slice is not
+// reordered by vswitchFallbackCreate (important when the slice is backed by a cache).
+func TestVSwitchFallbackDoesNotMutateInputSlice(t *testing.T) {
+	vswitches := []v1alpha1.VSwitch{
+		{ID: "vsw-low", Zone: "cn-shanghai-a", AvailableIPAddressCount: 5},
+		{ID: "vsw-high", Zone: "cn-shanghai-b", AvailableIPAddressCount: 50},
+		{ID: "vsw-mid", Zone: "cn-shanghai-c", AvailableIPAddressCount: 20},
+	}
+	originalOrder := []string{vswitches[0].ID, vswitches[1].ID, vswitches[2].ID}
+
+	createFn := func(_ context.Context, opts instance.CreateOptions) (string, error) {
+		return "i-success", nil
+	}
+
+	if _, err := vswitchFallbackCreate(context.Background(), instance.CreateOptions{}, vswitches, createFn); err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	for i, id := range originalOrder {
+		if vswitches[i].ID != id {
+			t.Errorf("input slice mutated at index %d: want %q, got %q", i, id, vswitches[i].ID)
+		}
+	}
+}
+
 func TestVSwitchFallbackOnNoStock(t *testing.T) {
 	vswitches := []v1alpha1.VSwitch{
 		{ID: "vsw-l", Zone: "cn-shanghai-l"},

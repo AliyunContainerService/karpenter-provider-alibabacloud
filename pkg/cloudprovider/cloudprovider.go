@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -746,8 +747,14 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClass *
 // vswitchFallbackCreate tries vswitches in order, falling back to the next on capacity or IP-exhaustion
 // errors. Non-retryable errors cause an immediate return.
 func vswitchFallbackCreate(ctx context.Context, baseOpts instance.CreateOptions, vswitches []v1alpha1.VSwitch, createFn func(context.Context, instance.CreateOptions) (string, error)) (string, error) {
+	sorted := make([]v1alpha1.VSwitch, len(vswitches))
+	copy(sorted, vswitches)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].AvailableIPAddressCount > sorted[j].AvailableIPAddressCount
+	})
+
 	var lastErr error
-	for _, vsw := range vswitches {
+	for _, vsw := range sorted {
 		opts := baseOpts
 		opts.VSwitchID = vsw.ID
 		instanceID, err := createFn(ctx, opts)
