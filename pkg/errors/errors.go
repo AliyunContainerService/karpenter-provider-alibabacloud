@@ -58,6 +58,10 @@ const (
 	ErrCodeDeletionProtection      = "OperationDenied.DeletionProtection"
 )
 
+// ErrThrottling is a sentinel error whose message matches IsThrottlingError ("Throttling", capital T).
+// Use it to obtain the correct RetryStrategy: errors.GetRetryStrategy(errors.ErrThrottling).
+var ErrThrottling = fmt.Errorf(ErrCodeThrottling)
+
 // IsInsufficientCapacityError checks if the error is due to insufficient capacity
 func IsInsufficientCapacityError(err error) bool {
 	if err == nil {

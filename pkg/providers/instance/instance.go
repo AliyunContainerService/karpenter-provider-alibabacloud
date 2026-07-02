@@ -20,8 +20,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"math"
-	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -268,66 +266,12 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 		}
 	}
 
-	// Implement retry mechanism for throttling errors
-	var response *ecs.RunInstancesResponse
-	var err error
-
-	// Get retry strategy for throttling
-	strategy := errors.GetRetryStrategy(fmt.Errorf("throttling"))
-	if strategy == nil {
-		// Default strategy if not found
-		strategy = &errors.RetryStrategy{
-			MaxAttempts:       5,
-			InitialBackoff:    1000,  // 1s
-			MaxBackoff:        16000, // 16s
-			BackoffMultiplier: 2.0,
-		}
-	}
-
-	for attempt := 0; attempt < strategy.MaxAttempts; attempt++ {
-		// Execute request
-		response, err = p.ecsClient.RunInstances(ctx, request)
-		if err == nil {
-			break // Success
-		}
-
-		// Check if it's a throttling error
-		if errors.IsThrottlingError(err) {
-			logger.Info("Throttling error encountered in Create, will retry", "attempt", attempt+1, "error", err.Error())
-
-			// Calculate backoff with jitter
-			backoff := time.Duration(strategy.InitialBackoff) * time.Millisecond
-			if attempt > 0 {
-				backoff = time.Duration(float64(backoff) * math.Pow(strategy.BackoffMultiplier, float64(attempt)))
-			}
-
-			// Cap at max backoff
-			if backoff > time.Duration(strategy.MaxBackoff)*time.Millisecond {
-				backoff = time.Duration(strategy.MaxBackoff) * time.Millisecond
-			}
-
-			// Add jitter (±50%)
-			jitter := time.Duration(rand.Int63n(int64(backoff))) - backoff/2
-			backoff += jitter
-
-			// Ensure backoff is positive
-			if backoff < 0 {
-				backoff = time.Duration(strategy.InitialBackoff) * time.Millisecond
-			}
-
-			logger.Info("Waiting before retry in Create", "backoff", backoff.String(), "attempt", attempt+1)
-			time.Sleep(backoff)
-			continue
-		}
-
-		// For non-throttling errors, don't retry
+	response, err := withThrottlingRetry(ctx, "RunInstances", func() (*ecs.RunInstancesResponse, error) {
+		return p.ecsClient.RunInstances(ctx, request)
+	})
+	if err != nil {
 		logger.Error(err, "failed to create instance")
 		return "", fmt.Errorf("failed to create instance: %w", err)
-	}
-
-	if err != nil {
-		logger.Error(err, "failed to create instance after retries")
-		return "", fmt.Errorf("failed to create instance after %d attempts: %w", strategy.MaxAttempts, err)
 	}
 
 	// Safely check response chain for nil
@@ -496,75 +440,18 @@ func (p *Provider) describeInstances(ctx context.Context, instanceIDs []string) 
 	// Log the request for debugging (only at debug level)
 	logger.V(1).Info("DescribeInstances request", "regionId", *request.RegionId, "instanceIds", *request.InstanceIds)
 
-	// Implement retry mechanism for throttling errors
-	var response *ecs.DescribeInstancesResponse
-	var err error
-
-	// Get retry strategy for throttling
-	strategy := errors.GetRetryStrategy(fmt.Errorf("throttling"))
-	if strategy == nil {
-		// Default strategy if not found
-		strategy = &errors.RetryStrategy{
-			MaxAttempts:       5,
-			InitialBackoff:    1000,  // 1s
-			MaxBackoff:        16000, // 16s
-			BackoffMultiplier: 2.0,
-		}
-	}
-
-	for attempt := 0; attempt < strategy.MaxAttempts; attempt++ {
-		// Execute request
-		response, err = p.ecsClient.DescribeInstances(ctx, request)
-		if err == nil {
-			break // Success
-		}
-
-		// Check if it's a throttling error
-		if errors.IsThrottlingError(err) {
-			logger.Info("Throttling error encountered in Get, will retry", "attempt", attempt+1, "error", err.Error())
-
-			// Calculate backoff with jitter
-			backoff := time.Duration(strategy.InitialBackoff) * time.Millisecond
-			if attempt > 0 {
-				backoff = time.Duration(float64(backoff) * math.Pow(strategy.BackoffMultiplier, float64(attempt)))
-			}
-
-			// Cap at max backoff
-			if backoff > time.Duration(strategy.MaxBackoff)*time.Millisecond {
-				backoff = time.Duration(strategy.MaxBackoff) * time.Millisecond
-			}
-
-			// Add jitter (±50%)
-			jitter := time.Duration(rand.Int63n(int64(backoff))) - backoff/2
-			backoff += jitter
-
-			// Ensure backoff is positive
-			if backoff < 0 {
-				backoff = time.Duration(strategy.InitialBackoff) * time.Millisecond
-			}
-
-			logger.Info("Waiting before retry in Get", "backoff", backoff.String(), "attempt", attempt+1)
-			time.Sleep(backoff)
-			continue
-		}
-
-		// Check if it's an instance not found error
-		// For Alibaba Cloud, if instance is already deleted, the API might return a specific error
+	response, err := withThrottlingRetry(ctx, "DescribeInstances", func() (*ecs.DescribeInstancesResponse, error) {
+		return p.ecsClient.DescribeInstances(ctx, request)
+	})
+	if err != nil {
 		if strings.Contains(err.Error(), "InvalidInstanceId.NotFound") ||
 			strings.Contains(err.Error(), "InstanceNotFound") ||
 			strings.Contains(err.Error(), "not found") {
 			logger.V(1).Info("instance not found during describe operation", "instanceIDs", instanceIDs, "error", err.Error())
 			return nil, NewNotFoundError(fmt.Errorf("instances %v not found: %w", instanceIDs, err))
 		}
-
-		// For non-throttling errors, don't retry
 		logger.Error(err, "failed to describe instance", "instanceIDs", instanceIDs, "region", p.region)
 		return nil, fmt.Errorf("failed to describe instances %v: %w", instanceIDs, err)
-	}
-
-	if err != nil {
-		logger.Error(err, "failed to describe instances after retries", "instanceIDs", instanceIDs, "region", p.region)
-		return nil, fmt.Errorf("failed to describe instances %v after %d attempts: %w", instanceIDs, strategy.MaxAttempts, err)
 	}
 
 	return response, nil
@@ -596,71 +483,21 @@ func (p *Provider) Delete(ctx context.Context, instanceID string) error {
 	// Log the delete request for debugging
 	logger.Info("DeleteInstances request prepared", "regionId", *request.RegionId, "instanceIds", instanceID, "force", *request.Force)
 
-	// Implement retry mechanism for throttling errors
-	var deleteErr error
-
-	// Get retry strategy for throttling
-	strategy := errors.GetRetryStrategy(fmt.Errorf("throttling"))
-	if strategy == nil {
-		// Default strategy if not found
-		strategy = &errors.RetryStrategy{
-			MaxAttempts:       5,
-			InitialBackoff:    1000,  // 1s
-			MaxBackoff:        16000, // 16s
-			BackoffMultiplier: 2.0,
+	_, deleteErr := withThrottlingRetry(ctx, "DeleteInstances", func() (struct{}, error) {
+		resp, err := p.ecsClient.DeleteInstances(ctx, request)
+		if err != nil {
+			logger.Info("DeleteInstances API call failed", "instanceID", instanceID, "error", err.Error())
+			return struct{}{}, err
 		}
-	}
-
-	for attempt := 0; attempt < strategy.MaxAttempts; attempt++ {
-		logger.Info("Attempting to delete instance", "attempt", attempt+1, "instanceID", instanceID)
-
-		// Execute request
-		response, err := p.ecsClient.DeleteInstances(ctx, request)
-		if err == nil {
-			// Success - log and return
-			requestId := ""
-			if response.Body != nil && response.Body.RequestId != nil {
-				requestId = *response.Body.RequestId
-			}
-			logger.Info("Successfully deleted instance", "instanceID", instanceID, "requestId", requestId)
-			p.deleteCachedInstance(instanceID)
-			return nil
+		requestId := ""
+		if resp.Body != nil && resp.Body.RequestId != nil {
+			requestId = *resp.Body.RequestId
 		}
-
-		deleteErr = err
-		logger.Info("DeleteInstances API call failed", "attempt", attempt+1, "instanceID", instanceID, "error", err.Error())
-
-		// Check if it's a throttling error, if yes retry
-		if errors.IsThrottlingError(deleteErr) {
-			logger.Info("Throttling error encountered in Delete, will retry", "attempt", attempt+1, "error", deleteErr.Error())
-
-			// Calculate backoff with jitter
-			backoff := time.Duration(strategy.InitialBackoff) * time.Millisecond
-			if attempt > 0 {
-				backoff = time.Duration(float64(backoff) * math.Pow(strategy.BackoffMultiplier, float64(attempt)))
-			}
-
-			// Cap at max backoff
-			if backoff > time.Duration(strategy.MaxBackoff)*time.Millisecond {
-				backoff = time.Duration(strategy.MaxBackoff) * time.Millisecond
-			}
-
-			// Add jitter (±50%)
-			jitter := time.Duration(rand.Int63n(int64(backoff))) - backoff/2
-			backoff += jitter
-
-			// Ensure backoff is positive
-			if backoff < 0 {
-				backoff = time.Duration(strategy.InitialBackoff) * time.Millisecond
-			}
-
-			logger.Info("Waiting before retry in Delete", "backoff", backoff.String(), "attempt", attempt+1)
-			time.Sleep(backoff)
-			continue
-		}
-
-		// Check if it's an instance not found error
-		// For Alibaba Cloud, if instance is already deleted, the API might return a specific error
+		logger.Info("Successfully deleted instance", "instanceID", instanceID, "requestId", requestId)
+		p.deleteCachedInstance(instanceID)
+		return struct{}{}, nil
+	})
+	if deleteErr != nil {
 		if errors.IsNotFound(deleteErr) ||
 			strings.Contains(deleteErr.Error(), "InvalidInstanceId.NotFound") ||
 			strings.Contains(deleteErr.Error(), "InstanceNotFound") ||
@@ -668,14 +505,7 @@ func (p *Provider) Delete(ctx context.Context, instanceID string) error {
 			logger.Info("instance already deleted or not found, returning NodeClaimNotFoundError", "instanceID", instanceID, "error", deleteErr.Error())
 			return cloudprovider.NewNodeClaimNotFoundError(fmt.Errorf("instance delete with err %w", deleteErr))
 		}
-
-		// if error is not throttling or not found, return the error
 		return fmt.Errorf("delete instance failed with err %w", deleteErr)
-	}
-
-	// After all retries failed, return the last error
-	if deleteErr != nil {
-		return fmt.Errorf("delete instance failed with err %w after %d retries", deleteErr, strategy.MaxAttempts)
 	}
 
 	return nil
@@ -711,66 +541,12 @@ func (p *Provider) List(ctx context.Context, tags map[string]string) ([]*Instanc
 	for {
 		request.PageNumber = tea.Int32(pageNumber)
 
-		// Implement retry mechanism for throttling errors
-		var response *ecs.DescribeInstancesResponse
-		var err error
-
-		// Get retry strategy for throttling
-		strategy := errors.GetRetryStrategy(fmt.Errorf("throttling"))
-		if strategy == nil {
-			// Default strategy if not found
-			strategy = &errors.RetryStrategy{
-				MaxAttempts:       5,
-				InitialBackoff:    1000,  // 1s
-				MaxBackoff:        16000, // 16s
-				BackoffMultiplier: 2.0,
-			}
-		}
-
-		for attempt := 0; attempt < strategy.MaxAttempts; attempt++ {
-			// Execute request
-			response, err = p.ecsClient.DescribeInstances(ctx, request)
-			if err == nil {
-				break // Success
-			}
-
-			// Check if it's a throttling error
-			if errors.IsThrottlingError(err) {
-				logger.Info("Throttling error encountered, will retry", "attempt", attempt+1, "error", err.Error())
-
-				// Calculate backoff with jitter
-				backoff := time.Duration(strategy.InitialBackoff) * time.Millisecond
-				if attempt > 0 {
-					backoff = time.Duration(float64(backoff) * math.Pow(strategy.BackoffMultiplier, float64(attempt)))
-				}
-
-				// Cap at max backoff
-				if backoff > time.Duration(strategy.MaxBackoff)*time.Millisecond {
-					backoff = time.Duration(strategy.MaxBackoff) * time.Millisecond
-				}
-
-				// Add jitter (±50%)
-				jitter := time.Duration(rand.Int63n(int64(backoff))) - backoff/2
-				backoff += jitter
-
-				// Ensure backoff is positive
-				if backoff < 0 {
-					backoff = time.Duration(strategy.InitialBackoff) * time.Millisecond
-				}
-
-				logger.Info("Waiting before retry", "backoff", backoff.String(), "attempt", attempt+1)
-				time.Sleep(backoff)
-				continue
-			}
-
-			// For non-throttling errors, don't retry
+		response, err := withThrottlingRetry(ctx, "DescribeInstances(list)", func() (*ecs.DescribeInstancesResponse, error) {
+			return p.ecsClient.DescribeInstances(ctx, request)
+		})
+		if err != nil {
 			logger.Error(err, "failed to list instances")
 			return nil, fmt.Errorf("failed to list instances: %w", err)
-		}
-
-		if err != nil {
-			logger.Error(err, "failed to list instances after retries")
-			return nil, fmt.Errorf("failed to list instances after %d attempts: %w", strategy.MaxAttempts, err)
 		}
 
 		// Safely check response chain for nil
