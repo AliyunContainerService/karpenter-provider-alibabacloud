@@ -266,6 +266,10 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 		}
 	}
 
+	// Throttling errors from ECS are returned immediately without provider-level retry.
+	// Karpenter's NodeClaim reconciler owns retry scheduling via ItemExponentialFailureRateLimiter
+	// (base 1s, max 60s). Retrying here would block the reconcile goroutine and a rate limiter
+	// would artificially cap scale-up throughput — both are worse than a fast-fail + requeue.
 	response, err := p.ecsClient.RunInstances(ctx, request)
 	if err != nil {
 		logger.Error(err, "failed to create instance")
@@ -438,6 +442,7 @@ func (p *Provider) describeInstances(ctx context.Context, instanceIDs []string) 
 	// Log the request for debugging (only at debug level)
 	logger.V(1).Info("DescribeInstances request", "regionId", *request.RegionId, "instanceIds", *request.InstanceIds)
 
+	// Throttling propagates to the caller; Karpenter reconcile handles retry (see Create).
 	response, err := p.ecsClient.DescribeInstances(ctx, request)
 	if err != nil {
 		if strings.Contains(err.Error(), "InvalidInstanceId.NotFound") ||
@@ -463,6 +468,8 @@ func (p *Provider) Delete(ctx context.Context, instanceID string) error {
 		Force:      tea.Bool(true),
 	}
 
+	// Throttling propagates to the caller; Karpenter termination reconcile handles retry (see Create).
+	// Force=true covers all instance states; no pre-flight DescribeInstances needed.
 	resp, err := p.ecsClient.DeleteInstances(ctx, request)
 	if err != nil {
 		if errors.IsNotFound(err) ||
@@ -513,6 +520,7 @@ func (p *Provider) List(ctx context.Context, tags map[string]string) ([]*Instanc
 	for {
 		request.PageNumber = tea.Int32(pageNumber)
 
+		// Throttling propagates to the caller; Karpenter GC reconcile handles retry (see Create).
 		response, err := p.ecsClient.DescribeInstances(ctx, request)
 		if err != nil {
 			logger.Error(err, "failed to list instances")
