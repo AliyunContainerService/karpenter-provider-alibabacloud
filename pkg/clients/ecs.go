@@ -65,13 +65,13 @@ type Image struct {
 	CreationTime time.Time
 }
 
-// DefaultECSClient implements ECSClient using Alibaba Cloud SDK
+// DefaultECSClient implements ECSClient using Alibaba Cloud SDK.
 type DefaultECSClient struct {
 	client *ecs.Client
 	region string
 }
 
-// NewDefaultECSClient creates a new default ECS client
+// NewDefaultECSClient creates a new default ECS client.
 func NewDefaultECSClient(client *ecs.Client, region string) ECSClient {
 	return &DefaultECSClient{
 		client: client,
@@ -81,41 +81,49 @@ func NewDefaultECSClient(client *ecs.Client, region string) ECSClient {
 
 // RunInstances implements ECSClient interface
 func (c *DefaultECSClient) RunInstances(ctx context.Context, request *ecs.RunInstancesRequest) (*ecs.RunInstancesResponse, error) {
+
 	return c.client.RunInstances(request)
 }
 
 // DescribeInstances implements ECSClient interface
 func (c *DefaultECSClient) DescribeInstances(ctx context.Context, request *ecs.DescribeInstancesRequest) (*ecs.DescribeInstancesResponse, error) {
+
 	return c.client.DescribeInstances(request)
 }
 
 // DeleteInstances implements ECSClient interface
 func (c *DefaultECSClient) DeleteInstances(ctx context.Context, request *ecs.DeleteInstancesRequest) (*ecs.DeleteInstancesResponse, error) {
+
 	return c.client.DeleteInstances(request)
 }
 
 // TagResources implements ECSClient interface
 func (c *DefaultECSClient) TagResources(ctx context.Context, request *ecs.TagResourcesRequest) (*ecs.TagResourcesResponse, error) {
+
 	return c.client.TagResources(request)
 }
 
 // CreateLaunchTemplate implements ECSClient interface
 func (c *DefaultECSClient) CreateLaunchTemplate(ctx context.Context, request *ecs.CreateLaunchTemplateRequest) (*ecs.CreateLaunchTemplateResponse, error) {
+
 	return c.client.CreateLaunchTemplate(request)
 }
 
 // DescribeLaunchTemplates implements ECSClient interface
 func (c *DefaultECSClient) DescribeLaunchTemplates(ctx context.Context, request *ecs.DescribeLaunchTemplatesRequest) (*ecs.DescribeLaunchTemplatesResponse, error) {
+
 	return c.client.DescribeLaunchTemplates(request)
 }
 
 // DeleteLaunchTemplate implements ECSClient interface
 func (c *DefaultECSClient) DeleteLaunchTemplate(ctx context.Context, request *ecs.DeleteLaunchTemplateRequest) (*ecs.DeleteLaunchTemplateResponse, error) {
+
 	return c.client.DeleteLaunchTemplate(request)
 }
 
 // DescribeInstanceTypes implements ECSClient interface
 func (c *DefaultECSClient) DescribeInstanceTypes(ctx context.Context, instanceTypes []string) (*ecs.DescribeInstanceTypesResponse, error) {
+
 	request := &ecs.DescribeInstanceTypesRequest{}
 
 	if len(instanceTypes) > 0 {
@@ -137,6 +145,7 @@ func (c *DefaultECSClient) DescribeInstanceTypes(ctx context.Context, instanceTy
 
 // DescribeZones implements ECSClient interface
 func (c *DefaultECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesResponse, error) {
+
 	request := &ecs.DescribeZonesRequest{
 		RegionId: tea.String(c.region),
 	}
@@ -225,6 +234,7 @@ func (c *DefaultECSClient) DescribeImages(ctx context.Context, imageIDs []string
 
 // DescribeSecurityGroups implements ECSClient interface
 func (c *DefaultECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
+
 	request := &ecs.DescribeSecurityGroupsRequest{
 		RegionId: tea.String(c.region),
 	}
@@ -258,6 +268,7 @@ func (c *DefaultECSClient) DescribeSecurityGroups(ctx context.Context, tags map[
 
 // DescribeCapacityReservations implements ECSClient interface
 func (c *DefaultECSClient) DescribeCapacityReservations(ctx context.Context, id string, tags map[string]string) (*ecs.DescribeCapacityReservationsResponse, error) {
+
 	request := &ecs.DescribeCapacityReservationsRequest{
 		RegionId: tea.String(c.region),
 	}
@@ -283,6 +294,7 @@ func (c *DefaultECSClient) DescribeCapacityReservations(ctx context.Context, id 
 
 // DescribePrice implements ECSClient interface
 func (c *DefaultECSClient) DescribePrice(ctx context.Context, instanceType string) (*ecs.DescribePriceResponse, error) {
+
 	request := &ecs.DescribePriceRequest{
 		RegionId:     tea.String(c.region),
 		ResourceType: tea.String("instance"),
