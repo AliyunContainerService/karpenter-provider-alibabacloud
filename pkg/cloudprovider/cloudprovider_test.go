@@ -24,6 +24,7 @@ import (
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/instance"
+	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	coreapis "sigs.k8s.io/karpenter/pkg/apis/v1"
 )
@@ -327,4 +328,41 @@ func TestVSwitchFallbackAllExhausted(t *testing.T) {
 	if !strings.Contains(err.Error(), "all vSwitches exhausted") {
 		t.Errorf("expected 'all vSwitches exhausted' in error, got: %v", err)
 	}
+}
+
+func TestEcsArchToKubernetesArch(t *testing.T) {
+	tests := []struct {
+		ecsArch  string
+		expected string
+	}{
+		{"X86", "amd64"},
+		{"x86", "amd64"},
+		{"ARM", "arm64"},
+		{"arm", "arm64"},
+		{"Arm", "arm64"},
+		{"", "amd64"},
+		{"unknown", "amd64"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ecsArch, func(t *testing.T) {
+			assert.Equal(t, tt.expected, ecsArchToKubernetesArch(tt.ecsArch))
+		})
+	}
+}
+
+func TestBuildInstanceTagsManagedByValue(t *testing.T) {
+	tags := buildInstanceTags(&coreapis.NodeClaim{}, &v1alpha1.ECSNodeClass{})
+	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy],
+		"TagManagedBy must be 'karpenter' so that List() tag filter matches")
+}
+
+func TestBuildInstanceTagsIncludesClusterID(t *testing.T) {
+	nc := &coreapis.NodeClaim{}
+	nodeClass := &v1alpha1.ECSNodeClass{}
+	nodeClass.Spec.ClusterID = "c-abc123"
+
+	tags := buildInstanceTags(nc, nodeClass)
+
+	assert.Equal(t, "c-abc123", tags[v1alpha1.TagClusterID])
+	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy])
 }

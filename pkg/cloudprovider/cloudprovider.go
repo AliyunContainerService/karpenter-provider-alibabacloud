@@ -52,6 +52,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	coreapis "sigs.k8s.io/karpenter/pkg/apis/v1"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
+	"sigs.k8s.io/karpenter/pkg/scheduling"
 )
 
 // CloudProvider implements the Karpenter CloudProvider interface for Alibaba Cloud
@@ -417,15 +418,22 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 			continue
 		}
 
-		// Create offerings from zones
+		// Create one offering per (zone, capacityType) combination.
+		// Requirements are required for Karpenter's topology spread and capacity-type scheduling.
 		offerings := make(cloudprovider.Offerings, 0)
 		for zoneID, zoneInfo := range it.Zones {
-			if availableZones[zoneID] && zoneInfo.Available {
-				offering := &cloudprovider.Offering{
+			if !availableZones[zoneID] || !zoneInfo.Available {
+				continue
+			}
+			for _, capacityType := range zoneInfo.CapacityTypes {
+				offerings = append(offerings, &cloudprovider.Offering{
+					Requirements: scheduling.NewRequirements(
+						scheduling.NewRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, zoneID),
+						scheduling.NewRequirement(coreapis.CapacityTypeLabelKey, corev1.NodeSelectorOpIn, capacityType),
+					),
 					Price:     0.0, // Pricing not implemented yet
-					Available: zoneInfo.Available,
-				}
-				offerings = append(offerings, offering)
+					Available: true,
+				})
 			}
 		}
 		// Skip instance types with no available offerings
@@ -460,11 +468,27 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 			corev1.ResourceCPU:    divideQuantity(totalOverhead[corev1.ResourceCPU], 3),
 		}
 
-		// Create core InstanceType
+		// Collect unique zones and capacity types across all offerings for InstanceType-level Requirements.
+		offeringZones := lo.Keys(lo.SliceToMap(offerings, func(o *cloudprovider.Offering) (string, struct{}) {
+			return o.Requirements.Get(corev1.LabelTopologyZone).Any(), struct{}{}
+		}))
+		offeringCapTypes := lo.Keys(lo.SliceToMap(offerings, func(o *cloudprovider.Offering) (string, struct{}) {
+			return o.Requirements.Get(coreapis.CapacityTypeLabelKey).Any(), struct{}{}
+		}))
+
+		// Create core InstanceType with fully-populated Requirements.
+		// Requirements are required for Karpenter's scheduling logic (arch, OS, zone, capacity-type filtering).
 		coreIT := &cloudprovider.InstanceType{
 			Name:      it.Name,
 			Capacity:  capacity,
 			Offerings: offerings,
+			Requirements: scheduling.NewRequirements(
+				scheduling.NewRequirement(corev1.LabelInstanceTypeStable, corev1.NodeSelectorOpIn, it.Name),
+				scheduling.NewRequirement(corev1.LabelArchStable, corev1.NodeSelectorOpIn, ecsArchToKubernetesArch(it.Architecture)),
+				scheduling.NewRequirement(corev1.LabelOSStable, corev1.NodeSelectorOpIn, string(corev1.Linux)),
+				scheduling.NewRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, offeringZones...),
+				scheduling.NewRequirement(coreapis.CapacityTypeLabelKey, corev1.NodeSelectorOpIn, offeringCapTypes...),
+			),
 			Overhead: &cloudprovider.InstanceTypeOverhead{
 				EvictionThreshold: evictionThreshold,
 				KubeReserved:      kubeReserved,
@@ -597,11 +621,20 @@ func getCustomUserData(nodeClass *v1alpha1.ECSNodeClass) string {
 	return ""
 }
 
+// ecsArchToKubernetesArch maps ECS CpuArchitecture values to Kubernetes arch label values.
+// ECS returns "X86" for x86_64 and "ARM" for AArch64.
+func ecsArchToKubernetesArch(ecsArch string) string {
+	if strings.EqualFold(ecsArch, "ARM") {
+		return "arm64"
+	}
+	return "amd64"
+}
+
 func buildInstanceTags(nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNodeClass) map[string]string {
 	tags := make(map[string]string)
 
 	// Add Karpenter management tag
-	tags[v1alpha1.TagManagedBy] = "true"
+	tags[v1alpha1.TagManagedBy] = "karpenter"
 
 	// Add ClusterID if available
 	if nodeClass.Spec.ClusterID != "" {

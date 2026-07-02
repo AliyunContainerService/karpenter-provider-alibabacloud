@@ -17,6 +17,7 @@ limitations under the License.
 package tagging_test
 
 import (
+	"errors"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -693,6 +694,9 @@ func (m *MockECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesRe
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*ecs.DescribeZonesResponse), args.Error(1)
+}
+func (m *MockECSClient) DescribeAvailableResource(ctx context.Context, request *ecs.DescribeAvailableResourceRequest) (*ecs.DescribeAvailableResourceResponse, error) {
+	return nil, errors.New("not implemented")
 }
 
 func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error) {

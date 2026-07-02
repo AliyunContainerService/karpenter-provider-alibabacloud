@@ -42,6 +42,7 @@ type ECSClient interface {
 	// Instance type operations
 	DescribeInstanceTypes(ctx context.Context, instanceTypes []string) (*ecs.DescribeInstanceTypesResponse, error)
 	DescribeZones(ctx context.Context) (*ecs.DescribeZonesResponse, error)
+	DescribeAvailableResource(ctx context.Context, request *ecs.DescribeAvailableResourceRequest) (*ecs.DescribeAvailableResourceResponse, error)
 
 	// Image operations
 	DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error)
@@ -141,6 +142,11 @@ func (c *DefaultECSClient) DescribeInstanceTypes(ctx context.Context, instanceTy
 	}
 
 	return response, nil
+}
+
+// DescribeAvailableResource implements ECSClient interface
+func (c *DefaultECSClient) DescribeAvailableResource(ctx context.Context, request *ecs.DescribeAvailableResourceRequest) (*ecs.DescribeAvailableResourceResponse, error) {
+	return c.client.DescribeAvailableResource(request)
 }
 
 // DescribeZones implements ECSClient interface

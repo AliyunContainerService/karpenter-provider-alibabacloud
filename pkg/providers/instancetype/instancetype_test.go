@@ -22,9 +22,19 @@ import (
 	"testing"
 
 	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
+	"github.com/alibabacloud-go/tea/tea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"k8s.io/apimachinery/pkg/api/resource"
+)
+
+// Type aliases for the deeply-nested DescribeAvailableResource response types
+type (
+	invZone    = ecs.DescribeAvailableResourceResponseBodyAvailableZonesAvailableZone
+	invRes     = ecs.DescribeAvailableResourceResponseBodyAvailableZonesAvailableZoneAvailableResources
+	invResItem = ecs.DescribeAvailableResourceResponseBodyAvailableZonesAvailableZoneAvailableResourcesAvailableResource
+	invSR      = ecs.DescribeAvailableResourceResponseBodyAvailableZonesAvailableZoneAvailableResourcesAvailableResourceSupportedResources
+	invSRItem  = ecs.DescribeAvailableResourceResponseBodyAvailableZonesAvailableZoneAvailableResourcesAvailableResourceSupportedResourcesSupportedResource
 )
 
 // MockECSClient is a mock implementation of ECSClient
@@ -103,6 +113,14 @@ func (m *MockECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesRe
 	return args.Get(0).(*ecs.DescribeZonesResponse), args.Error(1)
 }
 
+func (m *MockECSClient) DescribeAvailableResource(ctx context.Context, request *ecs.DescribeAvailableResourceRequest) (*ecs.DescribeAvailableResourceResponse, error) {
+	args := m.Called(ctx, request)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ecs.DescribeAvailableResourceResponse), args.Error(1)
+}
+
 func TestList(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -126,6 +144,9 @@ func TestList(t *testing.T) {
 					},
 				}
 				m.On("DescribeZones", mock.Anything).Return(zonesResponse, nil)
+				// Inventory API returns error → optimistic fallback (all charge types available)
+				m.On("DescribeAvailableResource", mock.Anything, mock.Anything).
+					Return(nil, errors.New("not implemented")).Maybe()
 
 				instanceTypeId1 := "ecs.g6.large"
 				cpuCoreCount1 := int32(2)
@@ -180,6 +201,9 @@ func TestList(t *testing.T) {
 					},
 				}
 				m.On("DescribeZones", mock.Anything).Return(zonesResponse, nil)
+				// Inventory API error → optimistic fallback; this is fine since we're testing DescribeInstanceTypes error
+				m.On("DescribeAvailableResource", mock.Anything, mock.Anything).
+					Return(nil, errors.New("not implemented")).Maybe()
 				m.On("DescribeInstanceTypes", mock.Anything, mock.Anything).Return((*ecs.DescribeInstanceTypesResponse)(nil), errors.New("API error"))
 			},
 			expectError: true,
@@ -588,4 +612,307 @@ func TestConvertECSInstanceTypeWithGPU(t *testing.T) {
 			}
 		})
 	}
+}
+
+// buildInventoryResponse constructs a DescribeAvailableResourceResponse with the
+// given per-zone instance-type stock entries. status should be one of the
+// stockStatus* constants.
+func buildInventoryResponse(entries []struct{ zone, itID, status string }) *ecs.DescribeAvailableResourceResponse {
+	zoneMap := make(map[string][]struct{ itID, status string })
+	for _, e := range entries {
+		zoneMap[e.zone] = append(zoneMap[e.zone], struct{ itID, status string }{e.itID, e.status})
+	}
+	var zones []*invZone
+	for zoneID, items := range zoneMap {
+		var srItems []*invSRItem
+		for _, item := range items {
+			itID := item.itID
+			st := item.status
+			srItems = append(srItems, &invSRItem{
+				Value:          tea.String(itID),
+				StatusCategory: tea.String(st),
+			})
+		}
+		ar := &invResItem{
+			Type:               tea.String("InstanceType"),
+			SupportedResources: &invSR{SupportedResource: srItems},
+		}
+		zID := zoneID
+		zones = append(zones, &invZone{
+			ZoneId:             tea.String(zID),
+			AvailableResources: &invRes{AvailableResource: []*invResItem{ar}},
+		})
+	}
+	return &ecs.DescribeAvailableResourceResponse{
+		Body: &ecs.DescribeAvailableResourceResponseBody{
+			AvailableZones: &ecs.DescribeAvailableResourceResponseBodyAvailableZones{
+				AvailableZone: zones,
+			},
+		},
+	}
+}
+
+// makeZonesResponse returns a DescribeZonesResponse with the given zone IDs.
+func makeZonesResponse(zoneIDs ...string) *ecs.DescribeZonesResponse {
+	zones := make([]*ecs.DescribeZonesResponseBodyZonesZone, len(zoneIDs))
+	for i, id := range zoneIDs {
+		id := id
+		zones[i] = &ecs.DescribeZonesResponseBodyZonesZone{ZoneId: &id}
+	}
+	return &ecs.DescribeZonesResponse{
+		Body: &ecs.DescribeZonesResponseBody{
+			Zones: &ecs.DescribeZonesResponseBodyZones{Zone: zones},
+		},
+	}
+}
+
+// makeInstanceTypesResponse returns a DescribeInstanceTypesResponse with one entry.
+func makeInstanceTypesResponse(itID string, cpu int32, memGiB float32) *ecs.DescribeInstanceTypesResponse {
+	arch := "X86"
+	return &ecs.DescribeInstanceTypesResponse{
+		Body: &ecs.DescribeInstanceTypesResponseBody{
+			InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+				InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
+					{InstanceTypeId: &itID, CpuCoreCount: &cpu, MemorySize: &memGiB, CpuArchitecture: &arch},
+				},
+			},
+		},
+	}
+}
+
+// --- getInventory() tests ---
+
+func TestGetInventory_WithStock(t *testing.T) {
+	mockClient := new(MockECSClient)
+
+	postPaidResp := buildInventoryResponse([]struct{ zone, itID, status string }{
+		{"cn-hangzhou-h", "ecs.g6.large", stockStatusWithStock},
+		{"cn-hangzhou-i", "ecs.g6.large", stockStatusWithoutStock},     // no stock
+		{"cn-hangzhou-h", "ecs.c6.xlarge", stockStatusClosedWithStock}, // included
+	})
+	spotResp := buildInventoryResponse([]struct{ zone, itID, status string }{
+		{"cn-hangzhou-h", "ecs.g6.large", stockStatusWithStock},
+	})
+	mockClient.On("DescribeAvailableResource", mock.Anything, mock.MatchedBy(func(r *ecs.DescribeAvailableResourceRequest) bool {
+		return r.SpotStrategy != nil && *r.SpotStrategy == ecsSpotStrategyNoSpot
+	})).Return(postPaidResp, nil)
+	mockClient.On("DescribeAvailableResource", mock.Anything, mock.MatchedBy(func(r *ecs.DescribeAvailableResourceRequest) bool {
+		return r.SpotStrategy != nil && *r.SpotStrategy == ecsSpotStrategyAsPriceGo
+	})).Return(spotResp, nil)
+
+	provider := NewProvider("cn-hangzhou", mockClient)
+	inventory := provider.getInventory(context.Background())
+
+	assert.NotNil(t, inventory)
+
+	// ecs.g6.large in cn-hangzhou-h has on-demand (NoSpot) + spot (SpotAsPriceGo) stock
+	assert.ElementsMatch(t, []string{capacityTypeOnDemand, capacityTypeSpot},
+		inventory["ecs.g6.large"]["cn-hangzhou-h"])
+
+	// ecs.g6.large in cn-hangzhou-i has on-demand but WithoutStock → not in inventory
+	assert.Empty(t, inventory["ecs.g6.large"]["cn-hangzhou-i"])
+
+	// ecs.c6.xlarge in cn-hangzhou-h has ClosedWithStock → included as on-demand
+	assert.Contains(t, inventory["ecs.c6.xlarge"]["cn-hangzhou-h"], capacityTypeOnDemand)
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestGetInventory_APIError_ReturnsNil(t *testing.T) {
+	mockClient := new(MockECSClient)
+	mockClient.On("DescribeAvailableResource", mock.Anything, mock.Anything).
+		Return(nil, errors.New("throttled"))
+
+	provider := NewProvider("cn-hangzhou", mockClient)
+	inventory := provider.getInventory(context.Background())
+
+	// nil signals optimistic fallback
+	assert.Nil(t, inventory)
+	mockClient.AssertExpectations(t)
+}
+
+func TestGetInventory_Caching(t *testing.T) {
+	mockClient := new(MockECSClient)
+
+	resp := buildInventoryResponse([]struct{ zone, itID, status string }{
+		{"cn-hangzhou-h", "ecs.g6.large", stockStatusWithStock},
+	})
+	// Called once per SpotStrategy (NoSpot + SpotAsPriceGo) on first call; cached thereafter
+	mockClient.On("DescribeAvailableResource", mock.Anything, mock.Anything).Return(resp, nil).Times(2)
+
+	provider := NewProvider("cn-hangzhou", mockClient)
+
+	inv1 := provider.getInventory(context.Background())
+	inv2 := provider.getInventory(context.Background()) // should hit cache
+
+	assert.NotNil(t, inv1)
+	assert.NotNil(t, inv2)
+	// API was called exactly twice (NoSpot + SpotAsPriceGo), not four times
+	mockClient.AssertExpectations(t)
+}
+
+func TestGetInventory_WithoutStockExcluded(t *testing.T) {
+	mockClient := new(MockECSClient)
+
+	resp := buildInventoryResponse([]struct{ zone, itID, status string }{
+		{"cn-hangzhou-h", "ecs.g6.large", "WithoutStock"},
+		{"cn-hangzhou-h", "ecs.c6.xlarge", "ClosedWithoutStock"},
+		{"cn-hangzhou-h", "ecs.r6.xlarge", stockStatusWithStock},
+	})
+	mockClient.On("DescribeAvailableResource", mock.Anything, mock.Anything).Return(resp, nil)
+
+	provider := NewProvider("cn-hangzhou", mockClient)
+	inventory := provider.getInventory(context.Background())
+
+	assert.NotNil(t, inventory)
+	assert.Nil(t, inventory["ecs.g6.large"])
+	assert.Nil(t, inventory["ecs.c6.xlarge"])
+	assert.NotNil(t, inventory["ecs.r6.xlarge"])
+}
+
+func TestGetInventory_NonInstanceTypeResourceSkipped(t *testing.T) {
+	mockClient := new(MockECSClient)
+
+	// Build a response where the AvailableResource.Type is "SystemDisk" (not InstanceType)
+	diskResp := &ecs.DescribeAvailableResourceResponse{
+		Body: &ecs.DescribeAvailableResourceResponseBody{
+			AvailableZones: &ecs.DescribeAvailableResourceResponseBodyAvailableZones{
+				AvailableZone: []*invZone{
+					{
+						ZoneId: tea.String("cn-hangzhou-h"),
+						AvailableResources: &invRes{
+							AvailableResource: []*invResItem{
+								{
+									Type:               tea.String("SystemDisk"), // should be skipped
+									SupportedResources: &invSR{SupportedResource: []*invSRItem{{Value: tea.String("ecs.g6.large"), StatusCategory: tea.String(stockStatusWithStock)}}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	mockClient.On("DescribeAvailableResource", mock.Anything, mock.Anything).Return(diskResp, nil)
+
+	provider := NewProvider("cn-hangzhou", mockClient)
+	inventory := provider.getInventory(context.Background())
+
+	// SystemDisk entries are skipped; inventory should be empty (not nil)
+	assert.NotNil(t, inventory)
+	assert.Empty(t, inventory)
+}
+
+// --- List() with inventory tests ---
+
+func TestListInventoryFiltersNoStockZones(t *testing.T) {
+	mockClient := new(MockECSClient)
+
+	// Two zones, but instance type only has stock in cn-hangzhou-h
+	mockClient.On("DescribeZones", mock.Anything).Return(makeZonesResponse("cn-hangzhou-h", "cn-hangzhou-i"), nil)
+
+	invResp := buildInventoryResponse([]struct{ zone, itID, status string }{
+		{"cn-hangzhou-h", "ecs.g6.large", stockStatusWithStock},
+		// cn-hangzhou-i is not in inventory → no stock
+	})
+	mockClient.On("DescribeAvailableResource", mock.Anything, mock.Anything).Return(invResp, nil)
+	mockClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).
+		Return(makeInstanceTypesResponse("ecs.g6.large", 2, 8.0), nil)
+
+	provider := NewProvider("cn-hangzhou", mockClient)
+	result, err := provider.List(context.Background())
+
+	assert.NoError(t, err)
+	assert.Len(t, result, 1)
+	it := result[0]
+	// Only cn-hangzhou-h should be in zones (cn-hangzhou-i had no stock)
+	assert.Contains(t, it.Zones, "cn-hangzhou-h")
+	assert.NotContains(t, it.Zones, "cn-hangzhou-i")
+}
+
+func TestListInventoryZoneChargeTypesPopulated(t *testing.T) {
+	mockClient := new(MockECSClient)
+
+	mockClient.On("DescribeZones", mock.Anything).Return(makeZonesResponse("cn-hangzhou-h"), nil)
+
+	onDemandResp := buildInventoryResponse([]struct{ zone, itID, status string }{
+		{"cn-hangzhou-h", "ecs.g6.large", stockStatusWithStock},
+	})
+	spotResp := buildInventoryResponse([]struct{ zone, itID, status string }{
+		{"cn-hangzhou-h", "ecs.g6.large", stockStatusWithStock},
+	})
+	mockClient.On("DescribeAvailableResource", mock.Anything, mock.MatchedBy(func(r *ecs.DescribeAvailableResourceRequest) bool {
+		return r.SpotStrategy != nil && *r.SpotStrategy == ecsSpotStrategyNoSpot
+	})).Return(onDemandResp, nil)
+	mockClient.On("DescribeAvailableResource", mock.Anything, mock.MatchedBy(func(r *ecs.DescribeAvailableResourceRequest) bool {
+		return r.SpotStrategy != nil && *r.SpotStrategy == ecsSpotStrategyAsPriceGo
+	})).Return(spotResp, nil)
+	mockClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).
+		Return(makeInstanceTypesResponse("ecs.g6.large", 2, 8.0), nil)
+
+	provider := NewProvider("cn-hangzhou", mockClient)
+	result, err := provider.List(context.Background())
+
+	assert.NoError(t, err)
+	assert.Len(t, result, 1)
+	zoneInfo, ok := result[0].Zones["cn-hangzhou-h"]
+	assert.True(t, ok)
+	assert.True(t, zoneInfo.Available)
+	// Both capacity types should be present (on-demand + spot)
+	assert.ElementsMatch(t, []string{capacityTypeOnDemand, capacityTypeSpot}, zoneInfo.CapacityTypes)
+}
+
+func TestListInventoryOptimisticFallback(t *testing.T) {
+	mockClient := new(MockECSClient)
+
+	mockClient.On("DescribeZones", mock.Anything).Return(makeZonesResponse("cn-hangzhou-h"), nil)
+	// Inventory API fails → optimistic: all charge types assumed available
+	mockClient.On("DescribeAvailableResource", mock.Anything, mock.Anything).
+		Return(nil, errors.New("throttled"))
+	mockClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).
+		Return(makeInstanceTypesResponse("ecs.g6.large", 2, 8.0), nil)
+
+	provider := NewProvider("cn-hangzhou", mockClient)
+	result, err := provider.List(context.Background())
+
+	assert.NoError(t, err)
+	assert.Len(t, result, 1)
+	zoneInfo, ok := result[0].Zones["cn-hangzhou-h"]
+	assert.True(t, ok)
+	// Optimistic fallback: both capacity types should be present
+	assert.ElementsMatch(t, []string{capacityTypeOnDemand, capacityTypeSpot}, zoneInfo.CapacityTypes)
+}
+
+func TestListInventoryExcludesInstanceTypeWithNoStockAnywhere(t *testing.T) {
+	mockClient := new(MockECSClient)
+
+	mockClient.On("DescribeZones", mock.Anything).Return(makeZonesResponse("cn-hangzhou-h"), nil)
+	// Inventory has only ecs.c6.xlarge; ecs.g6.large has no stock
+	invResp := buildInventoryResponse([]struct{ zone, itID, status string }{
+		{"cn-hangzhou-h", "ecs.c6.xlarge", stockStatusWithStock},
+	})
+	mockClient.On("DescribeAvailableResource", mock.Anything, mock.Anything).Return(invResp, nil)
+
+	cpu2, mem8 := int32(2), float32(8.0)
+	cpu4, mem16 := int32(4), float32(16.0)
+	arch := "X86"
+	itID1, itID2 := "ecs.g6.large", "ecs.c6.xlarge"
+	mockClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).Return(&ecs.DescribeInstanceTypesResponse{
+		Body: &ecs.DescribeInstanceTypesResponseBody{
+			InstanceTypes: &ecs.DescribeInstanceTypesResponseBodyInstanceTypes{
+				InstanceType: []*ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
+					{InstanceTypeId: &itID1, CpuCoreCount: &cpu2, MemorySize: &mem8, CpuArchitecture: &arch},
+					{InstanceTypeId: &itID2, CpuCoreCount: &cpu4, MemorySize: &mem16, CpuArchitecture: &arch},
+				},
+			},
+		},
+	}, nil)
+
+	provider := NewProvider("cn-hangzhou", mockClient)
+	result, err := provider.List(context.Background())
+
+	assert.NoError(t, err)
+	// ecs.g6.large has no stock anywhere → excluded
+	assert.Len(t, result, 1)
+	assert.Equal(t, "ecs.c6.xlarge", result[0].Name)
 }

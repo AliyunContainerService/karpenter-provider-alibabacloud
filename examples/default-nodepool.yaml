@@ -3,6 +3,9 @@ kind: NodePool
 metadata:
   name: default
 spec:
+  limits:
+    cpu: "100"     # 100 vCPU total across this NodePool
+    memory: 400Gi  # 400 GiB total memory
   template:
     spec:
       terminationGracePeriod: 1m
