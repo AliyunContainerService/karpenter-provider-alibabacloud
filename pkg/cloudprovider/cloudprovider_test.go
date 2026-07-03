@@ -421,6 +421,35 @@ func TestInstanceLabelsFromInstanceARM(t *testing.T) {
 	assert.Equal(t, "arm64", labels[corev1.LabelArchStable])
 }
 
+func TestConvertInstanceToNodeClaimArchLabels(t *testing.T) {
+	tests := []struct {
+		ecsArch     string
+		wantK8sArch string
+	}{
+		{"X86_64", "amd64"},
+		{"ARM64", "arm64"},
+		{"", "amd64"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ecsArch, func(t *testing.T) {
+			cp := &CloudProvider{}
+			inst := &instance.Instance{
+				InstanceID:   "i-test",
+				Region:       "cn-shanghai",
+				Zone:         "cn-shanghai-n",
+				InstanceType: "ecs.g7.xlarge",
+				Architecture: tt.ecsArch,
+				CapacityType: "on-demand",
+				Tags:         map[string]string{},
+			}
+			nc := cp.convertInstanceToNodeClaim(context.Background(), inst, &coreapis.NodeClaim{}, nil, "c-test")
+			assert.Equal(t, tt.wantK8sArch, nc.Labels[corev1.LabelArchStable], "LabelArchStable")
+			assert.Equal(t, "linux", nc.Labels[corev1.LabelOSStable], "LabelOSStable")
+			assert.Equal(t, "ecs.g7.xlarge", nc.Labels[corev1.LabelInstanceTypeStable], "LabelInstanceTypeStable")
+		})
+	}
+}
+
 func TestBuildInstanceTagsManagedByValue(t *testing.T) {
 	tags := buildInstanceTags(&coreapis.NodeClaim{}, &v1alpha1.ECSNodeClass{})
 	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy],

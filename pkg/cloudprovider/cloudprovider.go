@@ -847,6 +847,9 @@ func (c *CloudProvider) convertInstanceToNodeClaim(ctx context.Context, inst *in
 	labels[corev1.LabelTopologyZone] = inst.Zone
 	labels[v1alpha1.LabelCapacityType] = inst.CapacityType
 	labels[v1alpha1.LabelInstanceType] = inst.InstanceType
+	labels[corev1.LabelArchStable] = ecsArchToKubernetesArch(inst.Architecture)
+	labels[corev1.LabelOSStable] = "linux"
+	labels[corev1.LabelInstanceTypeStable] = inst.InstanceType
 	if v, ok := inst.Tags[v1alpha1.TagNodePool]; ok {
 		labels[coreapis.NodePoolLabelKey] = v
 	}
