@@ -277,7 +277,7 @@ func (c *CloudProvider) Get(ctx context.Context, providerID string) (*coreapis.N
 	// Create NodeClaim from instance
 	nodeClaim := &coreapis.NodeClaim{}
 	nodeClaim.Name = inst.InstanceID
-	nodeClaim.Labels = inst.Tags
+	nodeClaim.Labels = instanceLabelsFromInstance(inst)
 	nodeClaim.CreationTimestamp = metav1.Time{Time: launchTime}
 
 	// Set Status
@@ -331,7 +331,7 @@ func (c *CloudProvider) List(ctx context.Context) ([]*coreapis.NodeClaim, error)
 		// Create NodeClaim
 		nodeClaim := &coreapis.NodeClaim{}
 		nodeClaim.Name = inst.InstanceID
-		nodeClaim.Labels = inst.Tags
+		nodeClaim.Labels = instanceLabelsFromInstance(inst)
 		nodeClaim.CreationTimestamp = metav1.Time{Time: launchTime}
 
 		// Set Status
@@ -622,9 +622,9 @@ func getCustomUserData(nodeClass *v1alpha1.ECSNodeClass) string {
 }
 
 // ecsArchToKubernetesArch maps ECS CpuArchitecture values to Kubernetes arch label values.
-// ECS returns "X86" for x86_64 and "ARM" for AArch64.
+// ECS returns "X86" for x86_64 and "ARM" or "ARM64" for AArch64.
 func ecsArchToKubernetesArch(ecsArch string) string {
-	if strings.EqualFold(ecsArch, "ARM") {
+	if strings.HasPrefix(strings.ToLower(ecsArch), "arm") {
 		return "arm64"
 	}
 	return "amd64"
@@ -633,21 +633,44 @@ func ecsArchToKubernetesArch(ecsArch string) string {
 func buildInstanceTags(nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNodeClass) map[string]string {
 	tags := make(map[string]string)
 
-	// Add Karpenter management tag
+	// Layer 1: management tags — always present, required for List() tag filter
 	tags[v1alpha1.TagManagedBy] = "karpenter"
-
-	// Add ClusterID if available
 	if nodeClass.Spec.ClusterID != "" {
 		tags[v1alpha1.TagClusterID] = nodeClass.Spec.ClusterID
 	}
-	// NodePool name will be extracted from labels if needed
 
-	// Add NodeClaim labels as tags
-	for k, v := range nodeClaim.Labels {
+	// Layer 2: traceability tags — values are K8s labels we wrote ourselves, always valid
+	if v, ok := nodeClaim.Labels[coreapis.NodePoolLabelKey]; ok {
+		tags[v1alpha1.TagNodePool] = v
+	}
+	if nodeClaim.Name != "" {
+		tags[v1alpha1.TagNodeClaim] = nodeClaim.Name
+	}
+
+	// Layer 3: user-defined tags — highest priority, may override layers 1 and 2
+	for k, v := range nodeClass.Spec.Tags {
 		tags[k] = v
 	}
 
 	return tags
+}
+
+// instanceLabelsFromInstance builds K8s NodeClaim labels from a discovered ECS instance.
+// It never mirrors raw ECS tags as K8s labels — ECS tag values can contain characters
+// that K8s rejects (colons, slashes, @). Only values we control are trusted.
+func instanceLabelsFromInstance(inst *instance.Instance) map[string]string {
+	labels := map[string]string{
+		corev1.LabelTopologyZone:       inst.Zone,
+		v1alpha1.LabelCapacityType:     inst.CapacityType,
+		corev1.LabelArchStable:         ecsArchToKubernetesArch(inst.Architecture),
+		corev1.LabelOSStable:           "linux",
+		corev1.LabelInstanceTypeStable: inst.InstanceType,
+	}
+	// Restore NodePool label from the tag we wrote in buildInstanceTags (value is always valid)
+	if v, ok := inst.Tags[v1alpha1.TagNodePool]; ok {
+		labels[coreapis.NodePoolLabelKey] = v
+	}
+	return labels
 }
 
 // zonesFromRequirements extracts the allowed zones from a NodeClaim's requirements.
@@ -764,9 +787,6 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClass *
 			baseOpts.DataDisks = append(baseOpts.DataDisks, dataDisk)
 		}
 	}
-	if nodeClass.Spec.Tags != nil {
-		baseOpts.Tags = nodeClass.Spec.Tags
-	}
 	if nodeClass.Spec.SpotStrategy != nil {
 		baseOpts.SpotStrategy = *nodeClass.Spec.SpotStrategy
 	}
@@ -827,7 +847,7 @@ func (c *CloudProvider) convertInstanceToNodeClaim(ctx context.Context, inst *in
 	labels[corev1.LabelTopologyZone] = inst.Zone
 	labels[v1alpha1.LabelCapacityType] = inst.CapacityType
 	labels[v1alpha1.LabelInstanceType] = inst.InstanceType
-	if v, ok := inst.Tags[coreapis.NodePoolLabelKey]; ok {
+	if v, ok := inst.Tags[v1alpha1.TagNodePool]; ok {
 		labels[coreapis.NodePoolLabelKey] = v
 	}
 	nodeClaim.Labels = labels

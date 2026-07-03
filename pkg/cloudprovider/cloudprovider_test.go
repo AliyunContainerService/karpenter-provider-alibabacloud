@@ -350,6 +350,77 @@ func TestEcsArchToKubernetesArch(t *testing.T) {
 	}
 }
 
+func TestBuildInstanceTagsThreeLayerMerge(t *testing.T) {
+	nc := &coreapis.NodeClaim{}
+	nc.Name = "nodeclaim-abc"
+	nc.Labels = map[string]string{
+		coreapis.NodePoolLabelKey: "my-pool",
+		// extra label that must NOT leak into ECS tags
+		"kubernetes.io/arch": "amd64",
+	}
+	nodeClass := &v1alpha1.ECSNodeClass{}
+	nodeClass.Spec.ClusterID = "c-abc"
+	nodeClass.Spec.Tags = map[string]string{
+		"custom-tag": "custom-value",
+		// user tag can override management tag (layer 3 wins)
+	}
+
+	tags := buildInstanceTags(nc, nodeClass)
+
+	// Layer 1: management tags always present
+	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy])
+	assert.Equal(t, "c-abc", tags[v1alpha1.TagClusterID])
+	// Layer 2: traceability tags
+	assert.Equal(t, "my-pool", tags[v1alpha1.TagNodePool])
+	assert.Equal(t, "nodeclaim-abc", tags[v1alpha1.TagNodeClaim])
+	// Layer 3: user tags
+	assert.Equal(t, "custom-value", tags["custom-tag"])
+	// NodeClaim labels must NOT be in ECS tags
+	_, hasArch := tags["kubernetes.io/arch"]
+	assert.False(t, hasArch, "NodeClaim label 'kubernetes.io/arch' must not leak into ECS tags")
+}
+
+func TestBuildInstanceTagsNilUserTags(t *testing.T) {
+	nc := &coreapis.NodeClaim{}
+	nodeClass := &v1alpha1.ECSNodeClass{}
+	// nodeClass.Spec.Tags is nil — must not panic
+	tags := buildInstanceTags(nc, nodeClass)
+	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy])
+}
+
+func TestInstanceLabelsFromInstance(t *testing.T) {
+	inst := &instance.Instance{
+		Zone:         "cn-shanghai-n",
+		InstanceType: "ecs.g7.xlarge",
+		Architecture: "X86_64",
+		CapacityType: "on-demand",
+		Tags: map[string]string{
+			v1alpha1.TagNodePool: "my-pool",
+			// raw ECS tag with invalid K8s label value — must NOT surface
+			"ecs.aliyuncs.com/owner": "user@company.com",
+		},
+	}
+
+	labels := instanceLabelsFromInstance(inst)
+
+	assert.Equal(t, "cn-shanghai-n", labels[corev1.LabelTopologyZone])
+	assert.Equal(t, "ecs.g7.xlarge", labels[v1alpha1.LabelInstanceType])
+	assert.Equal(t, "on-demand", labels[v1alpha1.LabelCapacityType])
+	assert.Equal(t, "amd64", labels[corev1.LabelArchStable])
+	assert.Equal(t, "linux", labels[corev1.LabelOSStable])
+	assert.Equal(t, "ecs.g7.xlarge", labels[corev1.LabelInstanceTypeStable])
+	assert.Equal(t, "my-pool", labels[coreapis.NodePoolLabelKey])
+	// raw ECS tag with colon/@ must not appear
+	_, hasOwner := labels["ecs.aliyuncs.com/owner"]
+	assert.False(t, hasOwner)
+}
+
+func TestInstanceLabelsFromInstanceARM(t *testing.T) {
+	inst := &instance.Instance{Architecture: "ARM64"}
+	labels := instanceLabelsFromInstance(inst)
+	assert.Equal(t, "arm64", labels[corev1.LabelArchStable])
+}
+
 func TestBuildInstanceTagsManagedByValue(t *testing.T) {
 	tags := buildInstanceTags(&coreapis.NodeClaim{}, &v1alpha1.ECSNodeClass{})
 	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy],
