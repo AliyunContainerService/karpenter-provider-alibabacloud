@@ -52,13 +52,22 @@ const (
 	stockStatusClosedWithoutStock = "ClosedWithoutStock"
 )
 
+// Per-layer cache TTLs. Zones change only when Alibaba Cloud adds/removes a zone
+// (rare, O(months)), so a long TTL is safe. Inventory reflects real-time stock
+// and must stay relatively fresh. Instance-types are assembled from inventory,
+// so they share inventory's TTL.
+const (
+	cacheTTLZones         = 2 * time.Hour
+	cacheTTLInventory     = 5 * time.Minute
+	cacheTTLInstanceTypes = 5 * time.Minute
+)
+
 // Provider handles instance type operations for Alibaba Cloud
 type Provider struct {
 	region    string
 	ecsClient clients.ECSClient
 	cache     map[string]*CacheEntry
 	cacheMu   sync.RWMutex
-	cacheTTL  time.Duration
 }
 
 // CacheEntry represents a cached result with expiration
@@ -123,13 +132,7 @@ func NewProvider(region string, ecsClient clients.ECSClient) *Provider {
 		region:    region,
 		ecsClient: ecsClient,
 		cache:     make(map[string]*CacheEntry),
-		cacheTTL:  5 * time.Minute, // Cache for 5 minutes by default
 	}
-}
-
-// SetCacheTTL sets the cache TTL duration
-func (p *Provider) SetCacheTTL(ttl time.Duration) {
-	p.cacheTTL = ttl
 }
 
 // getCachedValue retrieves a value from cache if it exists and is not expired
@@ -159,14 +162,14 @@ func (p *Provider) getCachedValue(key string) (interface{}, bool) {
 	return value, true
 }
 
-// setCachedValue stores a value in cache with expiration
-func (p *Provider) setCachedValue(key string, value interface{}) {
+// setCachedValue stores a value in cache with the given TTL.
+func (p *Provider) setCachedValue(key string, value interface{}, ttl time.Duration) {
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
 
 	p.cache[key] = &CacheEntry{
 		Value:     value,
-		ExpiresAt: time.Now().Add(p.cacheTTL),
+		ExpiresAt: time.Now().Add(ttl),
 	}
 }
 
@@ -318,8 +321,7 @@ func (p *Provider) getAvailableZones(ctx context.Context) (map[string]ZoneInfo, 
 		zones[*zone.ZoneId] = ZoneInfo{Available: true}
 	}
 
-	// Cache the result
-	p.setCachedValue(cacheKey, zones)
+	p.setCachedValue(cacheKey, zones, cacheTTLZones)
 
 	return zones, nil
 }
@@ -392,7 +394,7 @@ func (p *Provider) getInventory(ctx context.Context) map[string]map[string][]str
 		}
 	}
 
-	p.setCachedValue(cacheKey, inventory)
+	p.setCachedValue(cacheKey, inventory, cacheTTLInventory)
 	return inventory
 }
 
@@ -483,12 +485,9 @@ func (p *Provider) List(ctx context.Context) ([]*InstanceType, error) {
 		instanceTypes = append(instanceTypes, instanceType)
 	}
 
-	// Cache the result - both the full list and individual instance types
-	p.setCachedValue(cacheKey, instanceTypes)
-	// Also cache each instance type individually for Get() method
+	p.setCachedValue(cacheKey, instanceTypes, cacheTTLInstanceTypes)
 	for _, it := range instanceTypes {
-		individualKey := fmt.Sprintf("instance-type-%s", it.Name)
-		p.setCachedValue(individualKey, it)
+		p.setCachedValue(fmt.Sprintf("instance-type-%s", it.Name), it, cacheTTLInstanceTypes)
 	}
 
 	return instanceTypes, nil
@@ -529,8 +528,7 @@ func (p *Provider) Get(ctx context.Context, instanceTypeName string) (*InstanceT
 	it := response.Body.InstanceTypes.InstanceType[0]
 	instanceType := p.convertECSInstanceType(it, zones)
 
-	// Cache the result
-	p.setCachedValue(cacheKey, instanceType)
+	p.setCachedValue(cacheKey, instanceType, cacheTTLInstanceTypes)
 
 	return instanceType, nil
 }

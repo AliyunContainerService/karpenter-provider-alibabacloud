@@ -416,7 +416,7 @@ func TestClearCache(t *testing.T) {
 	provider := NewProvider("cn-hangzhou", new(MockECSClient))
 
 	// Add something to cache
-	provider.setCachedValue("test-key", "test-value")
+	provider.setCachedValue("test-key", "test-value", cacheTTLInstanceTypes)
 
 	// Verify it's in cache
 	value, exists := provider.getCachedValue("test-key")
