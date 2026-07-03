@@ -26,8 +26,40 @@ import (
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
 	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
+	"github.com/alibabacloud-go/tea/tea"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+)
+
+// ECS API parameters for DescribeAvailableResource
+const (
+	ecsChargeTypePostPaid    = "PostPaid"
+	ecsSpotStrategyNoSpot    = "NoSpot"
+	ecsSpotStrategyAsPriceGo = "SpotAsPriceGo"
+)
+
+// Karpenter capacity types stored in ZoneInfo (match karpenter.sh/capacity-type label values)
+const (
+	capacityTypeOnDemand = "on-demand"
+	capacityTypeSpot     = "spot"
+)
+
+// ECS inventory stock status values from DescribeAvailableResource
+const (
+	stockStatusWithStock          = "WithStock"
+	stockStatusClosedWithStock    = "ClosedWithStock"
+	stockStatusWithoutStock       = "WithoutStock"
+	stockStatusClosedWithoutStock = "ClosedWithoutStock"
+)
+
+// Per-layer cache TTLs. Zones change only when Alibaba Cloud adds/removes a zone
+// (rare, O(months)), so a long TTL is safe. Inventory reflects real-time stock
+// and must stay relatively fresh. Instance-types are assembled from inventory,
+// so they share inventory's TTL.
+const (
+	cacheTTLZones         = 2 * time.Hour
+	cacheTTLInventory     = 5 * time.Minute
+	cacheTTLInstanceTypes = 5 * time.Minute
 )
 
 // Provider handles instance type operations for Alibaba Cloud
@@ -36,7 +68,6 @@ type Provider struct {
 	ecsClient clients.ECSClient
 	cache     map[string]*CacheEntry
 	cacheMu   sync.RWMutex
-	cacheTTL  time.Duration
 }
 
 // CacheEntry represents a cached result with expiration
@@ -60,7 +91,8 @@ type InstanceType struct {
 
 // ZoneInfo represents information about an instance type in a specific zone
 type ZoneInfo struct {
-	Available bool
+	Available     bool
+	CapacityTypes []string // Karpenter capacity types with stock: "on-demand", "spot"
 }
 
 // GPU represents GPU information
@@ -100,13 +132,7 @@ func NewProvider(region string, ecsClient clients.ECSClient) *Provider {
 		region:    region,
 		ecsClient: ecsClient,
 		cache:     make(map[string]*CacheEntry),
-		cacheTTL:  5 * time.Minute, // Cache for 5 minutes by default
 	}
-}
-
-// SetCacheTTL sets the cache TTL duration
-func (p *Provider) SetCacheTTL(ttl time.Duration) {
-	p.cacheTTL = ttl
 }
 
 // getCachedValue retrieves a value from cache if it exists and is not expired
@@ -136,14 +162,14 @@ func (p *Provider) getCachedValue(key string) (interface{}, bool) {
 	return value, true
 }
 
-// setCachedValue stores a value in cache with expiration
-func (p *Provider) setCachedValue(key string, value interface{}) {
+// setCachedValue stores a value in cache with the given TTL.
+func (p *Provider) setCachedValue(key string, value interface{}, ttl time.Duration) {
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
 
 	p.cache[key] = &CacheEntry{
 		Value:     value,
-		ExpiresAt: time.Now().Add(p.cacheTTL),
+		ExpiresAt: time.Now().Add(ttl),
 	}
 }
 
@@ -295,10 +321,81 @@ func (p *Provider) getAvailableZones(ctx context.Context) (map[string]ZoneInfo, 
 		zones[*zone.ZoneId] = ZoneInfo{Available: true}
 	}
 
-	// Cache the result
-	p.setCachedValue(cacheKey, zones)
+	p.setCachedValue(cacheKey, zones, cacheTTLZones)
 
 	return zones, nil
+}
+
+// getInventory fetches per-instance-type per-zone stock from DescribeAvailableResource for
+// on-demand and spot capacity types. Returns map[instanceTypeID]map[zoneID][]capacityType
+// where capacityType is a karpenter capacity type ("on-demand" or "spot").
+// Returns nil on API error — callers treat nil as "optimistic: all capacity types available".
+func (p *Provider) getInventory(ctx context.Context) map[string]map[string][]string {
+	logger := log.FromContext(ctx)
+
+	cacheKey := "inventory"
+	if cachedValue, exists := p.getCachedValue(cacheKey); exists {
+		if inv, ok := cachedValue.(map[string]map[string][]string); ok {
+			logger.V(1).Info("Found inventory in cache")
+			return inv
+		}
+	}
+
+	inventory := make(map[string]map[string][]string)
+
+	type queryParams struct {
+		spotStrategy string
+		capacityType string
+	}
+	queries := []queryParams{
+		{ecsSpotStrategyNoSpot, capacityTypeOnDemand},
+		{ecsSpotStrategyAsPriceGo, capacityTypeSpot},
+	}
+
+	for _, q := range queries {
+		request := &ecs.DescribeAvailableResourceRequest{
+			RegionId:            tea.String(p.region),
+			DestinationResource: tea.String("InstanceType"),
+			InstanceChargeType:  tea.String(ecsChargeTypePostPaid),
+			SpotStrategy:        tea.String(q.spotStrategy),
+		}
+		resp, err := p.ecsClient.DescribeAvailableResource(ctx, request)
+		if err != nil {
+			logger.Error(err, "failed to describe available resource, using optimistic availability", "spotStrategy", q.spotStrategy)
+			return nil
+		}
+		if resp == nil || resp.Body == nil || resp.Body.AvailableZones == nil {
+			continue
+		}
+		for _, az := range resp.Body.AvailableZones.AvailableZone {
+			if az == nil || az.ZoneId == nil || az.AvailableResources == nil {
+				continue
+			}
+			zoneID := *az.ZoneId
+			for _, ar := range az.AvailableResources.AvailableResource {
+				if ar == nil || ar.Type == nil || *ar.Type != "InstanceType" || ar.SupportedResources == nil {
+					continue
+				}
+				for _, sr := range ar.SupportedResources.SupportedResource {
+					if sr == nil || sr.Value == nil || sr.StatusCategory == nil {
+						continue
+					}
+					status := *sr.StatusCategory
+					if status != stockStatusWithStock && status != stockStatusClosedWithStock {
+						continue
+					}
+					itID := *sr.Value
+					if inventory[itID] == nil {
+						inventory[itID] = make(map[string][]string)
+					}
+					inventory[itID][zoneID] = append(inventory[itID][zoneID], q.capacityType)
+				}
+			}
+		}
+	}
+
+	p.setCachedValue(cacheKey, inventory, cacheTTLInventory)
+	return inventory
 }
 
 // List lists all available instance types
@@ -321,6 +418,9 @@ func (p *Provider) List(ctx context.Context) ([]*InstanceType, error) {
 		return nil, fmt.Errorf("failed to get available zones: %w", err)
 	}
 
+	// Fetch per-instance-type inventory; nil means optimistic (all charge types available)
+	inventory := p.getInventory(ctx)
+
 	// Execute request
 	response, err := p.ecsClient.DescribeInstanceTypes(ctx, nil)
 	if err != nil {
@@ -328,10 +428,42 @@ func (p *Provider) List(ctx context.Context) ([]*InstanceType, error) {
 		return nil, fmt.Errorf("failed to describe instance types: %w", err)
 	}
 
-	// Convert to our InstanceType type
+	// Convert to our InstanceType type, filtering zones by inventory stock
 	var instanceTypes []*InstanceType
 	for _, it := range response.Body.InstanceTypes.InstanceType {
-		instanceType := p.convertECSInstanceType(it, zones)
+		if it == nil || it.InstanceTypeId == nil {
+			continue
+		}
+		itID := *it.InstanceTypeId
+
+		// Build zone map filtered by real stock data from DescribeAvailableResource
+		itZones := make(map[string]ZoneInfo)
+		for zoneID, zoneInfo := range zones {
+			if !zoneInfo.Available {
+				continue
+			}
+			var capacityTypes []string
+			if inventory == nil {
+				// API unavailable: optimistic fallback — assume both capacity types available
+				capacityTypes = []string{capacityTypeOnDemand, capacityTypeSpot}
+			} else if invZones, ok := inventory[itID]; ok {
+				capacityTypes = invZones[zoneID]
+			}
+			if len(capacityTypes) == 0 {
+				continue // no stock for this instance type in this zone
+			}
+			itZones[zoneID] = ZoneInfo{Available: true, CapacityTypes: capacityTypes}
+		}
+
+		// Skip instance types with no stock in any zone
+		if len(itZones) == 0 {
+			continue
+		}
+
+		instanceType := p.convertECSInstanceType(it, itZones)
+		if instanceType == nil {
+			continue
+		}
 
 		// Log instance type information for debugging (only at debug level)
 		gpuAmount := int32(0)
@@ -343,22 +475,19 @@ func (p *Provider) List(ctx context.Context) ([]*InstanceType, error) {
 			gpuSpec = *it.GPUSpec
 		}
 		logger.V(1).Info("Found instance type",
-			"name", *it.InstanceTypeId,
+			"name", itID,
 			"cpu", *it.CpuCoreCount,
 			"memoryGiB", *it.MemorySize,
 			"gpuAmount", gpuAmount,
 			"gpuSpec", gpuSpec,
-			"zones", zones)
+			"zones", itZones)
 
 		instanceTypes = append(instanceTypes, instanceType)
 	}
 
-	// Cache the result - both the full list and individual instance types
-	p.setCachedValue(cacheKey, instanceTypes)
-	// Also cache each instance type individually for Get() method
+	p.setCachedValue(cacheKey, instanceTypes, cacheTTLInstanceTypes)
 	for _, it := range instanceTypes {
-		individualKey := fmt.Sprintf("instance-type-%s", it.Name)
-		p.setCachedValue(individualKey, it)
+		p.setCachedValue(fmt.Sprintf("instance-type-%s", it.Name), it, cacheTTLInstanceTypes)
 	}
 
 	return instanceTypes, nil
@@ -399,8 +528,7 @@ func (p *Provider) Get(ctx context.Context, instanceTypeName string) (*InstanceT
 	it := response.Body.InstanceTypes.InstanceType[0]
 	instanceType := p.convertECSInstanceType(it, zones)
 
-	// Cache the result
-	p.setCachedValue(cacheKey, instanceType)
+	p.setCachedValue(cacheKey, instanceType, cacheTTLInstanceTypes)
 
 	return instanceType, nil
 }

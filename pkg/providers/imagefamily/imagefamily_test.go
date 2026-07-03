@@ -17,6 +17,7 @@ limitations under the License.
 package imagefamily
 
 import (
+	"errors"
 	"context"
 	"testing"
 
@@ -74,6 +75,10 @@ func (m *MockECSClient) DescribeInstanceTypes(ctx context.Context, instanceTypes
 func (m *MockECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesResponse, error) {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (m *MockECSClient) DescribeAvailableResource(ctx context.Context, request *ecs.DescribeAvailableResourceRequest) (*ecs.DescribeAvailableResourceResponse, error) {
+	return nil, errors.New("not implemented")
 }
 
 func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
