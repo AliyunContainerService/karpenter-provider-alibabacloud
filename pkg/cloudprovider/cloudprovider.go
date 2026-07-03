@@ -181,7 +181,7 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
 		CustomUserData:  lo.ToPtr(getCustomUserData(nodeClass)),
 	}
 
-	userData, err := c.bootstrapProvider.GenerateUserData(bootstrapOpts)
+	userData, err := c.bootstrapProvider.GenerateUserData(ctx, bootstrapOpts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate user data: %w", err)
 	}

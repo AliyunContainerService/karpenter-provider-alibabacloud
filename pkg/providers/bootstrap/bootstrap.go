@@ -19,16 +19,18 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
-	cs "github.com/alibabacloud-go/cs-20151215/v5/client"
-	"github.com/alibabacloud-go/tea/tea"
-	coreapis "sigs.k8s.io/karpenter/pkg/apis/v1"
+	"regexp"
 	"strings"
 	"sync"
 	"text/template"
 	"time"
 
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
+	cs "github.com/alibabacloud-go/cs-20151215/v5/client"
+	"github.com/alibabacloud-go/tea/tea"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/klog/v2"
+	coreapis "sigs.k8s.io/karpenter/pkg/apis/v1"
 )
 
 // ClusterType represents the type of Kubernetes cluster
@@ -114,6 +116,111 @@ func NewProvider(region string, csClient clients.CSClient) *Provider {
 	}
 }
 
+// Package-level compiled regexes for bootstrap script patching and label validation.
+var (
+	runtimeRe      = regexp.MustCompile(`--runtime\s+(\S+)\s+--runtime-version\s+(\S+)`)
+	labelsArgRe    = regexp.MustCompile(`(--labels\s+)(\S+)`)
+	labelNameRe    = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,61}[a-zA-Z0-9])?$|^[a-zA-Z0-9]$`)
+	dnsLabelPartRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$|^[a-z0-9]$`)
+	labelValueRe   = regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9._-]{0,61}[a-zA-Z0-9])?)?$|^[a-zA-Z0-9]$`)
+)
+
+// patchRuntimeVersion calls DescribeClusterDetail and DescribeKubernetesVersionMetadata to
+// find the correct runtime name/version for the cluster's K8s version, then regex-replaces
+// the --runtime and --runtime-version flags in script. On any error, returns script unchanged.
+func (p *Provider) patchRuntimeVersion(ctx context.Context, clusterID, script string) string {
+	detail, err := p.csClient.DescribeClusterDetail(ctx, clusterID)
+	if err != nil || detail == nil || detail.Body == nil || detail.Body.CurrentVersion == nil {
+		klog.V(2).Infof("patchRuntimeVersion: skipping runtime patch, failed to get cluster detail: %v", err)
+		return script
+	}
+	k8sVersion := *detail.Body.CurrentVersion
+	runtimes, err := p.csClient.DescribeKubernetesVersionMetadata(ctx, k8sVersion)
+	if err != nil || len(runtimes) == 0 || len(runtimes[0].Runtimes) == 0 {
+		klog.V(2).Infof("patchRuntimeVersion: skipping runtime patch, no runtime metadata for version %s: %v", k8sVersion, err)
+		return script
+	}
+	rt := runtimes[0].Runtimes[0]
+	if rt.Name == nil || rt.Version == nil {
+		return script
+	}
+	replacement := fmt.Sprintf("--runtime %s --runtime-version %s", *rt.Name, *rt.Version)
+	patched := runtimeRe.ReplaceAllString(script, replacement)
+	if patched != script {
+		klog.Infof("patchRuntimeVersion: patched to --runtime %s --runtime-version %s for k8s %s", *rt.Name, *rt.Version, k8sVersion)
+	}
+	return patched
+}
+
+func isValidLabelName(name string) bool {
+	if len(name) == 0 || len(name) > 63 {
+		return false
+	}
+	return labelNameRe.MatchString(name)
+}
+
+func isValidDNSSubdomain(s string) bool {
+	if len(s) == 0 || len(s) > 253 {
+		return false
+	}
+	for _, part := range strings.Split(s, ".") {
+		if !dnsLabelPartRe.MatchString(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func isValidLabelKey(key string) bool {
+	// A key must have at most one '/'
+	parts := strings.SplitN(key, "/", 3)
+	switch len(parts) {
+	case 1:
+		return isValidLabelName(parts[0])
+	case 2:
+		return isValidDNSSubdomain(parts[0]) && isValidLabelName(parts[1])
+	default:
+		return false // more than one slash
+	}
+}
+
+func isValidLabelValue(v string) bool {
+	if len(v) > 63 {
+		return false
+	}
+	return labelValueRe.MatchString(v)
+}
+
+// sanitizeBootstrapLabels filters out label key=value pairs from the --labels argument
+// that would fail K8s validation. Invalid pairs are dropped with a log message.
+func sanitizeBootstrapLabels(ctx context.Context, script string) string {
+	return labelsArgRe.ReplaceAllStringFunc(script, func(match string) string {
+		parts := labelsArgRe.FindStringSubmatch(match)
+		if len(parts) < 3 {
+			return match
+		}
+		prefix := parts[1]
+		labelsVal := parts[2]
+		var valid []string
+		for _, pair := range strings.Split(labelsVal, ",") {
+			kv := strings.SplitN(pair, "=", 2)
+			if len(kv) != 2 {
+				klog.Infof("sanitizeBootstrapLabels: dropping label pair with no '=': %q", pair)
+				continue
+			}
+			if isValidLabelKey(kv[0]) && isValidLabelValue(kv[1]) {
+				valid = append(valid, pair)
+			} else {
+				klog.Infof("sanitizeBootstrapLabels: dropping invalid label %q=%q", kv[0], kv[1])
+			}
+		}
+		if len(valid) == 0 {
+			return ""
+		}
+		return prefix + strings.Join(valid, ",")
+	})
+}
+
 // 复用 vswitch.go 中的 CacheEntry 定义
 // CacheEntry represents a cached result with expiration
 type CacheEntry struct {
@@ -172,7 +279,7 @@ func (p *Provider) ClearCache() {
 }
 
 // GenerateUserData generates user data script for bootstrapping nodes
-func (p *Provider) GenerateUserData(opts BootstrapOptions) (string, error) {
+func (p *Provider) GenerateUserData(ctx context.Context, opts BootstrapOptions) (string, error) {
 	// If custom user data is provided, use it
 	if opts.CustomUserData != nil && *opts.CustomUserData != "" {
 		return *opts.CustomUserData, nil
@@ -181,7 +288,7 @@ func (p *Provider) GenerateUserData(opts BootstrapOptions) (string, error) {
 	// Generate bootstrap script based on cluster type
 	switch opts.ClusterType {
 	case ACKClusterType:
-		return p.generateACKBootstrapScript(opts)
+		return p.generateACKBootstrapScript(ctx, opts)
 	case SelfManagedClusterType:
 		return p.generateSelfManagedBootstrapScript(opts)
 	case KubeadmClusterType:
@@ -193,7 +300,7 @@ func (p *Provider) GenerateUserData(opts BootstrapOptions) (string, error) {
 	}
 }
 
-func (p *Provider) getACKBootstrapScriptByCluster(opts BootstrapOptions) (string, error) {
+func (p *Provider) getACKBootstrapScriptByCluster(ctx context.Context, opts BootstrapOptions) (string, error) {
 	// Validate required fields for ACK clusters
 	if opts.ClusterID == "" {
 		return "", fmt.Errorf("cluster ID is required for ACK clusters")
@@ -213,10 +320,14 @@ func (p *Provider) getACKBootstrapScriptByCluster(opts BootstrapOptions) (string
 	}
 
 	// Execute request
-	script, err := p.csClient.DescribeClusterAttachScripts(context.Background(), opts.ClusterID, request)
+	script, err := p.csClient.DescribeClusterAttachScripts(ctx, opts.ClusterID, request)
 	if err != nil {
 		return "", fmt.Errorf("failed to describe cluster attach scripts: %w", err)
 	}
+
+	// Patch runtime version and sanitize labels before caching
+	script = p.patchRuntimeVersion(ctx, opts.ClusterID, script)
+	script = sanitizeBootstrapLabels(ctx, script)
 
 	// Cache the result
 	p.setCachedValue(cacheKey, script)
@@ -225,14 +336,14 @@ func (p *Provider) getACKBootstrapScriptByCluster(opts BootstrapOptions) (string
 }
 
 // generateACKBootstrapScript generates bootstrap script for ACK clusters
-func (p *Provider) generateACKBootstrapScript(opts BootstrapOptions) (string, error) {
+func (p *Provider) generateACKBootstrapScript(ctx context.Context, opts BootstrapOptions) (string, error) {
 	// Validate required fields for ACK clusters
 	if opts.ClusterID == "" {
 		return "", fmt.Errorf("cluster ID is required for ACK clusters")
 	}
 
 	// Get ACK bootstrap script
-	script, err := p.getACKBootstrapScriptByCluster(opts)
+	script, err := p.getACKBootstrapScriptByCluster(ctx, opts)
 	if err != nil {
 		return "", fmt.Errorf("failed to get ACK bootstrap script: %w", err)
 	}
