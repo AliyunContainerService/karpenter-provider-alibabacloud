@@ -450,6 +450,69 @@ func TestConvertInstanceToNodeClaimArchLabels(t *testing.T) {
 	}
 }
 
+func TestCapacityTypeFromRequirements(t *testing.T) {
+	tests := []struct {
+		name     string
+		reqs     []coreapis.NodeSelectorRequirementWithMinValues
+		expected string
+	}{
+		{
+			name:     "nil requirements returns on-demand",
+			reqs:     nil,
+			expected: "on-demand",
+		},
+		{
+			name: "In spot returns spot",
+			reqs: []coreapis.NodeSelectorRequirementWithMinValues{
+				{NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+					Key:      v1alpha1.LabelCapacityType,
+					Operator: corev1.NodeSelectorOpIn,
+					Values:   []string{"spot"},
+				}},
+			},
+			expected: "spot",
+		},
+		{
+			name: "In on-demand returns on-demand",
+			reqs: []coreapis.NodeSelectorRequirementWithMinValues{
+				{NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+					Key:      v1alpha1.LabelCapacityType,
+					Operator: corev1.NodeSelectorOpIn,
+					Values:   []string{"on-demand"},
+				}},
+			},
+			expected: "on-demand",
+		},
+		{
+			name: "NotIn spot is ignored, returns on-demand",
+			reqs: []coreapis.NodeSelectorRequirementWithMinValues{
+				{NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+					Key:      v1alpha1.LabelCapacityType,
+					Operator: corev1.NodeSelectorOpNotIn,
+					Values:   []string{"spot"},
+				}},
+			},
+			expected: "on-demand",
+		},
+		{
+			name: "no capacity-type requirement returns on-demand",
+			reqs: []coreapis.NodeSelectorRequirementWithMinValues{
+				{NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+					Key:      corev1.LabelTopologyZone,
+					Operator: corev1.NodeSelectorOpIn,
+					Values:   []string{"cn-shanghai-n"},
+				}},
+			},
+			expected: "on-demand",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, capacityTypeFromRequirements(tt.reqs))
+		})
+	}
+}
+
 func TestBuildInstanceTagsManagedByValue(t *testing.T) {
 	tags := buildInstanceTags(&coreapis.NodeClaim{}, &v1alpha1.ECSNodeClass{})
 	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy],

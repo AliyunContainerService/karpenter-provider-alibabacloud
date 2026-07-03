@@ -190,7 +190,7 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
 	tags := buildInstanceTags(nodeClaim, nodeClass)
 
 	// 9. Create instance using instance provider
-	instanceID, err := c.createInstanceWithRetry(ctx, nodeClass, filteredTypes, images, vswitches, securityGroups, userData, tags)
+	instanceID, err := c.createInstanceWithRetry(ctx, nodeClaim, nodeClass, filteredTypes, images, vswitches, securityGroups, userData, tags)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create instance: %w", err)
 	}
@@ -673,6 +673,21 @@ func instanceLabelsFromInstance(inst *instance.Instance) map[string]string {
 	return labels
 }
 
+// capacityTypeFromRequirements returns "spot" when the NodeClaim requirements include
+// karpenter.sh/capacity-type In [spot], otherwise returns "on-demand".
+func capacityTypeFromRequirements(reqs []coreapis.NodeSelectorRequirementWithMinValues) string {
+	for _, req := range reqs {
+		if req.Key == v1alpha1.LabelCapacityType && req.Operator == corev1.NodeSelectorOpIn {
+			for _, v := range req.Values {
+				if v == "spot" {
+					return "spot"
+				}
+			}
+		}
+	}
+	return "on-demand"
+}
+
 // zonesFromRequirements extracts the allowed zones from a NodeClaim's requirements.
 // Returns nil when no topology.kubernetes.io/zone requirement is present (meaning any zone is allowed).
 func zonesFromRequirements(requirements []coreapis.NodeSelectorRequirementWithMinValues) []string {
@@ -739,7 +754,7 @@ func (c *CloudProvider) filterInstanceTypesByRequirements(ctx context.Context, i
 	return c.instanceTypeProvider.Filter(ctx, instanceTypes, itRequirements)
 }
 
-func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClass *v1alpha1.ECSNodeClass, instanceTypes []*instancetype.InstanceType, images []v1alpha1.Image, vswitches []v1alpha1.VSwitch, securityGroups []v1alpha1.SecurityGroup, userData string, tags map[string]string) (string, error) {
+func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNodeClass, instanceTypes []*instancetype.InstanceType, images []v1alpha1.Image, vswitches []v1alpha1.VSwitch, securityGroups []v1alpha1.SecurityGroup, userData string, tags map[string]string) (string, error) {
 	if len(instanceTypes) == 0 || len(images) == 0 || len(vswitches) == 0 || len(securityGroups) == 0 {
 		return "", fmt.Errorf("missing required parameters for instance creation")
 	}
@@ -787,11 +802,20 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClass *
 			baseOpts.DataDisks = append(baseOpts.DataDisks, dataDisk)
 		}
 	}
-	if nodeClass.Spec.SpotStrategy != nil {
-		baseOpts.SpotStrategy = *nodeClass.Spec.SpotStrategy
-	}
-	if nodeClass.Spec.SpotPriceLimit != nil {
-		baseOpts.SpotPriceLimit = *nodeClass.Spec.SpotPriceLimit
+	// Derive capacity type from NodeClaim requirements (karpenter.sh/capacity-type).
+	// ECSNodeClass.Spec.SpotStrategy controls the algorithm only when spot is requested.
+	capacityType := capacityTypeFromRequirements(nodeClaim.Spec.Requirements)
+	if capacityType == "spot" {
+		if nodeClass.Spec.SpotStrategy != nil {
+			baseOpts.SpotStrategy = *nodeClass.Spec.SpotStrategy
+		} else {
+			baseOpts.SpotStrategy = "SpotAsPriceGo"
+		}
+		if nodeClass.Spec.SpotPriceLimit != nil {
+			baseOpts.SpotPriceLimit = *nodeClass.Spec.SpotPriceLimit
+		}
+	} else {
+		baseOpts.SpotStrategy = "NoSpot"
 	}
 
 	return vswitchFallbackCreate(ctx, baseOpts, vswitches, c.instanceProvider.Create)
