@@ -64,6 +64,7 @@ type CreateOptions struct {
 	SpotStrategy        string
 	SpotPriceLimit      float64
 	InstanceStorePolicy *string // Add instance store policy field
+	Ipv6AddressCount    *int32
 }
 
 // SystemDisk represents system disk configuration
@@ -202,6 +203,10 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 
 	if opts.SpotPriceLimit > 0 {
 		request.SpotPriceLimit = tea.Float32(float32(opts.SpotPriceLimit))
+	}
+
+	if opts.Ipv6AddressCount != nil && *opts.Ipv6AddressCount > 0 {
+		request.Ipv6AddressCount = opts.Ipv6AddressCount
 	}
 
 	// Set system disk

@@ -22,6 +22,8 @@ type NetworkConfig struct {
 	TrunkEniEnabled bool
 	// ExclusiveEniEnabled indicates if exclusive ENI mode is enabled (managed terway only)
 	ExclusiveEniEnabled bool
+	// DualStack is true when cluster IpStack is "ipv6" (dual-stack)
+	DualStack bool
 }
 
 type ClusterEniConfig struct {
@@ -34,26 +36,6 @@ func (nc *NetworkConfig) CalculateMaxPods() int64 {
 		return int64(math.Pow(2, 32-float64(nc.NodeCidrMask)))
 	}
 	return 0 // Default max pods
-}
-
-// getClusterNodeCidrMask retrieves the node CIDR mask from cluster detail
-func getClusterNodeCidrMask(csClient clients.CSClient, clusterID string) (int, error) {
-	detail, err := csClient.DescribeClusterDetail(context.Background(), clusterID)
-	if err != nil {
-		return 0, fmt.Errorf("failed to describe cluster detail: %w", err)
-	}
-	if detail == nil || detail.Body == nil || detail.Body.NodeCidrMask == nil {
-		return 24, nil // Default mask
-	}
-
-	nodeCidrMask := 24 // Default
-	_, err = strconv.Atoi(*detail.Body.NodeCidrMask)
-	if err != nil {
-		klog.Warningf("failed to parse NodeCidrMask %s for cluster %s, using default 24: %v", *detail.Body.NodeCidrMask, clusterID, err)
-		return 24, nil
-	}
-	nodeCidrMask, _ = strconv.Atoi(*detail.Body.NodeCidrMask)
-	return nodeCidrMask, nil
 }
 
 // getClusterNetworkAddon retrieves network addon information from cluster
@@ -85,19 +67,32 @@ func InitializeClusterNetworkConfig(csClient clients.CSClient, clusterID string)
 		return nil, fmt.Errorf("failed to get cluster network addon: %w", err)
 	}
 
-	// Get node CIDR mask
-	nodeCidrMask, err := getClusterNodeCidrMask(csClient, clusterID)
+	// Get node CIDR mask and dual-stack setting from a single DescribeClusterDetail call
+	nodeCidrMask := 24 // default
+	dualStack := false
+	detail, err := csClient.DescribeClusterDetail(context.Background(), clusterID)
 	if err != nil {
-		klog.Warningf("failed to get cluster node cidr mask for cluster %s: %v", clusterID, err)
-		nodeCidrMask = 24 // Use default
+		klog.Warningf("failed to describe cluster detail for cluster %s: %v, using defaults", clusterID, err)
+	} else if detail != nil && detail.Body != nil {
+		if detail.Body.NodeCidrMask != nil {
+			if mask, err := strconv.Atoi(*detail.Body.NodeCidrMask); err == nil {
+				nodeCidrMask = mask
+			} else {
+				klog.Warningf("failed to parse NodeCidrMask %s for cluster %s, using default 24", *detail.Body.NodeCidrMask, clusterID)
+			}
+		}
+		if detail.Body.IpStack != nil && *detail.Body.IpStack == "ipv6" {
+			dualStack = true
+		}
 	}
 
 	// Initialize network config with basic info
 	nc := &NetworkConfig{
 		ClusterNetwork:      networkAddon,
 		NodeCidrMask:        nodeCidrMask,
-		TrunkEniEnabled:     false, // Default value
-		ExclusiveEniEnabled: false, // Default value
+		DualStack:           dualStack,
+		TrunkEniEnabled:     false,
+		ExclusiveEniEnabled: false,
 		MaxPods:             0,
 	}
 

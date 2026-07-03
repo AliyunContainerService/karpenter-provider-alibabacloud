@@ -818,6 +818,11 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClaim *
 		baseOpts.SpotStrategy = "NoSpot"
 	}
 
+	if c.clusterNetworkConfig != nil && c.clusterNetworkConfig.DualStack {
+		one := int32(1)
+		baseOpts.Ipv6AddressCount = &one
+	}
+
 	return vswitchFallbackCreate(ctx, baseOpts, vswitches, c.instanceProvider.Create)
 }
 
