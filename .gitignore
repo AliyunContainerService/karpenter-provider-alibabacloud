@@ -1,39 +1,31 @@
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
 
-# Test binary, built with `go test -c`
-*.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
-*.out
-
-# Dependency directories (remove the comment below to include it)
-vendor/
-
-# Go workspace file
-go.work
-
-# IDE
+.DS_Store
 .idea/
 .vscode/
-*.swp
+*.bak
+*.dll
+*.dylib
+*.exe
+*.exe~
+*.out
+*.so
 *.swo
+*.swp
+*.test
+*.tmp
 *~
-
-# OS
-.DS_Store
-Thumbs.db
-
+# Binaries for programs and plugins
 # Build artifacts
+# Dependency directories (remove the comment below to include it)
+# Go workspace file
+# IDE
+# OS
+# Output of the go coverage tool, specifically when used with LiteIDE
+# Temporary files
+# Test binary, built with `go test -c`
 bin/
 dist/
-
-# Temporary files
-*.tmp
-*.bak
-
-.claude/
+docs/superpowers/
+go.work
+Thumbs.db
+vendor/
