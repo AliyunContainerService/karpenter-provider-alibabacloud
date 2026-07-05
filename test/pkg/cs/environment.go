@@ -304,6 +304,13 @@ func (env *Environment) DefaultNodePool(nodeClass *v1alpha1.ECSNodeClass) *karpv
 		},
 		Spec: karpv1.NodePoolSpec{
 			Template: karpv1.NodeClaimTemplate{
+				// Propagate the discovery label to nodes so ConsistentlyExpectNodeCount
+				// (which filters by test.DiscoveryLabel = "testing/cluster") can find them.
+				ObjectMeta: karpv1.ObjectMeta{
+					Labels: map[string]string{
+						test.DiscoveryLabel: "unspecified",
+					},
+				},
 				Spec: karpv1.NodeClaimTemplateSpec{
 					TerminationGracePeriod: &metav1.Duration{Duration: 1 * time.Minute},
 					ExpireAfter:            karpv1.MustParseNillableDuration("720h"),
