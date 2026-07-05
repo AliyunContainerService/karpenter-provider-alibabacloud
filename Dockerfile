@@ -22,7 +22,8 @@ COPY hack/ hack/
 # Build the binary
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -a -o bin/controller cmd/controller/main.go
 
-FROM registry-cn-hangzhou.ack.aliyuncs.com/dev/debian:11-base
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /
 COPY --from=builder /workspace/bin/controller .
 USER 65532:65532

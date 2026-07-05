@@ -42,14 +42,24 @@ func (nc *NetworkConfig) CalculateMaxPods() int64 {
 func getClusterNetworkAddon(csClient clients.CSClient, clusterID string) (addonName string, addonVersion string, addonConfig *string, err error) {
 	addons := []string{"terway-eniip", "terway", "kube-flannel-ds", "kube-flannel-ds-vxlan"}
 	for _, addon := range addons {
-		resp, err := csClient.GetClusterAddonInstance(context.Background(), clusterID, addon)
-		if err == nil && resp.Body != nil && resp.Body.Name != nil {
-			version := ""
-			if resp.Body.Version != nil {
-				version = *resp.Body.Version
-			}
-			return *resp.Body.Name, version, resp.Body.Config, nil
+		resp, addonErr := csClient.GetClusterAddonInstance(context.Background(), clusterID, addon)
+		if addonErr != nil {
+			klog.Warningf("GetClusterAddonInstance(%s, %s) error: %v", clusterID, addon, addonErr)
+			continue
 		}
+		if resp.Body == nil {
+			klog.Warningf("GetClusterAddonInstance(%s, %s): response body is nil", clusterID, addon)
+			continue
+		}
+		if resp.Body.Name == nil {
+			klog.Warningf("GetClusterAddonInstance(%s, %s): response body.Name is nil, body=%+v", clusterID, addon, resp.Body)
+			continue
+		}
+		version := ""
+		if resp.Body.Version != nil {
+			version = *resp.Body.Version
+		}
+		return *resp.Body.Name, version, resp.Body.Config, nil
 	}
 	return "", "", nil, fmt.Errorf("no network addon found in cluster %s", clusterID)
 }
@@ -61,7 +71,6 @@ func InitializeClusterNetworkConfig(csClient clients.CSClient, clusterID string)
 		return nil, fmt.Errorf("clusterID is empty")
 	}
 
-	// Get network addon information
 	networkAddon, _, addonConfig, err := getClusterNetworkAddon(csClient, clusterID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get cluster network addon: %w", err)
