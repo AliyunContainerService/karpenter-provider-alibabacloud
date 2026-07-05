@@ -17,8 +17,8 @@ limitations under the License.
 package status_test
 
 import (
-	"errors"
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"

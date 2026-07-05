@@ -61,7 +61,7 @@ func init() {
 
 var persistedSettings []corev1.EnvVar
 
-var DefaultImageID = "aliyun_3_x64_20G_alibase_20260122.vhd"
+var DefaultImageID = "aliyun_4_x64_20G_container_optimized_alibase_20260430.vhd"
 
 var (
 	CleanableObjects = []client.Object{
@@ -162,6 +162,41 @@ func (env *Environment) BeforeEach() {
 			_ = env.Client.Delete(context.Background(), &nodePoolList.Items[i], &client.DeleteOptions{})
 		}
 	}
+
+	// Delete leftover Deployments in the default namespace so their pods don't linger
+	// and fail ValidateCleanEnvironment's "no pods in default namespace" check.
+	deployList := &appsv1.DeploymentList{}
+	if err := env.Client.List(context.Background(), deployList, client.InNamespace("default")); err == nil {
+		for i := range deployList.Items {
+			_ = env.Client.Delete(context.Background(), &deployList.Items[i], &client.DeleteOptions{})
+		}
+	}
+
+	// Wait for all karpenter-managed nodes to fully terminate before capturing
+	// StartingNodeCount. A node still terminating from the previous test would inflate
+	// StartingNodeCount, making CreatedNodeCount return 0 for newly provisioned nodes
+	// (e.g. gc_stability_test.go:136, deprovisioning_test.go:246).
+	Eventually(func(g Gomega) {
+		nl := &corev1.NodeList{}
+		g.Expect(env.Client.List(context.Background(), nl)).To(Succeed())
+		karpenterNodes := lo.Filter(nl.Items, func(n corev1.Node, _ int) bool {
+			_, hasLabel := n.Labels[karpv1.NodePoolLabelKey]
+			return hasLabel
+		})
+		g.Expect(karpenterNodes).To(BeEmpty(), "waiting for all karpenter-managed nodes to terminate before next test")
+	}).WithTimeout(5 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
+
+	// Wait for all pods in the default namespace to be deleted.
+	// ValidateCleanEnvironment rejects any pod in the default namespace.
+	Eventually(func(g Gomega) {
+		podList := &corev1.PodList{}
+		g.Expect(env.Client.List(context.Background(), podList, client.InNamespace("default"))).To(Succeed())
+		// Explicitly delete any remaining pods to speed up termination
+		for i := range podList.Items {
+			_ = env.Client.Delete(context.Background(), &podList.Items[i], &client.DeleteOptions{})
+		}
+		g.Expect(podList.Items).To(BeEmpty(), "waiting for pods in default namespace to terminate")
+	}).WithTimeout(2 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
 
 	// 给已有节点打上 taint，防止测试 Pod 调度到现有节点
 	nodeList := &corev1.NodeList{}

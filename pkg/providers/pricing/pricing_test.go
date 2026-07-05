@@ -17,8 +17,8 @@ limitations under the License.
 package pricing
 
 import (
-	"errors"
 	"context"
+	"errors"
 	"testing"
 	"time"
 

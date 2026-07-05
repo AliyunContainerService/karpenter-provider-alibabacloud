@@ -17,8 +17,8 @@ limitations under the License.
 package imagefamily
 
 import (
-	"errors"
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"

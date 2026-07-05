@@ -41,7 +41,8 @@ fmt: ## Run go fmt against code.
 
 .PHONY: vet
 vet: ## Run go vet against code.
-	go vet ./...
+	go vet ./pkg/... ./cmd/...
+	go vet -tags integration ./test/suites/...
 
 .PHONY: test-batcher
 test-batcher: ## Run batcher tests only.
@@ -128,8 +129,12 @@ test: generate manifests envtest-setup fmt vet
 	KUBEBUILDER_ASSETS="$${KUBEBUILDER_ASSETS}" go test -v ./pkg/... -coverprofile test.out
 
 .PHONY: test-integration
-test-integration: fmt vet ## Run integration tests in test/suites/...
-	ginkgo -v --procs=1 -timeout 2h ./test/suites/...
+test-integration: fmt vet ## Run integration tests in test/suites/... (excludes gpu label)
+	ginkgo -v --procs=1 -timeout 2h --tags integration --label-filter '!gpu' ./test/suites/...
+
+.PHONY: test-integration-gpu
+test-integration-gpu: fmt vet ## Run GPU integration tests (requires GPU instance inventory in test zone)
+	ginkgo -v --procs=1 -timeout 2h --tags integration --label-filter 'gpu' ./test/suites/...
 
 .PHONY: test-all
 test-all: test test-integration ## Run all tests (unit + integration)

@@ -17,8 +17,8 @@ limitations under the License.
 package garbagecollection_test
 
 import (
-	"errors"
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"

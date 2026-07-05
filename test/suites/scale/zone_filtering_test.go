@@ -167,6 +167,9 @@ var _ = Describe("ZoneFiltering", Label("zone-filtering"), func() {
 	})
 
 	AfterEach(func() {
+		if k8sClient == nil {
+			return
+		}
 		_ = k8sClient.Delete(ctx, pod)
 		_ = k8sClient.Delete(ctx, nodePool)
 		_ = k8sClient.Delete(ctx, nodeClass)

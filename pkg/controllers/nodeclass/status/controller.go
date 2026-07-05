@@ -300,8 +300,8 @@ func (c *Controller) Register(ctx context.Context, mgr manager.Manager) error {
 			// Use exponential backoff rate limiter for error retries
 			// Max backoff of 5 minutes is suitable for cloud API rate limiting scenarios
 			RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
-				1*time.Second,   // Initial backoff
-				5*time.Minute,   // Max backoff
+				1*time.Second, // Initial backoff
+				5*time.Minute, // Max backoff
 			),
 			MaxConcurrentReconciles: 10,
 		}).
