@@ -474,7 +474,6 @@ func (p *Provider) Delete(ctx context.Context, instanceID string) error {
 	}
 
 	// Throttling propagates to the caller; Karpenter termination reconcile handles retry (see Create).
-	// Force=true covers all instance states; no pre-flight DescribeInstances needed.
 	resp, err := p.ecsClient.DeleteInstances(ctx, request)
 	if err != nil {
 		if errors.IsNotFound(err) ||
@@ -482,6 +481,12 @@ func (p *Provider) Delete(ctx context.Context, instanceID string) error {
 			strings.Contains(err.Error(), "InstanceNotFound") {
 			logger.Info("instance already deleted or not found", "instanceID", instanceID)
 			return cloudprovider.NewNodeClaimNotFoundError(fmt.Errorf("instance delete with err %w", err))
+		}
+		// Instance is still initializing; ECS rejects deletion until it finishes creating.
+		// Return nil so the reconciler retries after the next requeue interval.
+		if strings.Contains(err.Error(), "IncorrectInstanceStatus.Initializing") {
+			logger.Info("instance still initializing, will retry deletion", "instanceID", instanceID)
+			return nil
 		}
 		return fmt.Errorf("delete instance failed: %w", err)
 	}
@@ -492,6 +497,25 @@ func (p *Provider) Delete(ctx context.Context, instanceID string) error {
 	}
 	logger.Info("deleted instance", "instanceID", instanceID, "requestId", requestId)
 	p.deleteCachedInstance(instanceID)
+
+	// ECS TerminateInstances is async and idempotent. Karpenter only removes the NodeClaim
+	// finalizer when Delete returns NodeClaimNotFoundError (see lifecycle/controller.go finalize()).
+	// Verify the instance is truly gone via DescribeInstances.
+	descResp, descErr := p.describeInstances(ctx, []string{instanceID})
+	if descErr != nil {
+		if IsNotFoundError(descErr) {
+			logger.Info("instance confirmed deleted", "instanceID", instanceID)
+			return cloudprovider.NewNodeClaimNotFoundError(fmt.Errorf("instance %s not found after deletion", instanceID))
+		}
+		// Transient describe error — karpenter will retry after 5s
+		logger.V(5).Info("describe after delete failed, will retry", "instanceID", instanceID, "error", descErr)
+		return nil
+	}
+	if descResp.Body == nil || descResp.Body.Instances == nil || len(descResp.Body.Instances.Instance) == 0 {
+		logger.Info("instance confirmed deleted", "instanceID", instanceID)
+		return cloudprovider.NewNodeClaimNotFoundError(fmt.Errorf("instance %s not found after deletion", instanceID))
+	}
+	logger.Info("instance still terminating", "instanceID", instanceID, "status", *descResp.Body.Instances.Instance[0].Status)
 	return nil
 }
 
