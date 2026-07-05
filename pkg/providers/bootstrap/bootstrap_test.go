@@ -19,10 +19,13 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	cs "github.com/alibabacloud-go/cs-20151215/v5/client"
+	"github.com/alibabacloud-go/tea/tea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	corev1 "k8s.io/api/core/v1"
@@ -46,6 +49,11 @@ func (m *MockCSClient) DescribeClusterDetail(ctx context.Context, clusterID stri
 func (m *MockCSClient) DescribeClusterAttachScripts(ctx context.Context, clusterID string, request *cs.DescribeClusterAttachScriptsRequest) (string, error) {
 	args := m.Called(ctx, clusterID, request)
 	return args.String(0), args.Error(1)
+}
+
+func (m *MockCSClient) DescribeKubernetesVersionMetadata(ctx context.Context, k8sVersion string) ([]*cs.DescribeKubernetesVersionMetadataResponseBody, error) {
+	args := m.Called(ctx, k8sVersion)
+	return args.Get(0).([]*cs.DescribeKubernetesVersionMetadataResponseBody), args.Error(1)
 }
 
 func TestGenerateUserData(t *testing.T) {
@@ -75,6 +83,8 @@ func TestGenerateUserData(t *testing.T) {
 			mockSetup: func(m *MockCSClient) {
 				script := "curl -sSL http://aliacs-k8s.oss.aliyuncs.com/public/pkg/run/attach/1.12.6-aliyunedge.1/attach.sh | bash"
 				m.On("DescribeClusterAttachScripts", mock.Anything, "c-test123", mock.Anything).Return(script, nil)
+				// patchRuntimeVersion is non-blocking; return error to exercise fallback path
+				m.On("DescribeClusterDetail", mock.Anything, "c-test123").Maybe().Return(&cs.DescribeClusterDetailResponse{}, fmt.Errorf("skip patch"))
 			},
 			contains: []string{"#!/bin/bash", "set -ex", "attach.sh"},
 		},
@@ -118,7 +128,7 @@ func TestGenerateUserData(t *testing.T) {
 			}
 
 			provider := NewProvider("cn-hangzhou", mockClient)
-			result, err := provider.GenerateUserData(tt.opts)
+			result, err := provider.GenerateUserData(context.Background(), tt.opts)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -152,6 +162,8 @@ func TestGetACKBootstrapScriptByCluster(t *testing.T) {
 			mockSetup: func(m *MockCSClient) {
 				script := "curl -sSL http://test.sh | bash"
 				m.On("DescribeClusterAttachScripts", mock.Anything, "c-abc123", mock.Anything).Return(script, nil)
+				// patchRuntimeVersion is non-blocking; return error to exercise fallback path
+				m.On("DescribeClusterDetail", mock.Anything, "c-abc123").Maybe().Return(&cs.DescribeClusterDetailResponse{}, fmt.Errorf("skip patch"))
 			},
 			expected: "curl -sSL http://test.sh | bash",
 		},
@@ -182,7 +194,7 @@ func TestGetACKBootstrapScriptByCluster(t *testing.T) {
 			}
 
 			provider := NewProvider("cn-hangzhou", mockClient)
-			result, err := provider.getACKBootstrapScriptByCluster(tt.opts)
+			result, err := provider.getACKBootstrapScriptByCluster(context.Background(), tt.opts)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -214,6 +226,7 @@ func TestGenerateACKBootstrapScript(t *testing.T) {
 			mockSetup: func(m *MockCSClient) {
 				script := "echo test"
 				m.On("DescribeClusterAttachScripts", mock.Anything, "c-abc123", mock.Anything).Return(script, nil)
+				m.On("DescribeClusterDetail", mock.Anything, "c-abc123").Maybe().Return(&cs.DescribeClusterDetailResponse{}, fmt.Errorf("skip patch"))
 			},
 			contains: []string{"#!/bin/bash", "set -ex", "echo test", "--taints"},
 		},
@@ -225,6 +238,7 @@ func TestGenerateACKBootstrapScript(t *testing.T) {
 			mockSetup: func(m *MockCSClient) {
 				script := "#!/bin/bash\necho test"
 				m.On("DescribeClusterAttachScripts", mock.Anything, "c-abc123", mock.Anything).Return(script, nil)
+				m.On("DescribeClusterDetail", mock.Anything, "c-abc123").Maybe().Return(&cs.DescribeClusterDetailResponse{}, fmt.Errorf("skip patch"))
 			},
 			contains: []string{"#!/bin/bash", "set -ex", "echo test"},
 		},
@@ -238,7 +252,7 @@ func TestGenerateACKBootstrapScript(t *testing.T) {
 			}
 
 			provider := NewProvider("cn-hangzhou", mockClient)
-			result, err := provider.generateACKBootstrapScript(tt.opts)
+			result, err := provider.generateACKBootstrapScript(context.Background(), tt.opts)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -561,4 +575,162 @@ func TestFormatTaints(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestPatchRuntimeVersion(t *testing.T) {
+	originalScript := "bash attach.sh --runtime containerd --runtime-version 1.5.10 --other-flag"
+
+	t.Run("replaces runtime version from metadata", func(t *testing.T) {
+		m := &MockCSClient{}
+		name := "containerd"
+		ver := "1.7.2"
+		m.On("DescribeClusterDetail", mock.Anything, "c-test").Return(
+			&cs.DescribeClusterDetailResponse{
+				Body: &cs.DescribeClusterDetailResponseBody{
+					CurrentVersion: tea.String("1.30.1-aliyun.1"),
+				},
+			}, nil)
+		m.On("DescribeKubernetesVersionMetadata", mock.Anything, "1.30.1-aliyun.1").Return(
+			[]*cs.DescribeKubernetesVersionMetadataResponseBody{
+				{
+					Runtimes: []*cs.Runtime{
+						{Name: &name, Version: &ver},
+					},
+				},
+			}, nil)
+
+		p := NewProvider("cn-shanghai", m)
+		result := p.patchRuntimeVersion(context.Background(), "c-test", originalScript)
+		assert.Contains(t, result, "--runtime containerd --runtime-version 1.7.2")
+		assert.NotContains(t, result, "1.5.10")
+	})
+
+	t.Run("returns original script on DescribeClusterDetail failure", func(t *testing.T) {
+		m := &MockCSClient{}
+		m.On("DescribeClusterDetail", mock.Anything, "c-test").Return(
+			&cs.DescribeClusterDetailResponse{}, fmt.Errorf("API error"))
+
+		p := NewProvider("cn-shanghai", m)
+		result := p.patchRuntimeVersion(context.Background(), "c-test", originalScript)
+		assert.Equal(t, originalScript, result)
+	})
+
+	t.Run("returns original script on empty runtimes", func(t *testing.T) {
+		m := &MockCSClient{}
+		m.On("DescribeClusterDetail", mock.Anything, "c-test").Return(
+			&cs.DescribeClusterDetailResponse{
+				Body: &cs.DescribeClusterDetailResponseBody{
+					CurrentVersion: tea.String("1.30.1-aliyun.1"),
+				},
+			}, nil)
+		m.On("DescribeKubernetesVersionMetadata", mock.Anything, "1.30.1-aliyun.1").Return(
+			[]*cs.DescribeKubernetesVersionMetadataResponseBody{}, nil)
+
+		p := NewProvider("cn-shanghai", m)
+		result := p.patchRuntimeVersion(context.Background(), "c-test", originalScript)
+		assert.Equal(t, originalScript, result)
+	})
+}
+
+func TestSanitizeBootstrapLabels(t *testing.T) {
+	tests := []struct {
+		name        string
+		script      string
+		wantContain string
+		wantAbsent  string
+	}{
+		{
+			name:        "valid labels kept",
+			script:      "attach.sh --labels env=prod,app=frontend --other",
+			wantContain: "--labels env=prod,app=frontend",
+		},
+		{
+			name:        "invalid key with multiple slashes dropped",
+			script:      "attach.sh --labels a/b/c=test,env=prod",
+			wantContain: "--labels env=prod",
+			wantAbsent:  "a/b/c",
+		},
+		{
+			name:        "invalid value with colon dropped",
+			script:      "attach.sh --labels key=val:ue,good=ok",
+			wantContain: "--labels good=ok",
+			wantAbsent:  "val:ue",
+		},
+		{
+			name:        "no labels flag passes through unchanged",
+			script:      "attach.sh --other-flag",
+			wantContain: "--other-flag",
+		},
+		{
+			name:        "all labels invalid removes --labels entirely",
+			script:      "attach.sh --labels a/b/c=test --other",
+			wantAbsent:  "--labels",
+			wantContain: "--other",
+		},
+		{
+			name:        "valid prefixed key kept",
+			script:      "attach.sh --labels kubernetes.io/hostname=mynode --other",
+			wantContain: "--labels kubernetes.io/hostname=mynode",
+		},
+		{
+			name:        "invalid prefix dropped",
+			script:      "attach.sh --labels INVALID/name=val,good=ok",
+			wantContain: "--labels good=ok",
+			wantAbsent:  "INVALID",
+		},
+		{
+			name:        "empty value is valid",
+			script:      "attach.sh --labels env= --other",
+			wantContain: "--labels env=",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := sanitizeBootstrapLabels(context.Background(), tt.script)
+			if tt.wantContain != "" {
+				assert.Contains(t, result, tt.wantContain)
+			}
+			if tt.wantAbsent != "" {
+				assert.NotContains(t, result, tt.wantAbsent)
+			}
+		})
+	}
+}
+
+func TestLabelValidationHelpers(t *testing.T) {
+	t.Run("isValidLabelName empty string", func(t *testing.T) {
+		assert.False(t, isValidLabelName(""))
+	})
+	t.Run("isValidLabelName too long", func(t *testing.T) {
+		longName := strings.Repeat("a", 64)
+		assert.False(t, isValidLabelName(longName))
+	})
+	t.Run("isValidLabelName single char", func(t *testing.T) {
+		assert.True(t, isValidLabelName("a"))
+	})
+	t.Run("isValidLabelName valid", func(t *testing.T) {
+		assert.True(t, isValidLabelName("my-label.name_1"))
+	})
+	t.Run("isValidDNSSubdomain valid", func(t *testing.T) {
+		assert.True(t, isValidDNSSubdomain("kubernetes.io"))
+	})
+	t.Run("isValidDNSSubdomain with uppercase invalid", func(t *testing.T) {
+		assert.False(t, isValidDNSSubdomain("Kubernetes.io"))
+	})
+	t.Run("isValidDNSSubdomain empty invalid", func(t *testing.T) {
+		assert.False(t, isValidDNSSubdomain(""))
+	})
+	t.Run("isValidLabelValue empty is valid", func(t *testing.T) {
+		assert.True(t, isValidLabelValue(""))
+	})
+	t.Run("isValidLabelValue too long invalid", func(t *testing.T) {
+		longVal := strings.Repeat("a", 64)
+		assert.False(t, isValidLabelValue(longVal))
+	})
+	t.Run("isValidLabelKey with valid prefix", func(t *testing.T) {
+		assert.True(t, isValidLabelKey("kubernetes.io/hostname"))
+	})
+	t.Run("isValidLabelKey with multiple slashes invalid", func(t *testing.T) {
+		assert.False(t, isValidLabelKey("a/b/c"))
+	})
 }

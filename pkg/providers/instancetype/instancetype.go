@@ -200,8 +200,16 @@ func (p *Provider) convertECSInstanceType(ecsInstanceType *ecs.DescribeInstanceT
 	memory := resource.NewQuantity(memoryBytes, resource.BinarySI)
 	storage := resource.NewQuantity(0, resource.DecimalSI) // Storage is not directly available
 
-	// Get architecture - not directly available in the new SDK, default to amd64
-	architecture := *ecsInstanceType.CpuArchitecture
+	// Get architecture and normalize to Kubernetes values (ECS returns "X86_64"/"ARM64")
+	architecture := "amd64"
+	if ecsInstanceType.CpuArchitecture != nil {
+		switch *ecsInstanceType.CpuArchitecture {
+		case "ARM64":
+			architecture = "arm64"
+		default:
+			architecture = "amd64"
+		}
+	}
 
 	// Get GPU information if available with enhanced memory calculation
 	var gpu *GPU
