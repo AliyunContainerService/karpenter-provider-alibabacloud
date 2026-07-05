@@ -114,9 +114,7 @@ ENVTEST_VERSION ?= latest
 envtest-setup: $(ENVTEST)
 $(ENVTEST):
 	mkdir -p $(LOCALBIN)
-	test -s $(LOCALBIN)/setup-envtest || { \
-		curl -Ss "https://raw.githubusercontent.com/kubernetes-sigs/controller-runtime/master/hack/setup-envtest.sh" | bash -s -- $(subst v,,$(ENVTEST_VERSION)); \
-	}
+	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 	@echo "envtest installed"
 
 # 获取 envtest 环境变量

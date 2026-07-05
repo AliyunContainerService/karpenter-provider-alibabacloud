@@ -414,7 +414,8 @@ var _ = Describe("GarbageCollectionController", func() {
 					},
 				}, nil)
 
-			// Mock List to return empty instances (orphaned)
+			// Mock List to return empty instances (orphaned). Also satisfies the
+			// post-delete termination check in instance.Provider.Delete (empty = gone).
 			mockECSClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstancesResponse{
 					Body: &ecs.DescribeInstancesResponseBody{
@@ -424,6 +425,15 @@ var _ = Describe("GarbageCollectionController", func() {
 						TotalCount: tea.Int32(0),
 						PageNumber: tea.Int32(1),
 						PageSize:   tea.Int32(10),
+					},
+				}, nil)
+
+			// instance.Provider.Delete calls DeleteInstances then DescribeInstances
+			// (to confirm termination). The DescribeInstances mock above covers both calls.
+			mockECSClient.On("DeleteInstances", mock.Anything, mock.Anything).Return(
+				&ecs.DeleteInstancesResponse{
+					Body: &ecs.DeleteInstancesResponseBody{
+						RequestId: stringPtr("gc-delete-request-id"),
 					},
 				}, nil)
 

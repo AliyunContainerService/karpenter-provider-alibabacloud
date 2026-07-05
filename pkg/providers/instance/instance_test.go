@@ -450,6 +450,19 @@ func TestDelete(t *testing.T) {
 					},
 				}
 				m.On("DeleteInstances", mock.Anything, mock.Anything).Return(deleteResponse, nil)
+				// Delete calls DescribeInstances after DeleteInstances to check termination status.
+				// Return "Stopping" so Delete returns nil (still terminating, caller will retry).
+				stoppingStatus := "Stopping"
+				describeResponse := &ecs.DescribeInstancesResponse{
+					Body: &ecs.DescribeInstancesResponseBody{
+						Instances: &ecs.DescribeInstancesResponseBodyInstances{
+							Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{
+								{Status: &stoppingStatus},
+							},
+						},
+					},
+				}
+				m.On("DescribeInstances", mock.Anything, mock.Anything).Return(describeResponse, nil)
 			},
 		},
 		{
