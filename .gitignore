@@ -35,5 +35,8 @@ dist/
 # Temporary files
 *.tmp
 *.bak
+.e2e/
+**/.e2e/
+.e2e-controller-image.txt
 
 .claude/

@@ -57,14 +57,20 @@ func TestGenerateUserData(t *testing.T) {
 		mockSetup   func(*MockCSClient)
 		expectError bool
 		contains    []string
+		excludes    []string
 	}{
 		{
-			name: "custom user data",
+			name: "ACK cluster type with custom user data",
 			opts: BootstrapOptions{
 				ClusterType:    ACKClusterType,
+				ClusterID:      "c-test123",
 				CustomUserData: &customData,
 			},
-			contains: []string{"#!/bin/bash", "echo custom"},
+			mockSetup: func(m *MockCSClient) {
+				script := "curl -sSL http://aliacs-k8s.oss.aliyuncs.com/public/pkg/run/attach/1.12.6-aliyunedge.1/attach.sh | bash"
+				m.On("DescribeClusterAttachScripts", mock.Anything, "c-test123", mock.Anything).Return(script, nil)
+			},
+			contains: []string{"#!/bin/bash", "attach.sh", "echo custom"},
 		},
 		{
 			name: "ACK cluster type",
@@ -199,12 +205,14 @@ func TestGetACKBootstrapScriptByCluster(t *testing.T) {
 }
 
 func TestGenerateACKBootstrapScript(t *testing.T) {
+	maxPods := int32(20)
 	tests := []struct {
 		name        string
 		opts        BootstrapOptions
 		mockSetup   func(*MockCSClient)
 		expectError bool
 		contains    []string
+		excludes    []string
 	}{
 		{
 			name: "successful generation",
@@ -228,6 +236,21 @@ func TestGenerateACKBootstrapScript(t *testing.T) {
 			},
 			contains: []string{"#!/bin/bash", "set -ex", "echo test"},
 		},
+		{
+			name: "does not mutate ACK attach script for kubelet max pods",
+			opts: BootstrapOptions{
+				ClusterID: "c-abc123",
+				KubeletConfig: &KubeletConfiguration{
+					MaxPods: &maxPods,
+				},
+			},
+			mockSetup: func(m *MockCSClient) {
+				script := "curl -sSL http://aliacs-k8s.oss.aliyuncs.com/public/pkg/run/attach/1.36.1/attach.sh | bash"
+				m.On("DescribeClusterAttachScripts", mock.Anything, "c-abc123", mock.Anything).Return(script, nil)
+			},
+			contains: []string{"curl -sSL", "--taints"},
+			excludes: []string{"--max-pods=20", "99-karpenter-kubelet-overrides.conf", "systemctl restart kubelet"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -246,6 +269,9 @@ func TestGenerateACKBootstrapScript(t *testing.T) {
 				assert.NoError(t, err)
 				for _, substr := range tt.contains {
 					assert.Contains(t, result, substr)
+				}
+				for _, substr := range tt.excludes {
+					assert.NotContains(t, result, substr)
 				}
 			}
 

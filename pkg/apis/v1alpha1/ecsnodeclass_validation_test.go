@@ -1,0 +1,243 @@
+/*
+Copyright 2024 The Alibaba Cloud Karpenter Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package v1alpha1
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/yaml"
+	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
+)
+
+func TestECSNodeClassValidateRejectsRestrictedTags(t *testing.T) {
+	for _, key := range []string{
+		TagManagedBy,
+		TagClusterID,
+		TagNodePool,
+		TagNodeClaim,
+		TagKubeletMaxPods,
+		TagCluster,
+	} {
+		nodeClass := validValidationNodeClassForUnit()
+		nodeClass.Spec.Tags = map[string]string{key: "value"}
+
+		require.ErrorContains(t, nodeClass.Validate(), "restricted key")
+	}
+}
+
+func TestNormalizedLabelsIncludesAlibabaCloudDiskCSITopologyZone(t *testing.T) {
+	require.Equal(t, corev1.LabelTopologyZone, karpv1.NormalizedLabels["topology.diskplugin.csi.alibabacloud.com/zone"])
+}
+
+func TestECSNodeClassValidateRejectsIDWithAdditionalSelectorFilters(t *testing.T) {
+	t.Run("vswitch", func(t *testing.T) {
+		nodeClass := validValidationNodeClassForUnit()
+		nodeClass.Spec.VSwitchSelectorTerms = []VSwitchSelectorTerm{{
+			ID:     ptrForUnit("vsw-12345"),
+			ZoneID: ptrForUnit("cn-test-a"),
+		}}
+
+		require.ErrorContains(t, nodeClass.Validate(), "cannot be combined")
+	})
+
+	t.Run("security group", func(t *testing.T) {
+		nodeClass := validValidationNodeClassForUnit()
+		nodeClass.Spec.SecurityGroupSelectorTerms = []SecurityGroupSelectorTerm{{
+			ID:   ptrForUnit("sg-12345"),
+			Tags: map[string]string{"env": "test"},
+		}}
+
+		require.ErrorContains(t, nodeClass.Validate(), "cannot be combined")
+	})
+
+	t.Run("image", func(t *testing.T) {
+		nodeClass := validValidationNodeClassForUnit()
+		nodeClass.Spec.ImageSelectorTerms = []ImageSelectorTerm{{
+			ID:   ptrForUnit("m-12345"),
+			Tags: map[string]string{"env": "test"},
+		}}
+
+		require.ErrorContains(t, nodeClass.Validate(), "cannot be combined")
+	})
+
+	t.Run("capacity reservation", func(t *testing.T) {
+		nodeClass := validValidationNodeClassForUnit()
+		nodeClass.Spec.CapacityReservationSelectorTerms = []CapacityReservationSelectorTerm{{
+			ID:   ptrForUnit("cr-12345"),
+			Tags: map[string]string{"env": "test"},
+		}}
+
+		require.ErrorContains(t, nodeClass.Validate(), "cannot be combined")
+	})
+}
+
+func TestECSNodeClassValidateAllowsImageFamilySelector(t *testing.T) {
+	nodeClass := validValidationNodeClassForUnit()
+	nodeClass.Spec.ImageSelectorTerms = []ImageSelectorTerm{{
+		ImageFamily: ptrForUnit("acs:alibaba_cloud_linux_3_2104_lts_x64"),
+	}}
+
+	require.NoError(t, nodeClass.Validate())
+}
+
+func TestECSNodeClassValidateCapacityReservationIDPrefix(t *testing.T) {
+	nodeClass := validValidationNodeClassForUnit()
+	nodeClass.Spec.CapacityReservationSelectorTerms = []CapacityReservationSelectorTerm{{ID: ptrForUnit("crp-12345")}}
+	require.NoError(t, nodeClass.Validate())
+
+	nodeClass = validValidationNodeClassForUnit()
+	nodeClass.Spec.CapacityReservationSelectorTerms = []CapacityReservationSelectorTerm{{ID: ptrForUnit("cr-12345")}}
+	require.ErrorContains(t, nodeClass.Validate(), "capacityReservationSelectorTerms[0].id is not a valid capacity reservation ID")
+}
+
+func TestECSNodeClassValidateKubeletImageGCThresholds(t *testing.T) {
+	high := int32(10)
+	low := int32(60)
+	nodeClass := validValidationNodeClassForUnit()
+	nodeClass.Spec.Kubelet = &KubeletConfiguration{
+		ImageGCHighThresholdPercent: &high,
+		ImageGCLowThresholdPercent:  &low,
+	}
+
+	require.ErrorContains(t, nodeClass.Validate(), "imageGCHighThresholdPercent")
+
+	negative := int32(-1)
+	nodeClass = validValidationNodeClassForUnit()
+	nodeClass.Spec.Kubelet = &KubeletConfiguration{ImageGCLowThresholdPercent: &negative}
+
+	require.ErrorContains(t, nodeClass.Validate(), "imageGCLowThresholdPercent")
+}
+
+func TestECSNodeClassValidateLaunchTemplate(t *testing.T) {
+	t.Run("allows launch template without selectors", func(t *testing.T) {
+		version := int64(1)
+		nodeClass := &ECSNodeClass{
+			Spec: ECSNodeClassSpec{
+				LaunchTemplateID:      ptrForUnit("lt-12345"),
+				LaunchTemplateVersion: &version,
+			},
+		}
+
+		require.NoError(t, nodeClass.Validate())
+	})
+
+	t.Run("rejects selectors and explicit fields that conflict with launch template", func(t *testing.T) {
+		nodeClass := validValidationNodeClassForUnit()
+		nodeClass.Spec.LaunchTemplateID = ptrForUnit("lt-12345")
+
+		require.ErrorContains(t, nodeClass.Validate(), "launchTemplateID cannot be combined")
+	})
+
+	t.Run("rejects version without launch template id", func(t *testing.T) {
+		version := int64(1)
+		nodeClass := validValidationNodeClassForUnit()
+		nodeClass.Spec.LaunchTemplateVersion = &version
+
+		require.ErrorContains(t, nodeClass.Validate(), "launchTemplateVersion requires launchTemplateID")
+	})
+
+	t.Run("rejects non-positive version", func(t *testing.T) {
+		version := int64(0)
+		nodeClass := &ECSNodeClass{
+			Spec: ECSNodeClassSpec{
+				LaunchTemplateID:      ptrForUnit("lt-12345"),
+				LaunchTemplateVersion: &version,
+			},
+		}
+
+		require.ErrorContains(t, nodeClass.Validate(), "launchTemplateVersion must be greater than 0")
+	})
+}
+
+func TestECSNodeClassCRDConditionallyRequiresSelectorTerms(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "crds", "karpenter.alibabacloud.com_ecsnodeclasses.yaml"))
+	require.NoError(t, err)
+
+	var crd map[string]interface{}
+	require.NoError(t, yaml.Unmarshal(contents, &crd))
+
+	specSchema := crd["spec"].(map[string]interface{})["versions"].([]interface{})[0].(map[string]interface{})["schema"].(map[string]interface{})["openAPIV3Schema"].(map[string]interface{})["properties"].(map[string]interface{})["spec"].(map[string]interface{})
+	validations, ok := specSchema["x-kubernetes-validations"].([]interface{})
+	require.True(t, ok, "ECSNodeClass spec schema must define CEL validation rules")
+
+	var rules []string
+	for _, validation := range validations {
+		rules = append(rules, validation.(map[string]interface{})["rule"].(string))
+	}
+	require.Contains(t, rules, "has(self.launchTemplateID) || has(self.vSwitchSelectorTerms)")
+	require.Contains(t, rules, "has(self.launchTemplateID) || has(self.securityGroupSelectorTerms)")
+	require.Contains(t, rules, "has(self.launchTemplateID) || has(self.imageSelectorTerms)")
+}
+
+func TestECSNodeClassValidateRejectsLaunchTemplateConflictByField(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*ECSNodeClass)
+	}{
+		{name: "vswitch selectors", mutate: func(nc *ECSNodeClass) {
+			nc.Spec.VSwitchSelectorTerms = []VSwitchSelectorTerm{{ID: ptrForUnit("vsw-12345")}}
+		}},
+		{name: "security group selectors", mutate: func(nc *ECSNodeClass) {
+			nc.Spec.SecurityGroupSelectorTerms = []SecurityGroupSelectorTerm{{ID: ptrForUnit("sg-12345")}}
+		}},
+		{name: "image selectors", mutate: func(nc *ECSNodeClass) { nc.Spec.ImageSelectorTerms = []ImageSelectorTerm{{ID: ptrForUnit("m-12345")}} }},
+		{name: "system disk", mutate: func(nc *ECSNodeClass) { nc.Spec.SystemDisk = &SystemDiskSpec{Category: "cloud_essd"} }},
+		{name: "data disks", mutate: func(nc *ECSNodeClass) { nc.Spec.DataDisks = []DataDiskSpec{{Category: "cloud_essd", Size: 20}} }},
+		{name: "user data", mutate: func(nc *ECSNodeClass) { nc.Spec.UserData = ptrForUnit("#!/bin/bash") }},
+		{name: "spot strategy", mutate: func(nc *ECSNodeClass) { nc.Spec.SpotStrategy = ptrForUnit("SpotAsPriceGo") }},
+		{name: "spot price", mutate: func(nc *ECSNodeClass) { nc.Spec.SpotPriceLimit = ptrForUnit(0.5) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nodeClass := &ECSNodeClass{
+				Spec: ECSNodeClassSpec{
+					LaunchTemplateID: ptrForUnit("lt-12345"),
+				},
+			}
+			tt.mutate(nodeClass)
+
+			require.ErrorContains(t, nodeClass.Validate(), "launchTemplateID cannot be combined")
+		})
+	}
+}
+
+func validValidationNodeClassForUnit() *ECSNodeClass {
+	return &ECSNodeClass{
+		Spec: ECSNodeClassSpec{
+			VSwitchSelectorTerms: []VSwitchSelectorTerm{{
+				ID: ptrForUnit("vsw-12345"),
+			}},
+			SecurityGroupSelectorTerms: []SecurityGroupSelectorTerm{{
+				ID: ptrForUnit("sg-12345"),
+			}},
+			ImageSelectorTerms: []ImageSelectorTerm{{
+				ID: ptrForUnit("m-12345"),
+			}},
+			SystemDisk: &SystemDiskSpec{
+				Category: "cloud_essd",
+			},
+		},
+	}
+}
+
+func ptrForUnit[T any](v T) *T {
+	return &v
+}

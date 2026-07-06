@@ -40,7 +40,9 @@ func TestScale(t *testing.T) {
 		SetDefaultEventuallyTimeout(time.Hour)
 	})
 	AfterSuite(func() {
-		env.Stop()
+		if env != nil {
+			env.Stop()
+		}
 	})
 	RunSpecs(t, "Scale")
 }

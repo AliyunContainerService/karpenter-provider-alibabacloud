@@ -1,0 +1,226 @@
+name: E2E
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        type: string
+      region:
+        type: string
+        default: cn-hangzhou
+      suite:
+        type: choice
+        required: true
+        options:
+          - Integration
+          - NodeClaim
+          - Consolidation
+          - Interruption
+          - Drift
+          - Scale
+          - LocalZone
+          - Scheduling
+          - Storage
+          - AMI
+      k8s_version:
+        type: string
+      cluster_name:
+        type: string
+      cleanup:
+        type: boolean
+        required: true
+        default: true
+      enable_metrics:
+        type: boolean
+        default: false
+      source:
+        type: choice
+        default: alibabacloud
+        options:
+          - alibabacloud
+          - upstream
+          - all
+      discover_gpu:
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      git_ref:
+        type: string
+      source:
+        type: string
+        default: alibabacloud
+      region:
+        type: string
+        default: cn-hangzhou
+      suite:
+        type: string
+        required: true
+      k8s_version:
+        type: string
+      enable_metrics:
+        type: boolean
+        default: false
+      cleanup:
+        type: boolean
+        required: true
+      workflow_trigger:
+        type: string
+      cluster_name:
+        type: string
+      discover_gpu:
+        type: boolean
+        default: false
+    secrets:
+      ALIBABA_CLOUD_E2E_CONFIG:
+        required: true
+      ALIBABA_CLOUD_ACCESS_KEY_ID:
+        required: true
+      ALIBABA_CLOUD_ACCESS_KEY_SECRET:
+        required: true
+jobs:
+  run-suite:
+    name: suite-${{ inputs.suite }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 390
+    concurrency:
+      group: e2e-${{ inputs.workflow_trigger || 'manual' }}-${{ inputs.suite }}-${{ inputs.region }}-${{ inputs.cluster_name || github.run_id }}
+      cancel-in-progress: false
+    env:
+      DEPLOY_CONFIG: ${{ runner.temp }}/deploy-config.yaml
+      TEST_REGION: ${{ inputs.region }}
+      ENABLE_METRICS: ${{ inputs.enable_metrics }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.git_ref }}
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/e2e/install-helm
+      - name: E2E parity preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          make e2e-parity
+      - id: generate-cluster-name
+        name: Generate cluster name
+        shell: bash
+        env:
+          SUITE: ${{ inputs.suite }}
+          CLUSTER_NAME: ${{ inputs.cluster_name }}
+          WORKFLOW_TRIGGER: ${{ inputs.workflow_trigger }}
+        run: |
+          set -euo pipefail
+          if [[ "${CLUSTER_NAME}" == "" ]]; then
+            if [[ "${WORKFLOW_TRIGGER}" == "soak" ]]; then
+              CLUSTER_NAME="soak-periodic-${RANDOM}${RANDOM}"
+            else
+              CLUSTER_NAME="${SUITE}-${RANDOM}${RANDOM}"
+            fi
+          fi
+          CLUSTER_NAME="$(echo "${CLUSTER_NAME}" | tr '[:upper:]' '[:lower:]' | tr '/_' '--')"
+          if [[ "${CLUSTER_NAME}" != karpenter-alibabacloud-e2e-* ]]; then
+            CLUSTER_NAME="karpenter-alibabacloud-e2e-${CLUSTER_NAME}"
+          fi
+          echo "CLUSTER_NAME=${CLUSTER_NAME}" >> "${GITHUB_OUTPUT}"
+      - name: Render deploy config
+        shell: bash
+        env:
+          ALIBABA_CLOUD_E2E_CONFIG: ${{ secrets.ALIBABA_CLOUD_E2E_CONFIG }}
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "${ALIBABA_CLOUD_E2E_CONFIG}" > "${DEPLOY_CONFIG}.source"
+          GOFLAGS="${GOFLAGS:--mod=mod}" go run ./test/hack/e2e/ackctl render-config \
+            --config "${DEPLOY_CONFIG}.source" \
+            --output "${DEPLOY_CONFIG}" \
+            --region "${TEST_REGION}" \
+            --cluster-name "${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}" \
+            --kubeconfig ".e2e/${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}/kubeconfig" \
+            --k8s-version "${{ inputs.k8s_version }}" \
+            --ip-stack ""
+      - id: setup-cluster
+        name: Setup ACK cluster
+        uses: ./.github/actions/e2e/setup-cluster
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        with:
+          deploy_config: ${{ env.DEPLOY_CONFIG }}
+          cluster_name: ${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}
+          git_ref: ${{ inputs.git_ref }}
+          suite: ${{ inputs.suite }}
+          source: ${{ inputs.source }}
+          discover_gpu: ${{ inputs.discover_gpu }}
+      - name: Load E2E environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "${{ steps.setup-cluster.outputs.env_file }}"
+          {
+            echo "KUBECONFIG=${KUBECONFIG}"
+            echo "TEST_REGION=${TEST_REGION}"
+            echo "TEST_CLUSTER_ID=${TEST_CLUSTER_ID}"
+            echo "TEST_CLUSTER_NAME=${TEST_CLUSTER_NAME}"
+            echo "TEST_CLUSTER_ENDPOINT=${TEST_CLUSTER_ENDPOINT}"
+            echo "DEFAULT_NODECLASS=${DEFAULT_NODECLASS}"
+            echo "DEFAULT_NODEPOOL=${DEFAULT_NODEPOOL}"
+            echo "TEST_VSWITCH_IDS=${TEST_VSWITCH_IDS:-}"
+            echo "TEST_ZONES=${TEST_ZONES:-}"
+            echo "TEST_GPU_INSTANCE_TYPES=${TEST_GPU_INSTANCE_TYPES:-}"
+            echo "TEST_GPU_ZONES=${TEST_GPU_ZONES:-}"
+            echo "TEST_IP_FAMILY=${TEST_IP_FAMILY:-}"
+            echo "TEST_SECURITY_GROUP_IDS=${TEST_SECURITY_GROUP_IDS:-}"
+            echo "TEST_RAM_ROLE=${TEST_RAM_ROLE:-}"
+            echo "TEST_IMAGE_ID=${TEST_IMAGE_ID:-}"
+            echo "TEST_IMAGE_FAMILY=${TEST_IMAGE_FAMILY:-}"
+          } >> "${GITHUB_ENV}"
+      - name: Run ${{ inputs.suite }} tests
+        shell: bash
+        env:
+          SUITE: ${{ inputs.suite }}
+          SOURCE: ${{ inputs.source }}
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        run: |
+          set -euo pipefail
+          kubectl delete nodepool --all || true
+          kubectl delete ecsnodeclass --all || true
+          kubectl delete deployment --all || true
+          if [[ "${SOURCE}" == "alibabacloud" ]]; then
+            TEST_SUITE="${SUITE}" GIT_REF="$(git rev-parse HEAD)" make e2etests
+          elif [[ "${SOURCE}" == "upstream" ]]; then
+            FOCUS="${SUITE}" GIT_REF="$(git rev-parse HEAD)" make upstream-e2etests
+          elif [[ "${SOURCE}" == "all" ]]; then
+            TEST_SUITE="${SUITE}" GIT_REF="$(git rev-parse HEAD)" make e2etests
+            FOCUS="${SUITE}" GIT_REF="$(git rev-parse HEAD)" make upstream-e2etests
+          else
+            echo "Unsupported source ${SOURCE}" >&2
+            exit 1
+          fi
+      - name: Dump logs on failure
+        if: failure() || cancelled()
+        uses: ./.github/actions/e2e/dump-logs
+        with:
+          manifest: ${{ steps.setup-cluster.outputs.manifest }}
+          output_dir: .e2e/${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}/dump
+      - name: Upload log artifact
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: e2e-dump-${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}
+          path: .e2e/${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}/dump
+      - name: Cleanup ACK cluster
+        if: always() && inputs.cleanup
+        uses: ./.github/actions/e2e/cleanup
+        env:
+          ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+          ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}
+        with:
+          deploy_config: ${{ env.DEPLOY_CONFIG }}
+          manifest: ${{ steps.setup-cluster.outputs.manifest }}

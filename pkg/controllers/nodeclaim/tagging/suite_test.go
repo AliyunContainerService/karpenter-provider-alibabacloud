@@ -230,9 +230,9 @@ var _ = Describe("TaggingController", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			// Verify required tags
-			Expect(capturedTags).To(HaveKeyWithValue("karpenter.sh/nodeclaim", "test-nodeclaim"))
-			Expect(capturedTags).To(HaveKeyWithValue("karpenter.sh/nodepool", "default"))
-			Expect(capturedTags).To(HaveKeyWithValue("karpenter.sh/managed-by", "karpenter"))
+			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagNodeClaim, "test-nodeclaim"))
+			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagNodePool, "default"))
+			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagManagedBy, "true"))
 		})
 
 		It("should include custom tags from NodeClass", func() {
@@ -262,7 +262,31 @@ var _ = Describe("TaggingController", func() {
 			Expect(capturedTags).To(HaveKeyWithValue("Team", "platform"))
 		})
 
-		It("should include labels from NodeClaim", func() {
+		It("should not copy derived NodeClaim labels to ECS tags", func() {
+			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
+			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
+			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
+			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
+
+			var capturedTags map[string]string
+			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				req := args.Get(1).(*ecs.TagResourcesRequest)
+				capturedTags = make(map[string]string)
+				for _, tag := range req.Tag {
+					capturedTags[*tag.Key] = *tag.Value
+				}
+			}).Return(&ecs.TagResourcesResponse{}, nil)
+
+			_, err := taggingController.Reconcile(ctx, reconcile.Request{
+				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(capturedTags).ToNot(HaveKey("workload-type"))
+			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagNodePool, "default"))
+		})
+
+		It("should not include arbitrary labels from NodeClaim", func() {
 			// Create resources
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
@@ -284,9 +308,9 @@ var _ = Describe("TaggingController", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 
-			// Verify labels from NodeClaim
-			Expect(capturedTags).To(HaveKeyWithValue("workload-type", "batch"))
-			Expect(capturedTags).To(HaveKeyWithValue(coreapis.NodePoolLabelKey, "default"))
+			// Only explicit Karpenter ownership tags should be derived from the NodeClaim.
+			Expect(capturedTags).ToNot(HaveKey("workload-type"))
+			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagNodePool, "default"))
 		})
 	})
 
@@ -336,7 +360,7 @@ var _ = Describe("TaggingController", func() {
 			Expect(capturedTags).To(HaveKeyWithValue("Project", "karpenter"))
 		})
 
-		It("should update tags when NodeClaim labels change", func() {
+		It("should keep tags stable when arbitrary NodeClaim labels change", func() {
 			// Create initial resources
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
@@ -372,9 +396,10 @@ var _ = Describe("TaggingController", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 
-			// Verify updated labels
-			Expect(capturedTags).To(HaveKeyWithValue("new-label", "new-value"))
-			Expect(capturedTags).To(HaveKeyWithValue("workload-type", "realtime"))
+			// Arbitrary NodeClaim labels are not mirrored into ECS tags.
+			Expect(capturedTags).ToNot(HaveKey("new-label"))
+			Expect(capturedTags).ToNot(HaveKey("workload-type"))
+			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagNodePool, "default"))
 		})
 	})
 
@@ -525,8 +550,8 @@ var _ = Describe("TaggingController", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			// Should still have Karpenter tags
-			Expect(capturedTags).To(HaveKey("karpenter.sh/nodeclaim"))
-			Expect(capturedTags).To(HaveKey("karpenter.sh/managed-by"))
+			Expect(capturedTags).To(HaveKey(v1alpha1.TagNodeClaim))
+			Expect(capturedTags).To(HaveKey(v1alpha1.TagManagedBy))
 		})
 
 		It("should handle NodeClaim without labels", func() {
@@ -551,8 +576,8 @@ var _ = Describe("TaggingController", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			// Should still have Karpenter tags
-			Expect(capturedTags).To(HaveKey("karpenter.sh/nodeclaim"))
-			Expect(capturedTags).To(HaveKey("karpenter.sh/managed-by"))
+			Expect(capturedTags).To(HaveKey(v1alpha1.TagNodeClaim))
+			Expect(capturedTags).To(HaveKey(v1alpha1.TagManagedBy))
 		})
 
 		It("should handle empty NodeClass tags", func() {
@@ -578,7 +603,7 @@ var _ = Describe("TaggingController", func() {
 				"Team": "platform",
 			}
 			nodeClaim.Labels = map[string]string{
-				"Team":                    "devops", // This should override
+				"Team":                    "devops",
 				coreapis.NodePoolLabelKey: "default",
 			}
 
@@ -601,8 +626,8 @@ var _ = Describe("TaggingController", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 
-			// NodeClaim labels should override NodeClass tags
-			Expect(capturedTags).To(HaveKeyWithValue("Team", "devops"))
+			// NodeClass tags are the user-owned ECS tags; NodeClaim labels are not mirrored.
+			Expect(capturedTags).To(HaveKeyWithValue("Team", "platform"))
 		})
 	})
 

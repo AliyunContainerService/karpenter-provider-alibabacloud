@@ -120,6 +120,7 @@ var _ = BeforeSuite(func() {
 		nil, // instanceProfileProvider
 		pricingProvider,
 		nil, // launchTemplateProvider
+		nil, // capacityReservationProvider
 		nil, // bootstrapProvider
 		nil,
 	)
@@ -168,6 +169,7 @@ var _ = Describe("GarbageCollectionController", func() {
 			vswitchProvider,
 			nil,
 			pricingProvider,
+			nil,
 			nil,
 			nil,
 			nil,

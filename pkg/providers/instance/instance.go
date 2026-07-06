@@ -28,6 +28,7 @@ import (
 
 	"sigs.k8s.io/karpenter/pkg/cloudprovider"
 
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/batcher"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/errors"
@@ -55,17 +56,22 @@ type CacheEntry struct {
 
 // CreateOptions represents options for creating an instance
 type CreateOptions struct {
-	InstanceType        string
-	ImageID             string
-	VSwitchID           string
-	SecurityGroupIDs    []string
-	UserData            string
-	Tags                map[string]string
-	SystemDisk          SystemDisk
-	DataDisks           []DataDisk
-	SpotStrategy        string
-	SpotPriceLimit      float64
-	InstanceStorePolicy *string // Add instance store policy field
+	InstanceType                  string
+	ImageID                       string
+	VSwitchID                     string
+	SecurityGroupIDs              []string
+	UserData                      string
+	Tags                          map[string]string
+	RAMRoleName                   string
+	SystemDisk                    SystemDisk
+	DataDisks                     []DataDisk
+	SpotStrategy                  string
+	SpotPriceLimit                float64
+	LaunchTemplateID              string
+	LaunchTemplateVersion         *int64
+	InstanceStorePolicy           *string // Add instance store policy field
+	CapacityReservationID         string
+	CapacityReservationPreference string
 }
 
 // SystemDisk represents system disk configuration
@@ -103,6 +109,20 @@ type Instance struct {
 	CapacityType     string
 	SecurityGroupIDs []string
 	VSwitchID        string
+}
+
+func capacityTypeFor(chargeType, spotStrategy string) string {
+	if spotStrategy != "" && spotStrategy != "NoSpot" {
+		return v1alpha1.CapacityTypeSpot
+	}
+	switch chargeType {
+	case "PostPaid":
+		return v1alpha1.CapacityTypeOnDemand
+	case "PrePaid":
+		return "pre-paid"
+	default:
+		return ""
+	}
 }
 
 // NewProvider creates a new instance provider
@@ -204,6 +224,25 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 
 	if opts.SpotPriceLimit > 0 {
 		request.SpotPriceLimit = tea.Float32(float32(opts.SpotPriceLimit))
+	}
+
+	if opts.RAMRoleName != "" {
+		request.RamRoleName = tea.String(opts.RAMRoleName)
+	}
+
+	if opts.LaunchTemplateID != "" {
+		request.LaunchTemplateId = tea.String(opts.LaunchTemplateID)
+	}
+	if opts.LaunchTemplateVersion != nil {
+		request.LaunchTemplateVersion = tea.Int64(*opts.LaunchTemplateVersion)
+	}
+	if opts.CapacityReservationPreference != "" || opts.CapacityReservationID != "" {
+		request.PrivatePoolOptions = &ecs.RunInstancesRequestPrivatePoolOptions{
+			MatchCriteria: tea.String(privatePoolMatchCriteria(opts.CapacityReservationPreference)),
+		}
+		if opts.CapacityReservationID != "" {
+			request.PrivatePoolOptions.Id = tea.String(opts.CapacityReservationID)
+		}
 	}
 
 	// Set system disk
@@ -345,6 +384,19 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 	return instanceID, nil
 }
 
+func privatePoolMatchCriteria(preference string) string {
+	switch strings.ToLower(strings.TrimSpace(preference)) {
+	case "open":
+		return "Open"
+	case "target":
+		return "Target"
+	case "none":
+		return "None"
+	default:
+		return "None"
+	}
+}
+
 // Get retrieves an ECS instance by ID
 func (p *Provider) Get(ctx context.Context, instanceID string) (*Instance, error) {
 	logger := log.FromContext(ctx)
@@ -422,14 +474,7 @@ func (p *Provider) Get(ctx context.Context, instanceID string) (*Instance, error
 		architecture = "arm64"
 	}
 
-	var capacityType string
-	if *inst.InstanceChargeType == "PostPaid" {
-		capacityType = "on-demand"
-	} else if *inst.InstanceChargeType == "PrePaid" {
-		capacityType = "pre-paid"
-	} else if inst.SpotStrategy != nil && *inst.SpotStrategy != "" && *inst.SpotStrategy != "NoSpot" {
-		capacityType = "spot"
-	}
+	capacityType := capacityTypeFor(derefString(inst.InstanceChargeType), derefString(inst.SpotStrategy))
 
 	securityGroupIds := []string{}
 	if inst.SecurityGroupIds != nil && inst.SecurityGroupIds.SecurityGroupId != nil {
@@ -809,17 +854,7 @@ func (p *Provider) List(ctx context.Context, tags map[string]string) ([]*Instanc
 				architecture = "arm64"
 			}
 
-			// Determine capacity type
-			var capacityType string
-			chargeType := derefString(inst.InstanceChargeType)
-			spotStrategy := derefString(inst.SpotStrategy)
-			if chargeType == "PostPaid" {
-				capacityType = "on-demand"
-			} else if chargeType == "PrePaid" {
-				capacityType = "pre-paid"
-			} else if spotStrategy != "" && spotStrategy != "NoSpot" {
-				capacityType = "spot"
-			}
+			capacityType := capacityTypeFor(derefString(inst.InstanceChargeType), derefString(inst.SpotStrategy))
 
 			securityGroupIds := []string{}
 			if inst.SecurityGroupIds != nil && inst.SecurityGroupIds.SecurityGroupId != nil {

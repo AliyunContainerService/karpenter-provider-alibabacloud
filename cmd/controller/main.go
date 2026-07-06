@@ -58,6 +58,7 @@ func main() {
 		alibabaOperator.InstanceProfileProvider,
 		alibabaOperator.PricingProvider,
 		alibabaOperator.LaunchTemplateProvider,
+		alibabaOperator.CapacityReservationProvider,
 		alibabaOperator.BootstrapProvider,
 		alibabaOperator.ClusterNetworkConfig,
 	)

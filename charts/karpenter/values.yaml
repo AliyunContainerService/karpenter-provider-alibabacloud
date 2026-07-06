@@ -64,6 +64,7 @@ controller:
   # @description --
   # IMPORTANT: You must configure either AccessKey credentials OR RRSA, not both.
   # RRSA is recommended for production as it's more secure.
+  credentialsSecretName: ""
   env:
     # ==========================================
     # Option 1: AccessKey Authentication (Legacy)
@@ -184,6 +185,11 @@ settings:
   # REQUIRED. Must match your ACK cluster region
   # Example: cn-hangzhou, cn-beijing, cn-shanghai, ap-southeast-1
   region: ""
+
+  # -- Karpenter core feature gates.
+  # @description --
+  # Example: NodeOverlay=true
+  featureGates: ""
 
 # -- Image pull secrets for private registries
 # @description --

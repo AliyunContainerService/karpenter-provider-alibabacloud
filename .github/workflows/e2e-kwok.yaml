@@ -1,0 +1,63 @@
+name: E2EKWOK
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        type: choice
+        default: regression
+        options:
+          - regression
+          - performance
+      focus:
+        type: string
+      skip:
+        type: string
+      replicas:
+        type: string
+        default: "1000"
+  pull_request:
+    paths:
+      - "test/hack/kwok/**"
+      - "test/pkg/environment/kwok/**"
+      - "Makefile"
+      - ".github/workflows/e2e-kwok.yaml"
+permissions:
+  contents: read
+concurrency:
+  group: e2e-kwok-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  kwok:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3
+        with:
+          cluster_name: karpenter-kwok-e2e
+      - name: Install ko
+        shell: bash
+        run: |
+          set -euo pipefail
+          GOFLAGS=-mod=mod go install github.com/google/ko@latest
+      - name: Run KWOK e2e
+        shell: bash
+        env:
+          UPSTREAM_TEST_SUITE: ${{ inputs.suite || 'regression' }}
+          FOCUS: ${{ inputs.focus || '' }}
+          SKIP: ${{ inputs.skip || '' }}
+          KWOK_SCALE_REPLICAS: ${{ inputs.replicas || '1000' }}
+          KWOK_REPORT_DIR: .e2e/kwok
+        run: |
+          set -euo pipefail
+          make kwok-core-e2e
+      - name: Upload KWOK report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: e2e-kwok-report
+          path: .e2e/kwok

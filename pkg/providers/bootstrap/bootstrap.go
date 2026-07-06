@@ -173,17 +173,20 @@ func (p *Provider) ClearCache() {
 
 // GenerateUserData generates user data script for bootstrapping nodes
 func (p *Provider) GenerateUserData(opts BootstrapOptions) (string, error) {
-	// If custom user data is provided, use it
-	if opts.CustomUserData != nil && *opts.CustomUserData != "" {
-		return *opts.CustomUserData, nil
-	}
-
 	// Generate bootstrap script based on cluster type
 	switch opts.ClusterType {
 	case ACKClusterType:
-		return p.generateACKBootstrapScript(opts)
+		script, err := p.generateACKBootstrapScript(opts)
+		if err != nil {
+			return "", err
+		}
+		return appendCustomUserData(script, opts.CustomUserData), nil
 	case SelfManagedClusterType:
-		return p.generateSelfManagedBootstrapScript(opts)
+		script, err := p.generateSelfManagedBootstrapScript(opts)
+		if err != nil {
+			return "", err
+		}
+		return appendCustomUserData(script, opts.CustomUserData), nil
 	case KubeadmClusterType:
 		// For kubeadm clusters, use the dedicated kubeadm bootstrapper
 		kubeadmBootstrapper := NewKubeadmBootstrapper()
@@ -191,6 +194,13 @@ func (p *Provider) GenerateUserData(opts BootstrapOptions) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported cluster type: %s", opts.ClusterType)
 	}
+}
+
+func appendCustomUserData(script string, customUserData *string) string {
+	if customUserData == nil || strings.TrimSpace(*customUserData) == "" {
+		return script
+	}
+	return strings.TrimRight(script, "\n") + "\n\n# Karpenter custom user data\n" + strings.TrimLeft(*customUserData, "\n")
 }
 
 func (p *Provider) getACKBootstrapScriptByCluster(opts BootstrapOptions) (string, error) {

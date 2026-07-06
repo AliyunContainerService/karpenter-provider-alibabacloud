@@ -41,7 +41,30 @@ spec:
           - --cluster-endpoint={{ .Values.settings.clusterEndpoint }}
           - --region={{ .Values.settings.region }}
         env:
-          {{- toYaml .Values.controller.env | nindent 10 }}
+          {{- with .Values.settings.featureGates }}
+          - name: FEATURE_GATES
+            value: {{ . | quote }}
+          {{- end }}
+          {{- range .Values.controller.env }}
+          {{- if and $.Values.controller.credentialsSecretName (eq .name "ALIBABA_CLOUD_ACCESS_KEY_ID") }}
+          - name: {{ .name }}
+            valueFrom:
+              secretKeyRef:
+                name: {{ $.Values.controller.credentialsSecretName }}
+                key: access_key_id
+          {{- else if and $.Values.controller.credentialsSecretName (eq .name "ALIBABA_CLOUD_ACCESS_KEY_SECRET") }}
+          - name: {{ .name }}
+            valueFrom:
+              secretKeyRef:
+                name: {{ $.Values.controller.credentialsSecretName }}
+                key: access_key_secret
+          {{- else if hasKey . "value" }}
+          - name: {{ .name }}
+            value: {{ .value | quote }}
+          {{- else }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+          {{- end }}
         {{- if .Values.controller.env }}
         {{- $hasRRSA := false }}
         {{- range .Values.controller.env }}

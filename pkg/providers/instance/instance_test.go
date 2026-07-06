@@ -28,6 +28,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 )
 
 // MockECSClient is a mock implementation of ECSClient
@@ -120,6 +122,42 @@ func int32Ptr(i int32) *int32 {
 	return &i
 }
 
+func int64Ptr(i int64) *int64 {
+	return &i
+}
+
+func describeInstancesResponse(instances ...*ecs.DescribeInstancesResponseBodyInstancesInstance) *ecs.DescribeInstancesResponse {
+	return &ecs.DescribeInstancesResponse{
+		Body: &ecs.DescribeInstancesResponseBody{
+			TotalCount: int32Ptr(int32(len(instances))),
+			PageNumber: int32Ptr(1),
+			PageSize:   int32Ptr(100),
+			Instances: &ecs.DescribeInstancesResponseBodyInstances{
+				Instance: instances,
+			},
+		},
+	}
+}
+
+func postPaidSpotInstance() *ecs.DescribeInstancesResponseBodyInstancesInstance {
+	return &ecs.DescribeInstancesResponseBodyInstancesInstance{
+		InstanceId:         stringPtr("i-spot"),
+		RegionId:           stringPtr("cn-hangzhou"),
+		ZoneId:             stringPtr("cn-hangzhou-h"),
+		InstanceType:       stringPtr("ecs.g6.large"),
+		ImageId:            stringPtr("img-123"),
+		Cpu:                int32Ptr(2),
+		Memory:             int32Ptr(8192),
+		Status:             stringPtr("Running"),
+		InstanceChargeType: stringPtr("PostPaid"),
+		SpotStrategy:       stringPtr("SpotAsPriceGo"),
+		CreationTime:       stringPtr("2024-01-01T00:00:00Z"),
+		Tags: &ecs.DescribeInstancesResponseBodyInstancesInstanceTags{
+			Tag: []*ecs.DescribeInstancesResponseBodyInstancesInstanceTagsTag{},
+		},
+	}
+}
+
 func TestCreate(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -151,7 +189,122 @@ func TestCreate(t *testing.T) {
 						},
 					},
 				}
-				m.On("RunInstances", mock.Anything, mock.Anything).Return(response, nil)
+				m.On("RunInstances", mock.Anything, mock.MatchedBy(func(req *ecs.RunInstancesRequest) bool {
+					return req.RamRoleName == nil
+				})).Return(response, nil)
+			},
+		},
+		{
+			name: "sets RAM role name",
+			opts: CreateOptions{
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: []string{"sg-123"},
+				RAMRoleName:      "KubernetesWorkerRole-test",
+				SystemDisk: SystemDisk{
+					Category: "cloud_essd",
+					Size:     40,
+				},
+			},
+			mockSetup: func(m *MockECSClient) {
+				instanceID := "i-123456"
+				response := &ecs.RunInstancesResponse{
+					Body: &ecs.RunInstancesResponseBody{
+						InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
+							InstanceIdSet: []*string{&instanceID},
+						},
+					},
+				}
+				m.On("RunInstances", mock.Anything, mock.MatchedBy(func(req *ecs.RunInstancesRequest) bool {
+					return req.RamRoleName != nil && *req.RamRoleName == "KubernetesWorkerRole-test"
+				})).Return(response, nil)
+			},
+		},
+		{
+			name: "sets launch template ID",
+			opts: CreateOptions{
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: []string{"sg-123"},
+				LaunchTemplateID: "lt-123456",
+				SystemDisk: SystemDisk{
+					Category: "cloud_essd",
+					Size:     40,
+				},
+			},
+			mockSetup: func(m *MockECSClient) {
+				instanceID := "i-123456"
+				response := &ecs.RunInstancesResponse{
+					Body: &ecs.RunInstancesResponseBody{
+						InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
+							InstanceIdSet: []*string{&instanceID},
+						},
+					},
+				}
+				m.On("RunInstances", mock.Anything, mock.MatchedBy(func(req *ecs.RunInstancesRequest) bool {
+					return req.LaunchTemplateId != nil && *req.LaunchTemplateId == "lt-123456"
+				})).Return(response, nil)
+			},
+		},
+		{
+			name: "sets launch template version",
+			opts: CreateOptions{
+				InstanceType:          "ecs.g6.large",
+				ImageID:               "img-123",
+				VSwitchID:             "vsw-123",
+				SecurityGroupIDs:      []string{"sg-123"},
+				LaunchTemplateID:      "lt-123456",
+				LaunchTemplateVersion: int64Ptr(2),
+				SystemDisk: SystemDisk{
+					Category: "cloud_essd",
+					Size:     40,
+				},
+			},
+			mockSetup: func(m *MockECSClient) {
+				instanceID := "i-123456"
+				response := &ecs.RunInstancesResponse{
+					Body: &ecs.RunInstancesResponseBody{
+						InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
+							InstanceIdSet: []*string{&instanceID},
+						},
+					},
+				}
+				m.On("RunInstances", mock.Anything, mock.MatchedBy(func(req *ecs.RunInstancesRequest) bool {
+					return req.LaunchTemplateId != nil && *req.LaunchTemplateId == "lt-123456" &&
+						req.LaunchTemplateVersion != nil && *req.LaunchTemplateVersion == 2
+				})).Return(response, nil)
+			},
+		},
+		{
+			name: "sets private pool options",
+			opts: CreateOptions{
+				InstanceType:                  "ecs.g6.large",
+				ImageID:                       "img-123",
+				VSwitchID:                     "vsw-123",
+				SecurityGroupIDs:              []string{"sg-123"},
+				CapacityReservationID:         "crp-123456",
+				CapacityReservationPreference: "target",
+				SystemDisk: SystemDisk{
+					Category: "cloud_essd",
+					Size:     40,
+				},
+			},
+			mockSetup: func(m *MockECSClient) {
+				instanceID := "i-123456"
+				response := &ecs.RunInstancesResponse{
+					Body: &ecs.RunInstancesResponseBody{
+						InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
+							InstanceIdSet: []*string{&instanceID},
+						},
+					},
+				}
+				m.On("RunInstances", mock.Anything, mock.MatchedBy(func(req *ecs.RunInstancesRequest) bool {
+					return req.PrivatePoolOptions != nil &&
+						req.PrivatePoolOptions.Id != nil && *req.PrivatePoolOptions.Id == "crp-123456" &&
+						req.PrivatePoolOptions.MatchCriteria != nil && *req.PrivatePoolOptions.MatchCriteria == "Target"
+				})).Return(response, nil)
 			},
 		},
 		{
@@ -256,6 +409,31 @@ func TestList(t *testing.T) {
 			mockClient.AssertExpectations(t)
 		})
 	}
+}
+
+func TestListTreatsPostPaidSpotInstancesAsSpotCapacity(t *testing.T) {
+	mockClient := new(MockECSClient)
+	mockClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(describeInstancesResponse(postPaidSpotInstance()), nil)
+
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	result, err := provider.List(context.Background(), map[string]string{"env": "test"})
+
+	assert.NoError(t, err)
+	assert.Len(t, result, 1)
+	assert.Equal(t, v1alpha1.CapacityTypeSpot, result[0].CapacityType)
+	mockClient.AssertExpectations(t)
+}
+
+func TestGetTreatsPostPaidSpotInstancesAsSpotCapacity(t *testing.T) {
+	mockClient := new(MockECSClient)
+	mockClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(describeInstancesResponse(postPaidSpotInstance()), nil)
+
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	result, err := provider.Get(context.Background(), "i-spot")
+
+	assert.NoError(t, err)
+	assert.Equal(t, v1alpha1.CapacityTypeSpot, result.CapacityType)
+	mockClient.AssertExpectations(t)
 }
 
 func TestListWithPagination(t *testing.T) {

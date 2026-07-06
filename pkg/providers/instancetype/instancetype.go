@@ -21,9 +21,11 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
 	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -430,15 +432,140 @@ func (p *Provider) Filter(ctx context.Context, instanceTypes []*InstanceType, re
 // matchesRequirement checks if an instance type matches a single requirement
 func (p *Provider) matchesRequirement(it *InstanceType, req InstanceTypeRequirement) bool {
 	switch req.Key {
-	case "node.kubernetes.io/instance-type":
+	case v1alpha1.LabelInstanceType:
 		return p.matchesStringRequirement(it.Name, req.Operator, req.Values)
-	case "kubernetes.io/arch":
-		return p.matchesStringRequirement(it.Architecture, req.Operator, req.Values)
-	case "topology.kubernetes.io/zone":
+	case v1alpha1.LabelInstanceFamily:
+		return p.matchesStringRequirement(instanceFamily(it.Name), req.Operator, req.Values)
+	case v1alpha1.LabelInstanceCategory:
+		return p.matchesStringRequirement(instanceCategory(it.Name), req.Operator, req.Values)
+	case v1alpha1.LabelInstanceGeneration:
+		return p.matchesStringRequirement(instanceGeneration(it.Name), req.Operator, req.Values)
+	case v1alpha1.LabelInstanceSize:
+		return p.matchesStringRequirement(instanceSize(it.Name), req.Operator, req.Values)
+	case v1alpha1.LabelInstanceCPU:
+		return p.matchesStringRequirement(quantityValue(it.CPU), req.Operator, req.Values)
+	case v1alpha1.LabelInstanceMemory:
+		return p.matchesStringRequirement(quantityMiB(it.Memory), req.Operator, req.Values)
+	case v1alpha1.LabelInstanceGPUName:
+		return p.matchesStringRequirement(gpuModel(it), req.Operator, req.Values)
+	case v1alpha1.LabelInstanceGPUManufacturer:
+		return p.matchesStringRequirement(gpuManufacturer(it), req.Operator, req.Values)
+	case v1alpha1.LabelInstanceGPUCount:
+		return p.matchesStringRequirement(gpuCount(it), req.Operator, req.Values)
+	case v1alpha1.LabelInstanceGPUMemory:
+		return p.matchesStringRequirement(gpuMemory(it), req.Operator, req.Values)
+	case v1alpha1.LabelArchitecture:
+		return p.matchesStringRequirement(kubeArchitecture(it.Architecture), req.Operator, req.Values)
+	case v1alpha1.LabelOS:
+		return p.matchesStringRequirement(v1alpha1.OSLinux, req.Operator, req.Values)
+	case v1alpha1.LabelRegion:
+		return p.matchesStringRequirement(p.region, req.Operator, req.Values)
+	case v1alpha1.LabelCapacityType:
+		return p.matchesStringRequirement(v1alpha1.CapacityTypeOnDemand, req.Operator, req.Values) ||
+			p.matchesStringRequirement(v1alpha1.CapacityTypeSpot, req.Operator, req.Values)
+	case v1alpha1.LabelCapacityReservationID, v1alpha1.LabelCapacityReservationType:
+		return p.matchesStringRequirement("", req.Operator, req.Values)
+	case v1alpha1.LabelZone:
 		return p.matchesZoneRequirement(it, req.Operator, req.Values)
 	default:
 		// Unknown requirement key, assume it matches
 		return true
+	}
+}
+
+func instanceFamily(name string) string {
+	parts := strings.Split(strings.TrimPrefix(name, "ecs."), ".")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[0]
+}
+
+func instanceSize(name string) string {
+	parts := strings.Split(strings.TrimPrefix(name, "ecs."), ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[1]
+}
+
+func instanceCategory(name string) string {
+	family := instanceFamily(name)
+	var b strings.Builder
+	for _, r := range family {
+		if r < 'a' || r > 'z' {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func instanceGeneration(name string) string {
+	family := instanceFamily(name)
+	var b strings.Builder
+	for _, r := range family {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+			continue
+		}
+		if b.Len() > 0 {
+			break
+		}
+	}
+	return b.String()
+}
+
+func quantityValue(q *resource.Quantity) string {
+	if q == nil {
+		return ""
+	}
+	return fmt.Sprint(q.Value())
+}
+
+func quantityMiB(q *resource.Quantity) string {
+	if q == nil {
+		return ""
+	}
+	return fmt.Sprint(q.Value() / (1024 * 1024))
+}
+
+func gpuModel(it *InstanceType) string {
+	if it == nil || it.GPU == nil {
+		return ""
+	}
+	return v1alpha1.NormalizeLabelValue(it.GPU.Model)
+}
+
+func gpuManufacturer(it *InstanceType) string {
+	if gpuModel(it) == "" {
+		return ""
+	}
+	return "nvidia"
+}
+
+func gpuCount(it *InstanceType) string {
+	if it == nil || it.GPU == nil || it.GPU.Count == nil {
+		return ""
+	}
+	return fmt.Sprint(it.GPU.Count.Value())
+}
+
+func gpuMemory(it *InstanceType) string {
+	if it == nil || it.GPU == nil || it.GPU.Memory == nil {
+		return ""
+	}
+	return fmt.Sprint(it.GPU.Memory.Value())
+}
+
+func kubeArchitecture(arch string) string {
+	switch strings.ToLower(strings.TrimSpace(arch)) {
+	case "x86", "x86_64", "amd64":
+		return v1alpha1.ArchitectureAmd64
+	case "arm64", "aarch64":
+		return v1alpha1.ArchitectureArm64
+	default:
+		return arch
 	}
 }
 
