@@ -18,6 +18,7 @@ package imagefamily
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
@@ -74,6 +75,10 @@ func (m *MockECSClient) DescribeInstanceTypes(ctx context.Context, instanceTypes
 func (m *MockECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesResponse, error) {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (m *MockECSClient) DescribeAvailableResource(ctx context.Context, request *ecs.DescribeAvailableResourceRequest) (*ecs.DescribeAvailableResourceResponse, error) {
+	return nil, errors.New("not implemented")
 }
 
 func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {

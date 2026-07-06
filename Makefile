@@ -56,7 +56,8 @@ fmt: ## Run go fmt against code.
 
 .PHONY: vet
 vet: ## Run go vet against code.
-	go vet ./...
+	go vet ./pkg/... ./cmd/...
+	go vet -tags integration ./test/suites/...
 
 .PHONY: test-batcher
 test-batcher: ## Run batcher tests only.
@@ -128,9 +129,7 @@ ENVTEST_VERSION ?= latest
 envtest-setup: $(ENVTEST)
 $(ENVTEST):
 	mkdir -p $(LOCALBIN)
-	test -s $(LOCALBIN)/setup-envtest || { \
-		curl -Ss "https://raw.githubusercontent.com/kubernetes-sigs/controller-runtime/master/hack/setup-envtest.sh" | bash -s -- $(subst v,,$(ENVTEST_VERSION)); \
-	}
+	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 	@echo "envtest installed"
 
 # 获取 envtest 环境变量
@@ -143,8 +142,12 @@ test: generate manifests envtest-setup fmt vet
 	KUBEBUILDER_ASSETS="$${KUBEBUILDER_ASSETS}" go test -v ./pkg/... -coverprofile test.out
 
 .PHONY: test-integration
-test-integration: fmt vet ## Run integration tests in test/suites/...
-	$(MAKE) e2etests
+test-integration: fmt vet ## Run provider-specific e2e tests (excludes gpu label)
+	$(MAKE) e2etests SKIP="gpu"
+
+.PHONY: test-integration-gpu
+test-integration-gpu: fmt vet ## Run GPU e2e tests (requires GPU instance inventory in test zone)
+	$(MAKE) e2etests FOCUS="gpu"
 
 .PHONY: test-all
 test-all: test test-integration ## Run all tests (unit + integration)

@@ -18,6 +18,7 @@ package garbagecollection_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -120,7 +121,6 @@ var _ = BeforeSuite(func() {
 		nil, // instanceProfileProvider
 		pricingProvider,
 		nil, // launchTemplateProvider
-		nil, // capacityReservationProvider
 		nil, // bootstrapProvider
 		nil,
 	)
@@ -169,7 +169,6 @@ var _ = Describe("GarbageCollectionController", func() {
 			vswitchProvider,
 			nil,
 			pricingProvider,
-			nil,
 			nil,
 			nil,
 			nil,
@@ -415,7 +414,8 @@ var _ = Describe("GarbageCollectionController", func() {
 					},
 				}, nil)
 
-			// Mock List to return empty instances (orphaned)
+			// Mock List to return empty instances (orphaned). Also satisfies the
+			// post-delete termination check in instance.Provider.Delete (empty = gone).
 			mockECSClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(
 				&ecs.DescribeInstancesResponse{
 					Body: &ecs.DescribeInstancesResponseBody{
@@ -425,6 +425,15 @@ var _ = Describe("GarbageCollectionController", func() {
 						TotalCount: tea.Int32(0),
 						PageNumber: tea.Int32(1),
 						PageSize:   tea.Int32(10),
+					},
+				}, nil)
+
+			// instance.Provider.Delete calls DeleteInstances then DescribeInstances
+			// (to confirm termination). The DescribeInstances mock above covers both calls.
+			mockECSClient.On("DeleteInstances", mock.Anything, mock.Anything).Return(
+				&ecs.DeleteInstancesResponse{
+					Body: &ecs.DeleteInstancesResponseBody{
+						RequestId: stringPtr("gc-delete-request-id"),
 					},
 				}, nil)
 
@@ -917,6 +926,9 @@ func (m *MockECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesRe
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*ecs.DescribeZonesResponse), args.Error(1)
+}
+func (m *MockECSClient) DescribeAvailableResource(ctx context.Context, request *ecs.DescribeAvailableResourceRequest) (*ecs.DescribeAvailableResourceResponse, error) {
+	return nil, errors.New("not implemented")
 }
 
 func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error) {

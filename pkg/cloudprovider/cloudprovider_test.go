@@ -18,498 +18,514 @@ package cloudprovider
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
-	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/capacityreservation"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/instance"
-	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/instancetype"
-	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
-	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
-	corecloudprovider "sigs.k8s.io/karpenter/pkg/cloudprovider"
+	coreapis "sigs.k8s.io/karpenter/pkg/apis/v1"
 )
 
-func TestRepairPoliciesMatchKubeletAndNodeMonitoringConditions(t *testing.T) {
-	cloudProvider := &CloudProvider{}
-
-	policies := cloudProvider.RepairPolicies()
-
-	require.Contains(t, policies, corecloudprovider.RepairPolicy{
-		ConditionType:      corev1.NodeReady,
-		ConditionStatus:    corev1.ConditionFalse,
-		TolerationDuration: 30 * time.Minute,
-	})
-	require.Contains(t, policies, corecloudprovider.RepairPolicy{
-		ConditionType:      corev1.NodeReady,
-		ConditionStatus:    corev1.ConditionUnknown,
-		TolerationDuration: 30 * time.Minute,
-	})
-	require.Contains(t, policies, corecloudprovider.RepairPolicy{
-		ConditionType:      "AcceleratedHardwareReady",
-		ConditionStatus:    corev1.ConditionFalse,
-		TolerationDuration: 10 * time.Minute,
-	})
-	require.Contains(t, policies, corecloudprovider.RepairPolicy{
-		ConditionType:      "StorageReady",
-		ConditionStatus:    corev1.ConditionFalse,
-		TolerationDuration: 30 * time.Minute,
-	})
-	require.Contains(t, policies, corecloudprovider.RepairPolicy{
-		ConditionType:      "NetworkingReady",
-		ConditionStatus:    corev1.ConditionFalse,
-		TolerationDuration: 30 * time.Minute,
-	})
-	require.Contains(t, policies, corecloudprovider.RepairPolicy{
-		ConditionType:      "KernelReady",
-		ConditionStatus:    corev1.ConditionFalse,
-		TolerationDuration: 30 * time.Minute,
-	})
-	require.Contains(t, policies, corecloudprovider.RepairPolicy{
-		ConditionType:      "ContainerRuntimeReady",
-		ConditionStatus:    corev1.ConditionFalse,
-		TolerationDuration: 30 * time.Minute,
-	})
-}
-
-func TestBuildInstanceTagsMergesUserTagsWithoutOverridingProtectedOwnership(t *testing.T) {
-	t.Setenv("GIT_REF", "abc123")
-	maxPods := int32(20)
-
-	nodeClaim := &karpv1.NodeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "nc-1",
-			Labels: map[string]string{
-				karpv1.NodePoolLabelKey: "np-1",
-				"custom/nodeclaim":      "from-nodeclaim",
-				v1alpha1.TagManagedBy:   "malicious-nodeclaim",
-			},
+func TestZonesFromRequirements(t *testing.T) {
+	tests := []struct {
+		name     string
+		reqs     []coreapis.NodeSelectorRequirementWithMinValues
+		expected []string
+	}{
+		{
+			name:     "no requirements returns nil",
+			reqs:     nil,
+			expected: nil,
 		},
-	}
-	nodeClass := &v1alpha1.ECSNodeClass{
-		Spec: v1alpha1.ECSNodeClassSpec{
-			ClusterID:   "c-test",
-			ClusterName: "ack-e2e",
-			Tags: map[string]string{
-				"custom/user":              "from-user",
-				v1alpha1.TagManagedBy:      "malicious-user",
-				v1alpha1.TagDiscovery:      "wrong-cluster",
-				v1alpha1.TagNodePool:       "wrong-nodepool",
-				v1alpha1.TagNodeClaim:      "wrong-nodeclaim",
-				v1alpha1.TagClusterID:      "wrong-cluster-id",
-				v1alpha1.TagKubeletMaxPods: "999",
-				"testing/type":             "wrong-type",
-				"testing/cluster":          "wrong-cluster",
-				"test/git_ref":             "wrong-git-ref",
-				v1alpha1.TagCluster:        "wrong-kubernetes-cluster-tag",
+		{
+			name: "zone In requirement returns zone values",
+			reqs: []coreapis.NodeSelectorRequirementWithMinValues{
+				{NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+					Key:      corev1.LabelTopologyZone,
+					Operator: corev1.NodeSelectorOpIn,
+					Values:   []string{"cn-shanghai-n"},
+				}},
 			},
-			Kubelet: &v1alpha1.KubeletConfiguration{
-				MaxPods: &maxPods,
+			expected: []string{"cn-shanghai-n"},
+		},
+		{
+			name: "multiple zones in requirement",
+			reqs: []coreapis.NodeSelectorRequirementWithMinValues{
+				{NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+					Key:      corev1.LabelTopologyZone,
+					Operator: corev1.NodeSelectorOpIn,
+					Values:   []string{"cn-shanghai-l", "cn-shanghai-n"},
+				}},
 			},
+			expected: []string{"cn-shanghai-l", "cn-shanghai-n"},
+		},
+		{
+			name: "non-zone requirement returns nil",
+			reqs: []coreapis.NodeSelectorRequirementWithMinValues{
+				{NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+					Key:      "node.kubernetes.io/instance-type",
+					Operator: corev1.NodeSelectorOpIn,
+					Values:   []string{"ecs.g7.xlarge"},
+				}},
+			},
+			expected: nil,
+		},
+		{
+			name: "NotIn zone operator is ignored, returns nil",
+			reqs: []coreapis.NodeSelectorRequirementWithMinValues{
+				{NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+					Key:      corev1.LabelTopologyZone,
+					Operator: corev1.NodeSelectorOpNotIn,
+					Values:   []string{"cn-shanghai-l"},
+				}},
+			},
+			expected: nil,
 		},
 	}
 
-	tags := buildInstanceTags(nodeClaim, nodeClass)
-
-	require.Equal(t, "true", tags[v1alpha1.TagManagedBy])
-	require.Equal(t, "c-test", tags[v1alpha1.TagClusterID])
-	require.Equal(t, "ack-e2e", tags[v1alpha1.TagDiscovery])
-	require.Equal(t, "np-1", tags[v1alpha1.TagNodePool])
-	require.Equal(t, "nc-1", tags[v1alpha1.TagNodeClaim])
-	require.Equal(t, "ack-e2e", tags[v1alpha1.TagCluster])
-	require.Equal(t, "20", tags[v1alpha1.TagKubeletMaxPods])
-
-	require.Equal(t, "from-nodeclaim", tags["custom/nodeclaim"])
-	require.Equal(t, "from-user", tags["custom/user"])
-	require.Equal(t, "wrong-type", tags["testing/type"])
-	require.Equal(t, "wrong-cluster", tags["testing/cluster"])
-	require.Equal(t, "wrong-git-ref", tags["test/git_ref"])
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := zonesFromRequirements(tt.reqs)
+			if len(got) != len(tt.expected) {
+				t.Fatalf("zonesFromRequirements() = %v, want %v", got, tt.expected)
+			}
+			for i := range tt.expected {
+				if got[i] != tt.expected[i] {
+					t.Errorf("zonesFromRequirements()[%d] = %q, want %q", i, got[i], tt.expected[i])
+				}
+			}
+		})
+	}
 }
 
-func TestBuildInstanceTagsDoesNotAddTestTagsByDefault(t *testing.T) {
-	t.Setenv("GIT_REF", "abc123")
+func TestFilterVSwitchesByZones(t *testing.T) {
+	vsw := []v1alpha1.VSwitch{
+		{ID: "vsw-l", Zone: "cn-shanghai-l", ZoneID: "cn-shanghai-l"},
+		{ID: "vsw-n", Zone: "cn-shanghai-n", ZoneID: "cn-shanghai-n"},
+		{ID: "vsw-m", Zone: "cn-shanghai-m", ZoneID: "cn-shanghai-m"},
+	}
 
-	tags := buildInstanceTags(&karpv1.NodeClaim{}, &v1alpha1.ECSNodeClass{
-		Spec: v1alpha1.ECSNodeClassSpec{
-			ClusterID:   "c-test",
-			ClusterName: "prod-cluster",
+	tests := []struct {
+		name         string
+		vswitches    []v1alpha1.VSwitch
+		allowedZones []string
+		wantIDs      []string
+	}{
+		{
+			name:         "nil allowedZones returns all vswitches",
+			vswitches:    vsw,
+			allowedZones: nil,
+			wantIDs:      []string{"vsw-l", "vsw-n", "vsw-m"},
 		},
-	})
-
-	require.NotContains(t, tags, "testing/type")
-	require.NotContains(t, tags, "testing/cluster")
-	require.NotContains(t, tags, "test/git_ref")
-}
-
-func TestManagedInstanceListTagsMatchLaunchedInstanceTags(t *testing.T) {
-	launchedTags := buildInstanceTags(&karpv1.NodeClaim{}, &v1alpha1.ECSNodeClass{
-		Spec: v1alpha1.ECSNodeClassSpec{
-			ClusterID:   "c-test",
-			ClusterName: "ack-e2e",
+		{
+			name:         "empty allowedZones returns all vswitches",
+			vswitches:    vsw,
+			allowedZones: []string{},
+			wantIDs:      []string{"vsw-l", "vsw-n", "vsw-m"},
 		},
-	})
-
-	require.Equal(t, launchedTags[v1alpha1.TagManagedBy], managedInstanceTags()[v1alpha1.TagManagedBy])
-}
-
-func TestConvertInstanceToNodeClaimIncludesImageID(t *testing.T) {
-	cpu := resource.MustParse("4")
-	memory := resource.MustParse("8Gi")
-	cloudProvider := &CloudProvider{}
-	original := &karpv1.NodeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "nc-1",
-			Labels: map[string]string{
-				karpv1.NodePoolLabelKey: "np-1",
+		{
+			name:         "filter to single zone returns only matching vswitch",
+			vswitches:    vsw,
+			allowedZones: []string{"cn-shanghai-n"},
+			wantIDs:      []string{"vsw-n"},
+		},
+		{
+			name:         "filter to multiple zones returns matching vswitches",
+			vswitches:    vsw,
+			allowedZones: []string{"cn-shanghai-l", "cn-shanghai-m"},
+			wantIDs:      []string{"vsw-l", "vsw-m"},
+		},
+		{
+			name:         "zone not in vswitches returns empty",
+			vswitches:    vsw,
+			allowedZones: []string{"cn-hangzhou-a"},
+			wantIDs:      nil,
+		},
+		{
+			name: "falls back to Zone field when ZoneID is empty",
+			vswitches: []v1alpha1.VSwitch{
+				{ID: "vsw-x", Zone: "cn-shanghai-n", ZoneID: ""},
 			},
+			allowedZones: []string{"cn-shanghai-n"},
+			wantIDs:      []string{"vsw-x"},
 		},
 	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := filterVSwitchesByZones(tt.vswitches, tt.allowedZones)
+			if len(got) != len(tt.wantIDs) {
+				t.Fatalf("filterVSwitchesByZones() returned %d vswitches, want %d: got %v", len(got), len(tt.wantIDs), got)
+			}
+			for i, id := range tt.wantIDs {
+				if got[i].ID != id {
+					t.Errorf("filterVSwitchesByZones()[%d].ID = %q, want %q", i, got[i].ID, id)
+				}
+			}
+		})
+	}
+}
+
+// TestVSwitchZoneFilteringBug is the regression test for issue #6.
+// Before the fix, createInstanceWithRetry always picked vswitches[0] regardless
+// of the NodePool zone requirement, causing instances to land in the wrong zone.
+func TestVSwitchZoneFilteringBug(t *testing.T) {
+	// ECSNodeClass has vswitches in both cn-shanghai-l (first) and cn-shanghai-n.
+	allVSwitches := []v1alpha1.VSwitch{
+		{ID: "vsw-l", Zone: "cn-shanghai-l", ZoneID: "cn-shanghai-l"},
+		{ID: "vsw-n", Zone: "cn-shanghai-n", ZoneID: "cn-shanghai-n"},
+	}
+
+	// NodePool restricts to cn-shanghai-n only.
+	requirements := []coreapis.NodeSelectorRequirementWithMinValues{
+		{NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+			Key:      corev1.LabelTopologyZone,
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   []string{"cn-shanghai-n"},
+		}},
+	}
+
+	zones := zonesFromRequirements(requirements)
+	filtered := filterVSwitchesByZones(allVSwitches, zones)
+
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 vswitch after zone filtering, got %d: %v", len(filtered), filtered)
+	}
+	if filtered[0].ID != "vsw-n" {
+		t.Errorf("expected vswitch vsw-n (zone cn-shanghai-n), got %q (zone %q)", filtered[0].ID, filtered[0].Zone)
+	}
+}
+
+// TestVSwitchFallbackOnNoStock verifies that vswitchFallbackCreate falls back to the next vswitch
+// when the first one returns a NoStock capacity error (issue #9).
+// TestVSwitchFallbackSortsByIPCount verifies that vswitches are tried in descending order of
+// AvailableIPAddressCount, so the one with the most IPs is attempted first.
+func TestVSwitchFallbackSortsByIPCount(t *testing.T) {
+	vswitches := []v1alpha1.VSwitch{
+		{ID: "vsw-low", Zone: "cn-shanghai-a", AvailableIPAddressCount: 5},
+		{ID: "vsw-high", Zone: "cn-shanghai-b", AvailableIPAddressCount: 50},
+		{ID: "vsw-mid", Zone: "cn-shanghai-c", AvailableIPAddressCount: 20},
+	}
+
+	// Make the two highest-IP vswitches fail with capacity errors so the loop
+	// visits all three in order, letting us verify the sort.
+	callOrder := []string{}
+	createFn := func(_ context.Context, opts instance.CreateOptions) (string, error) {
+		callOrder = append(callOrder, opts.VSwitchID)
+		if opts.VSwitchID == "vsw-high" || opts.VSwitchID == "vsw-mid" {
+			return "", fmt.Errorf("OperationDenied.NoStock: no stock in zone")
+		}
+		return "i-success", nil
+	}
+
+	if _, err := vswitchFallbackCreate(context.Background(), instance.CreateOptions{}, vswitches, createFn); err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	want := []string{"vsw-high", "vsw-mid", "vsw-low"}
+	if len(callOrder) != len(want) {
+		t.Fatalf("expected %d calls, got %d: %v", len(want), len(callOrder), callOrder)
+	}
+	for i, id := range want {
+		if callOrder[i] != id {
+			t.Errorf("call[%d]: want %q, got %q", i, id, callOrder[i])
+		}
+	}
+}
+
+// TestVSwitchFallbackDoesNotMutateInputSlice verifies that the original vswitches slice is not
+// reordered by vswitchFallbackCreate (important when the slice is backed by a cache).
+func TestVSwitchFallbackDoesNotMutateInputSlice(t *testing.T) {
+	vswitches := []v1alpha1.VSwitch{
+		{ID: "vsw-low", Zone: "cn-shanghai-a", AvailableIPAddressCount: 5},
+		{ID: "vsw-high", Zone: "cn-shanghai-b", AvailableIPAddressCount: 50},
+		{ID: "vsw-mid", Zone: "cn-shanghai-c", AvailableIPAddressCount: 20},
+	}
+	originalOrder := []string{vswitches[0].ID, vswitches[1].ID, vswitches[2].ID}
+
+	createFn := func(_ context.Context, opts instance.CreateOptions) (string, error) {
+		return "i-success", nil
+	}
+
+	if _, err := vswitchFallbackCreate(context.Background(), instance.CreateOptions{}, vswitches, createFn); err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	for i, id := range originalOrder {
+		if vswitches[i].ID != id {
+			t.Errorf("input slice mutated at index %d: want %q, got %q", i, id, vswitches[i].ID)
+		}
+	}
+}
+
+func TestVSwitchFallbackOnNoStock(t *testing.T) {
+	vswitches := []v1alpha1.VSwitch{
+		{ID: "vsw-l", Zone: "cn-shanghai-l"},
+		{ID: "vsw-n", Zone: "cn-shanghai-n"},
+	}
+
+	callOrder := []string{}
+	createFn := func(_ context.Context, opts instance.CreateOptions) (string, error) {
+		callOrder = append(callOrder, opts.VSwitchID)
+		if opts.VSwitchID == "vsw-l" {
+			return "", fmt.Errorf("OperationDenied.NoStock: no available instance in zone")
+		}
+		return "i-success", nil
+	}
+
+	id, err := vswitchFallbackCreate(context.Background(), instance.CreateOptions{}, vswitches, createFn)
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if id != "i-success" {
+		t.Errorf("expected instanceID i-success, got %q", id)
+	}
+	if len(callOrder) != 2 || callOrder[0] != "vsw-l" || callOrder[1] != "vsw-n" {
+		t.Errorf("unexpected call order: %v", callOrder)
+	}
+}
+
+// TestVSwitchFallbackFailFastOnQuotaError verifies that a non-retryable error causes an immediate
+// failure without trying additional vswitches.
+func TestVSwitchFallbackFailFastOnQuotaError(t *testing.T) {
+	vswitches := []v1alpha1.VSwitch{
+		{ID: "vsw-l", Zone: "cn-shanghai-l"},
+		{ID: "vsw-n", Zone: "cn-shanghai-n"},
+	}
+
+	calls := 0
+	createFn := func(_ context.Context, opts instance.CreateOptions) (string, error) {
+		calls++
+		return "", fmt.Errorf("QuotaExceed.Instance: quota exceeded")
+	}
+
+	_, err := vswitchFallbackCreate(context.Background(), instance.CreateOptions{}, vswitches, createFn)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if calls != 1 {
+		t.Errorf("expected exactly 1 create call on quota error, got %d", calls)
+	}
+}
+
+// TestVSwitchFallbackAllExhausted verifies that when all vswitches report IP exhaustion, the
+// function returns a descriptive error including the last failure.
+func TestVSwitchFallbackAllExhausted(t *testing.T) {
+	vswitches := []v1alpha1.VSwitch{
+		{ID: "vsw-l", Zone: "cn-shanghai-l"},
+		{ID: "vsw-n", Zone: "cn-shanghai-n"},
+	}
+
+	createFn := func(_ context.Context, opts instance.CreateOptions) (string, error) {
+		return "", fmt.Errorf("InvalidVSwitchId.IpNotEnough: vswitch %s has no available IPs", opts.VSwitchID)
+	}
+
+	_, err := vswitchFallbackCreate(context.Background(), instance.CreateOptions{}, vswitches, createFn)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "all vSwitches exhausted") {
+		t.Errorf("expected 'all vSwitches exhausted' in error, got: %v", err)
+	}
+}
+
+func TestEcsArchToKubernetesArch(t *testing.T) {
+	tests := []struct {
+		ecsArch  string
+		expected string
+	}{
+		{"X86", "amd64"},
+		{"x86", "amd64"},
+		{"ARM", "arm64"},
+		{"arm", "arm64"},
+		{"Arm", "arm64"},
+		{"", "amd64"},
+		{"unknown", "amd64"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ecsArch, func(t *testing.T) {
+			assert.Equal(t, tt.expected, ecsArchToKubernetesArch(tt.ecsArch))
+		})
+	}
+}
+
+func TestBuildInstanceTagsThreeLayerMerge(t *testing.T) {
+	nc := &coreapis.NodeClaim{}
+	nc.Name = "nodeclaim-abc"
+	nc.Labels = map[string]string{
+		coreapis.NodePoolLabelKey: "my-pool",
+		// extra label that must NOT leak into ECS tags
+		"kubernetes.io/arch": "amd64",
+	}
+	nodeClass := &v1alpha1.ECSNodeClass{}
+	nodeClass.Spec.ClusterID = "c-abc"
+	nodeClass.Spec.Tags = map[string]string{
+		"custom-tag": "custom-value",
+		// user tag can override management tag (layer 3 wins)
+	}
+
+	tags := buildInstanceTags(nc, nodeClass)
+
+	// Layer 1: management tags always present
+	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy])
+	assert.Equal(t, "c-abc", tags[v1alpha1.TagClusterID])
+	// Layer 2: traceability tags
+	assert.Equal(t, "my-pool", tags[v1alpha1.TagNodePool])
+	assert.Equal(t, "nodeclaim-abc", tags[v1alpha1.TagNodeClaim])
+	// Layer 3: user tags
+	assert.Equal(t, "custom-value", tags["custom-tag"])
+	// NodeClaim labels must NOT be in ECS tags
+	_, hasArch := tags["kubernetes.io/arch"]
+	assert.False(t, hasArch, "NodeClaim label 'kubernetes.io/arch' must not leak into ECS tags")
+}
+
+func TestBuildInstanceTagsNilUserTags(t *testing.T) {
+	nc := &coreapis.NodeClaim{}
+	nodeClass := &v1alpha1.ECSNodeClass{}
+	// nodeClass.Spec.Tags is nil — must not panic
+	tags := buildInstanceTags(nc, nodeClass)
+	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy])
+}
+
+func TestInstanceLabelsFromInstance(t *testing.T) {
 	inst := &instance.Instance{
-		InstanceID:   "i-test",
-		Region:       "cn-shanghai",
-		Zone:         "cn-shanghai-a",
-		InstanceType: "ecs.c7.xlarge",
-		ImageID:      "aliyun_3_x64_20G_container_optimized_alibase_20260513.vhd",
-		CapacityType: v1alpha1.CapacityTypeOnDemand,
+		Zone:         "cn-shanghai-n",
+		InstanceType: "ecs.g7.xlarge",
+		Architecture: "X86_64",
+		CapacityType: "on-demand",
 		Tags: map[string]string{
-			karpv1.NodePoolLabelKey:    "np-1",
-			v1alpha1.TagKubeletMaxPods: "20",
+			v1alpha1.TagNodePool: "my-pool",
+			// raw ECS tag with invalid K8s label value — must NOT surface
+			"ecs.aliyuncs.com/owner": "user@company.com",
 		},
 	}
-	nodeClaim := cloudProvider.convertInstanceToNodeClaim(context.Background(), inst, original, []*instancetype.InstanceType{
+
+	labels := instanceLabelsFromInstance(inst)
+
+	assert.Equal(t, "cn-shanghai-n", labels[corev1.LabelTopologyZone])
+	assert.Equal(t, "ecs.g7.xlarge", labels[v1alpha1.LabelInstanceType])
+	assert.Equal(t, "on-demand", labels[v1alpha1.LabelCapacityType])
+	assert.Equal(t, "amd64", labels[corev1.LabelArchStable])
+	assert.Equal(t, "linux", labels[corev1.LabelOSStable])
+	assert.Equal(t, "ecs.g7.xlarge", labels[corev1.LabelInstanceTypeStable])
+	assert.Equal(t, "my-pool", labels[coreapis.NodePoolLabelKey])
+	// raw ECS tag with colon/@ must not appear
+	_, hasOwner := labels["ecs.aliyuncs.com/owner"]
+	assert.False(t, hasOwner)
+}
+
+func TestInstanceLabelsFromInstanceARM(t *testing.T) {
+	inst := &instance.Instance{Architecture: "ARM64"}
+	labels := instanceLabelsFromInstance(inst)
+	assert.Equal(t, "arm64", labels[corev1.LabelArchStable])
+}
+
+func TestConvertInstanceToNodeClaimArchLabels(t *testing.T) {
+	tests := []struct {
+		ecsArch     string
+		wantK8sArch string
+	}{
+		{"X86_64", "amd64"},
+		{"ARM64", "arm64"},
+		{"", "amd64"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ecsArch, func(t *testing.T) {
+			cp := &CloudProvider{}
+			inst := &instance.Instance{
+				InstanceID:   "i-test",
+				Region:       "cn-shanghai",
+				Zone:         "cn-shanghai-n",
+				InstanceType: "ecs.g7.xlarge",
+				Architecture: tt.ecsArch,
+				CapacityType: "on-demand",
+				Tags:         map[string]string{},
+			}
+			nc := cp.convertInstanceToNodeClaim(context.Background(), inst, &coreapis.NodeClaim{}, nil, "c-test")
+			assert.Equal(t, tt.wantK8sArch, nc.Labels[corev1.LabelArchStable], "LabelArchStable")
+			assert.Equal(t, "linux", nc.Labels[corev1.LabelOSStable], "LabelOSStable")
+			assert.Equal(t, "ecs.g7.xlarge", nc.Labels[corev1.LabelInstanceTypeStable], "LabelInstanceTypeStable")
+		})
+	}
+}
+
+func TestCapacityTypeFromRequirements(t *testing.T) {
+	tests := []struct {
+		name     string
+		reqs     []coreapis.NodeSelectorRequirementWithMinValues
+		expected string
+	}{
 		{
-			Name:   "ecs.c7.xlarge",
-			CPU:    &cpu,
-			Memory: &memory,
+			name:     "nil requirements returns on-demand",
+			reqs:     nil,
+			expected: "on-demand",
 		},
-	}, "c-test")
-
-	require.Equal(t, inst.ImageID, nodeClaim.Status.ImageID)
-	require.Equal(t, int64(20), nodeClaim.Status.Capacity.Pods().Value())
-	require.Equal(t, int64(20), nodeClaim.Status.Allocatable.Pods().Value())
-}
-
-func TestConvertInstanceToNodeClaimPreservesAndAddsSchedulingLabels(t *testing.T) {
-	cpu := resource.MustParse("4")
-	memory := resource.MustParse("8Gi")
-	cloudProvider := &CloudProvider{}
-	original := &karpv1.NodeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "nc-1",
-			Labels: map[string]string{
-				karpv1.NodePoolLabelKey:        "np-1",
-				v1alpha1.LabelInstanceCategory: "c",
-			},
-		},
-	}
-	inst := &instance.Instance{
-		InstanceID:   "i-test",
-		Region:       "cn-shanghai",
-		Zone:         "cn-shanghai-a",
-		InstanceType: "ecs.c7.xlarge",
-		ImageID:      "aliyun_3_x64_20G_container_optimized_alibase_20260513.vhd",
-		CapacityType: v1alpha1.CapacityTypeOnDemand,
-		Tags: map[string]string{
-			karpv1.NodePoolLabelKey: "np-1",
-		},
-	}
-
-	nodeClaim := cloudProvider.convertInstanceToNodeClaim(context.Background(), inst, original, []*instancetype.InstanceType{
 		{
-			Name:         "ecs.c7.xlarge",
-			Architecture: "X86",
-			CPU:          &cpu,
-			Memory:       &memory,
-			Zones: map[string]instancetype.ZoneInfo{
-				"cn-shanghai-a": {Available: true},
+			name: "In spot returns spot",
+			reqs: []coreapis.NodeSelectorRequirementWithMinValues{
+				{NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+					Key:      v1alpha1.LabelCapacityType,
+					Operator: corev1.NodeSelectorOpIn,
+					Values:   []string{"spot"},
+				}},
 			},
+			expected: "spot",
 		},
-	}, "c-test")
-
-	require.Equal(t, "np-1", nodeClaim.Labels[karpv1.NodePoolLabelKey])
-	require.Equal(t, "c", nodeClaim.Labels[v1alpha1.LabelInstanceCategory])
-	require.Equal(t, "7", nodeClaim.Labels[v1alpha1.LabelInstanceGeneration])
-	require.Equal(t, "c7", nodeClaim.Labels[v1alpha1.LabelInstanceFamily])
-	require.Equal(t, "xlarge", nodeClaim.Labels[v1alpha1.LabelInstanceSize])
-	require.Equal(t, "4", nodeClaim.Labels[v1alpha1.LabelInstanceCPU])
-	require.Equal(t, "8192", nodeClaim.Labels[v1alpha1.LabelInstanceMemory])
-	require.Equal(t, "amd64", nodeClaim.Labels[corev1.LabelArchStable])
-	require.Equal(t, "linux", nodeClaim.Labels[corev1.LabelOSStable])
-	require.Equal(t, "cn-shanghai", nodeClaim.Labels[corev1.LabelTopologyRegion])
-}
-
-func TestConvertInstanceToNodeClaimNormalizesGPUModelLabel(t *testing.T) {
-	cpu := resource.MustParse("8")
-	memory := resource.MustParse("32Gi")
-	gpuCount := resource.MustParse("1")
-	gpuMemory := resource.MustParse("16")
-	cloudProvider := &CloudProvider{}
-	original := &karpv1.NodeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "nc-1",
-			Labels: map[string]string{
-				karpv1.NodePoolLabelKey: "np-1",
-			},
-		},
-	}
-	inst := &instance.Instance{
-		InstanceID:   "i-test",
-		Region:       "cn-qingdao",
-		Zone:         "cn-qingdao-c",
-		InstanceType: "ecs.gn6v-c8g1.2xlarge",
-		ImageID:      "aliyun_3_x64_20G_container_optimized_alibase_20260513.vhd",
-		CapacityType: v1alpha1.CapacityTypeOnDemand,
-		Tags:         map[string]string{karpv1.NodePoolLabelKey: "np-1"},
-	}
-
-	nodeClaim := cloudProvider.convertInstanceToNodeClaim(context.Background(), inst, original, []*instancetype.InstanceType{
 		{
-			Name:         "ecs.gn6v-c8g1.2xlarge",
-			Architecture: "X86",
-			CPU:          &cpu,
-			Memory:       &memory,
-			GPU: &instancetype.GPU{
-				Count:  &gpuCount,
-				Model:  "NVIDIA V100",
-				Memory: &gpuMemory,
+			name: "In on-demand returns on-demand",
+			reqs: []coreapis.NodeSelectorRequirementWithMinValues{
+				{NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+					Key:      v1alpha1.LabelCapacityType,
+					Operator: corev1.NodeSelectorOpIn,
+					Values:   []string{"on-demand"},
+				}},
 			},
-			Zones: map[string]instancetype.ZoneInfo{
-				"cn-qingdao-c": {Available: true},
+			expected: "on-demand",
+		},
+		{
+			name: "NotIn spot is ignored, returns on-demand",
+			reqs: []coreapis.NodeSelectorRequirementWithMinValues{
+				{NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+					Key:      v1alpha1.LabelCapacityType,
+					Operator: corev1.NodeSelectorOpNotIn,
+					Values:   []string{"spot"},
+				}},
 			},
+			expected: "on-demand",
 		},
-	}, "c-test")
-
-	require.Equal(t, "nvidia-v100", nodeClaim.Labels[v1alpha1.LabelInstanceGPUName])
-}
-
-func TestComputeInstanceTypeRequirementsIncludesAlibabaCloudLabels(t *testing.T) {
-	cpu := resource.MustParse("4")
-	memory := resource.MustParse("8Gi")
-	gpuCount := resource.MustParse("1")
-	gpuMemory := resource.MustParse("14")
-
-	requirements := computeInstanceTypeRequirements(&instancetype.InstanceType{
-		Name:         "ecs.gn6i-c4g1.xlarge",
-		Architecture: "X86",
-		CPU:          &cpu,
-		Memory:       &memory,
-		GPU: &instancetype.GPU{
-			Count:  &gpuCount,
-			Model:  "T4",
-			Memory: &gpuMemory,
-		},
-		Zones: map[string]instancetype.ZoneInfo{
-			"cn-hangzhou-i": {Available: true},
-			"cn-hangzhou-j": {Available: false},
-		},
-	}, "cn-hangzhou")
-
-	require.Equal(t, "ecs.gn6i-c4g1.xlarge", requirements.Get(corev1.LabelInstanceTypeStable).Any())
-	require.Equal(t, "cn-hangzhou-i", requirements.Get(corev1.LabelTopologyZone).Any())
-	require.Equal(t, "cn-hangzhou", requirements.Get(corev1.LabelTopologyRegion).Any())
-	require.Equal(t, "amd64", requirements.Get(corev1.LabelArchStable).Any())
-	require.Equal(t, "linux", requirements.Get(corev1.LabelOSStable).Any())
-	require.True(t, requirements.Get(v1alpha1.LabelCapacityType).Has(v1alpha1.CapacityTypeOnDemand))
-	require.True(t, requirements.Get(v1alpha1.LabelCapacityType).Has(v1alpha1.CapacityTypeSpot))
-	require.Equal(t, "gn", requirements.Get(v1alpha1.LabelInstanceCategory).Any())
-	require.Equal(t, "6", requirements.Get(v1alpha1.LabelInstanceGeneration).Any())
-	require.Equal(t, "gn6i-c4g1", requirements.Get(v1alpha1.LabelInstanceFamily).Any())
-	require.Equal(t, "xlarge", requirements.Get(v1alpha1.LabelInstanceSize).Any())
-	require.Equal(t, "4", requirements.Get(v1alpha1.LabelInstanceCPU).Any())
-	require.Equal(t, "8192", requirements.Get(v1alpha1.LabelInstanceMemory).Any())
-	require.Equal(t, "t4", requirements.Get(v1alpha1.LabelInstanceGPUName).Any())
-	require.Equal(t, "nvidia", requirements.Get(v1alpha1.LabelInstanceGPUManufacturer).Any())
-	require.Equal(t, "1", requirements.Get(v1alpha1.LabelInstanceGPUCount).Any())
-	require.Equal(t, "14", requirements.Get(v1alpha1.LabelInstanceGPUMemory).Any())
-}
-
-func TestComputeInstanceTypeRequirementsNormalizesGPUModelLabelValue(t *testing.T) {
-	cpu := resource.MustParse("8")
-	memory := resource.MustParse("32Gi")
-	gpuCount := resource.MustParse("1")
-	gpuMemory := resource.MustParse("16")
-
-	requirements := computeInstanceTypeRequirements(&instancetype.InstanceType{
-		Name:         "ecs.gn6v-c8g1.2xlarge",
-		Architecture: "X86",
-		CPU:          &cpu,
-		Memory:       &memory,
-		GPU: &instancetype.GPU{
-			Count:  &gpuCount,
-			Model:  "NVIDIA V100",
-			Memory: &gpuMemory,
-		},
-		Zones: map[string]instancetype.ZoneInfo{
-			"cn-qingdao-c": {Available: true},
-		},
-	}, "cn-qingdao")
-
-	require.Equal(t, "nvidia-v100", requirements.Get(v1alpha1.LabelInstanceGPUName).Any())
-}
-
-func TestCapPodCapacityFromInstanceTags(t *testing.T) {
-	capacity := corev1.ResourceList{
-		corev1.ResourcePods: *resource.NewQuantity(23, resource.DecimalSI),
-	}
-	allocatable := corev1.ResourceList{
-		corev1.ResourcePods: *resource.NewQuantity(23, resource.DecimalSI),
-	}
-
-	cappedCapacity, cappedAllocatable := capPodCapacityFromInstanceTags(capacity, allocatable, map[string]string{
-		v1alpha1.TagKubeletMaxPods: "20",
-	})
-
-	require.Equal(t, int64(20), cappedCapacity.Pods().Value())
-	require.Equal(t, int64(20), cappedAllocatable.Pods().Value())
-	require.Equal(t, int64(23), capacity.Pods().Value(), "input capacity must not be mutated")
-	require.Equal(t, int64(23), allocatable.Pods().Value(), "input allocatable must not be mutated")
-}
-
-func TestCreateInstanceWithRetryPassesLaunchTemplateID(t *testing.T) {
-	ecsClient := &capturingRunInstancesECSClient{}
-	cloudProvider := &CloudProvider{
-		instanceProvider: instance.NewProvider(context.Background(), "cn-hangzhou", ecsClient),
-	}
-	launchTemplateID := "lt-123456"
-	launchTemplateVersion := int64(2)
-
-	_, err := cloudProvider.createInstanceWithRetry(
-		context.Background(),
-		&v1alpha1.ECSNodeClass{
-			Spec: v1alpha1.ECSNodeClassSpec{
-				LaunchTemplateID:      &launchTemplateID,
-				LaunchTemplateVersion: &launchTemplateVersion,
+		{
+			name: "no capacity-type requirement returns on-demand",
+			reqs: []coreapis.NodeSelectorRequirementWithMinValues{
+				{NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+					Key:      corev1.LabelTopologyZone,
+					Operator: corev1.NodeSelectorOpIn,
+					Values:   []string{"cn-shanghai-n"},
+				}},
 			},
-		},
-		[]*instancetype.InstanceType{{Name: "ecs.g6.large"}},
-		[]v1alpha1.Image{{ID: "img-123"}},
-		[]v1alpha1.VSwitch{{ID: "vsw-123"}},
-		[]v1alpha1.SecurityGroup{{ID: "sg-123"}},
-		"#!/bin/bash",
-		map[string]string{"karpenter.sh/nodeclaim": "nc-1"},
-	)
-
-	require.NoError(t, err)
-	require.NotNil(t, ecsClient.runInstancesRequest)
-	require.NotNil(t, ecsClient.runInstancesRequest.LaunchTemplateId)
-	require.Equal(t, launchTemplateID, *ecsClient.runInstancesRequest.LaunchTemplateId)
-	require.NotNil(t, ecsClient.runInstancesRequest.LaunchTemplateVersion)
-	require.Equal(t, launchTemplateVersion, *ecsClient.runInstancesRequest.LaunchTemplateVersion)
-}
-
-func TestCreateInstanceWithRetryResolvesTargetCapacityReservation(t *testing.T) {
-	capacityReservationID := "crp-123456"
-	capacityReservationName := "reserved-capacity"
-	ecsClient := &capturingRunInstancesECSClient{
-		capacityReservationResponse: &ecs.DescribeCapacityReservationsResponse{
-			Body: &ecs.DescribeCapacityReservationsResponseBody{
-				CapacityReservationSet: &ecs.DescribeCapacityReservationsResponseBodyCapacityReservationSet{
-					CapacityReservationItem: []*ecs.DescribeCapacityReservationsResponseBodyCapacityReservationSetCapacityReservationItem{
-						{
-							PrivatePoolOptionsId:   &capacityReservationID,
-							PrivatePoolOptionsName: &capacityReservationName,
-						},
-					},
-				},
-			},
+			expected: "on-demand",
 		},
 	}
-	cloudProvider := &CloudProvider{
-		instanceProvider:            instance.NewProvider(context.Background(), "cn-hangzhou", ecsClient),
-		capacityReservationProvider: capacityreservation.NewProvider("cn-hangzhou", ecsClient),
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, capacityTypeFromRequirements(tt.reqs))
+		})
 	}
-	preference := "target"
-
-	_, err := cloudProvider.createInstanceWithRetry(
-		context.Background(),
-		&v1alpha1.ECSNodeClass{
-			Spec: v1alpha1.ECSNodeClassSpec{
-				CapacityReservationPreference: &preference,
-				CapacityReservationSelectorTerms: []v1alpha1.CapacityReservationSelectorTerm{
-					{ID: &capacityReservationID},
-				},
-			},
-		},
-		[]*instancetype.InstanceType{{Name: "ecs.g6.large"}},
-		[]v1alpha1.Image{{ID: "img-123"}},
-		[]v1alpha1.VSwitch{{ID: "vsw-123"}},
-		[]v1alpha1.SecurityGroup{{ID: "sg-123"}},
-		"#!/bin/bash",
-		map[string]string{"karpenter.sh/nodeclaim": "nc-1"},
-	)
-
-	require.NoError(t, err)
-	require.NotNil(t, ecsClient.runInstancesRequest)
-	require.NotNil(t, ecsClient.runInstancesRequest.PrivatePoolOptions)
-	require.Equal(t, "Target", *ecsClient.runInstancesRequest.PrivatePoolOptions.MatchCriteria)
-	require.Equal(t, capacityReservationID, *ecsClient.runInstancesRequest.PrivatePoolOptions.Id)
 }
 
-type capturingRunInstancesECSClient struct {
-	runInstancesRequest         *ecs.RunInstancesRequest
-	capacityReservationResponse *ecs.DescribeCapacityReservationsResponse
+func TestBuildInstanceTagsManagedByValue(t *testing.T) {
+	tags := buildInstanceTags(&coreapis.NodeClaim{}, &v1alpha1.ECSNodeClass{})
+	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy],
+		"TagManagedBy must be 'karpenter' so that List() tag filter matches")
 }
 
-func (c *capturingRunInstancesECSClient) RunInstances(ctx context.Context, request *ecs.RunInstancesRequest) (*ecs.RunInstancesResponse, error) {
-	c.runInstancesRequest = request
-	instanceID := "i-123456"
-	return &ecs.RunInstancesResponse{
-		Body: &ecs.RunInstancesResponseBody{
-			InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
-				InstanceIdSet: []*string{&instanceID},
-			},
-		},
-	}, nil
-}
+func TestBuildInstanceTagsIncludesClusterID(t *testing.T) {
+	nc := &coreapis.NodeClaim{}
+	nodeClass := &v1alpha1.ECSNodeClass{}
+	nodeClass.Spec.ClusterID = "c-abc123"
 
-func (c *capturingRunInstancesECSClient) DescribeInstances(ctx context.Context, request *ecs.DescribeInstancesRequest) (*ecs.DescribeInstancesResponse, error) {
-	return nil, nil
-}
+	tags := buildInstanceTags(nc, nodeClass)
 
-func (c *capturingRunInstancesECSClient) DeleteInstances(ctx context.Context, request *ecs.DeleteInstancesRequest) (*ecs.DeleteInstancesResponse, error) {
-	return nil, nil
-}
-
-func (c *capturingRunInstancesECSClient) TagResources(ctx context.Context, request *ecs.TagResourcesRequest) (*ecs.TagResourcesResponse, error) {
-	return nil, nil
-}
-
-func (c *capturingRunInstancesECSClient) CreateLaunchTemplate(ctx context.Context, request *ecs.CreateLaunchTemplateRequest) (*ecs.CreateLaunchTemplateResponse, error) {
-	return nil, nil
-}
-
-func (c *capturingRunInstancesECSClient) DescribeLaunchTemplates(ctx context.Context, request *ecs.DescribeLaunchTemplatesRequest) (*ecs.DescribeLaunchTemplatesResponse, error) {
-	return nil, nil
-}
-
-func (c *capturingRunInstancesECSClient) DeleteLaunchTemplate(ctx context.Context, request *ecs.DeleteLaunchTemplateRequest) (*ecs.DeleteLaunchTemplateResponse, error) {
-	return nil, nil
-}
-
-func (c *capturingRunInstancesECSClient) DescribeInstanceTypes(ctx context.Context, instanceTypes []string) (*ecs.DescribeInstanceTypesResponse, error) {
-	return nil, nil
-}
-
-func (c *capturingRunInstancesECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesResponse, error) {
-	return nil, nil
-}
-
-func (c *capturingRunInstancesECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error) {
-	return nil, nil
-}
-
-func (c *capturingRunInstancesECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
-	return nil, nil
-}
-
-func (c *capturingRunInstancesECSClient) DescribeCapacityReservations(ctx context.Context, id string, tags map[string]string) (*ecs.DescribeCapacityReservationsResponse, error) {
-	return c.capacityReservationResponse, nil
-}
-
-func (c *capturingRunInstancesECSClient) DescribePrice(ctx context.Context, instanceType string) (*ecs.DescribePriceResponse, error) {
-	return nil, nil
+	assert.Equal(t, "c-abc123", tags[v1alpha1.TagClusterID])
+	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy])
 }

@@ -15,7 +15,7 @@ controller:
     # Options: Always, IfNotPresent, Never
     pullPolicy: Always
     # -- Image tag/version to deploy
-    tag: "v0.2.1"
+    tag: "v0.2.2"
 
   # -- Resource requests and limits for the controller pod
   # @description --

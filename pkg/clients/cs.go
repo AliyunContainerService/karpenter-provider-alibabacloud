@@ -20,6 +20,7 @@ import (
 	"context"
 
 	cs "github.com/alibabacloud-go/cs-20151215/v5/client"
+	"github.com/alibabacloud-go/tea/tea"
 )
 
 // CSClient is an interface for Container Service client operations
@@ -27,6 +28,7 @@ type CSClient interface {
 	DescribeClusterAttachScripts(ctx context.Context, clusterID string, request *cs.DescribeClusterAttachScriptsRequest) (string, error)
 	GetClusterAddonInstance(ctx context.Context, clusterID, addonName string) (*cs.GetClusterAddonInstanceResponse, error)
 	DescribeClusterDetail(ctx context.Context, clusterID string) (*cs.DescribeClusterDetailResponse, error)
+	DescribeKubernetesVersionMetadata(ctx context.Context, k8sVersion string) ([]*cs.DescribeKubernetesVersionMetadataResponseBody, error)
 }
 
 // DefaultCSClient implements CSClient using Alibaba Cloud SDK
@@ -61,4 +63,15 @@ func (c *DefaultCSClient) GetClusterAddonInstance(ctx context.Context, clusterID
 
 func (c *DefaultCSClient) DescribeClusterDetail(ctx context.Context, clusterID string) (*cs.DescribeClusterDetailResponse, error) {
 	return c.client.DescribeClusterDetail(&clusterID)
+}
+
+func (c *DefaultCSClient) DescribeKubernetesVersionMetadata(ctx context.Context, k8sVersion string) ([]*cs.DescribeKubernetesVersionMetadataResponseBody, error) {
+	req := &cs.DescribeKubernetesVersionMetadataRequest{
+		KubernetesVersion: tea.String(k8sVersion),
+	}
+	resp, err := c.client.DescribeKubernetesVersionMetadata(req)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Body, nil
 }

@@ -18,6 +18,7 @@ package pricing
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -74,6 +75,10 @@ func (m *MockECSClient) DescribeInstanceTypes(ctx context.Context, instanceTypes
 func (m *MockECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesResponse, error) {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (m *MockECSClient) DescribeAvailableResource(ctx context.Context, request *ecs.DescribeAvailableResourceRequest) (*ecs.DescribeAvailableResourceResponse, error) {
+	return nil, errors.New("not implemented")
 }
 
 func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, filters map[string]string) ([]ecs.DescribeImagesResponseBodyImagesImage, error) {

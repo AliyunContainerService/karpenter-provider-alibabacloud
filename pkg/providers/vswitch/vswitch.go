@@ -169,9 +169,15 @@ func (p *Provider) getByTags(ctx context.Context, tags map[string]string) ([]v1a
 	// Convert to our VSwitch type
 	var vswitches []v1alpha1.VSwitch
 	for _, vsw := range response.Body.VSwitches.VSwitch {
+		var availIPCount int
+		if vsw.AvailableIpAddressCount != nil {
+			availIPCount = int(*vsw.AvailableIpAddressCount)
+		}
 		vswitches = append(vswitches, v1alpha1.VSwitch{
-			ID:   *vsw.VSwitchId,
-			Zone: *vsw.ZoneId,
+			ID:                      *vsw.VSwitchId,
+			Zone:                    *vsw.ZoneId,
+			ZoneID:                  *vsw.ZoneId,
+			AvailableIPAddressCount: availIPCount,
 		})
 	}
 

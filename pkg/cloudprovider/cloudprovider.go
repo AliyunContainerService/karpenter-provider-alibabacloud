@@ -24,15 +24,14 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/errors"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/operator/options"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/bootstrap"
-	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/capacityreservation"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/cluster"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/imagefamily"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/instance"
@@ -63,17 +62,16 @@ type CloudProvider struct {
 	kubeClient client.Client
 
 	// Providers for Alibaba Cloud resources
-	instanceProvider            *instance.Provider
-	instanceTypeProvider        *instancetype.Provider
-	imageFamilyProvider         *imagefamily.Provider
-	vswitchProvider             *vswitch.Provider
-	securityGroupProvider       *securitygroup.Provider
-	pricingProvider             *pricing.Provider
-	launchTemplateProvider      *launchtemplate.Provider
-	capacityReservationProvider *capacityreservation.Provider
-	bootstrapProvider           *bootstrap.Provider
-	instanceProfileProvider     *instanceprofile.Provider
-	csClient                    clients.CSClient
+	instanceProvider        *instance.Provider
+	instanceTypeProvider    *instancetype.Provider
+	imageFamilyProvider     *imagefamily.Provider
+	vswitchProvider         *vswitch.Provider
+	securityGroupProvider   *securitygroup.Provider
+	pricingProvider         *pricing.Provider
+	launchTemplateProvider  *launchtemplate.Provider
+	bootstrapProvider       *bootstrap.Provider
+	instanceProfileProvider *instanceprofile.Provider
+	csClient                clients.CSClient
 
 	clusterNetworkConfig *cluster.NetworkConfig
 }
@@ -90,23 +88,21 @@ func New(
 	instanceProfileProvider *instanceprofile.Provider,
 	pricingProvider *pricing.Provider,
 	launchTemplateProvider *launchtemplate.Provider,
-	capacityReservationProvider *capacityreservation.Provider,
 	bootstrapProvider *bootstrap.Provider,
 	networkConfig *cluster.NetworkConfig,
 ) *CloudProvider {
 	return &CloudProvider{
-		kubeClient:                  kubeClient,
-		instanceProvider:            instanceProvider,
-		instanceTypeProvider:        instanceTypeProvider,
-		imageFamilyProvider:         imageFamilyProvider,
-		vswitchProvider:             vswitchProvider,
-		securityGroupProvider:       securityGroupProvider,
-		pricingProvider:             pricingProvider,
-		launchTemplateProvider:      launchTemplateProvider,
-		capacityReservationProvider: capacityReservationProvider,
-		bootstrapProvider:           bootstrapProvider,
-		instanceProfileProvider:     instanceProfileProvider,
-		clusterNetworkConfig:        networkConfig,
+		kubeClient:              kubeClient,
+		instanceProvider:        instanceProvider,
+		instanceTypeProvider:    instanceTypeProvider,
+		imageFamilyProvider:     imageFamilyProvider,
+		vswitchProvider:         vswitchProvider,
+		securityGroupProvider:   securityGroupProvider,
+		pricingProvider:         pricingProvider,
+		launchTemplateProvider:  launchTemplateProvider,
+		bootstrapProvider:       bootstrapProvider,
+		instanceProfileProvider: instanceProfileProvider,
+		clusterNetworkConfig:    networkConfig,
 	}
 }
 
@@ -160,10 +156,10 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
 		return nil, fmt.Errorf("no images available in nodeclass status")
 	}
 
-	// 5. Get VSwitches from NodeClass status
-	vswitches := nodeClass.Status.VSwitches
+	// 5. Get VSwitches from NodeClass status, filtered by zone requirements
+	vswitches := filterVSwitchesByZones(nodeClass.Status.VSwitches, zonesFromRequirements(nodeClaim.Spec.Requirements))
 	if len(vswitches) == 0 {
-		return nil, fmt.Errorf("no vswitches available in nodeclass status")
+		return nil, fmt.Errorf("no vswitches available matching the zone requirements")
 	}
 
 	// 6. Get SecurityGroups from NodeClass status
@@ -185,7 +181,7 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
 		CustomUserData:  lo.ToPtr(getCustomUserData(nodeClass)),
 	}
 
-	userData, err := c.bootstrapProvider.GenerateUserData(bootstrapOpts)
+	userData, err := c.bootstrapProvider.GenerateUserData(ctx, bootstrapOpts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate user data: %w", err)
 	}
@@ -194,7 +190,7 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
 	tags := buildInstanceTags(nodeClaim, nodeClass)
 
 	// 9. Create instance using instance provider
-	instanceID, err := c.createInstanceWithRetry(ctx, nodeClass, filteredTypes, images, vswitches, securityGroups, userData, tags)
+	instanceID, err := c.createInstanceWithRetry(ctx, nodeClaim, nodeClass, filteredTypes, images, vswitches, securityGroups, userData, tags)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create instance: %w", err)
 	}
@@ -281,7 +277,7 @@ func (c *CloudProvider) Get(ctx context.Context, providerID string) (*coreapis.N
 	// Create NodeClaim from instance
 	nodeClaim := &coreapis.NodeClaim{}
 	nodeClaim.Name = inst.InstanceID
-	nodeClaim.Labels = inst.Tags
+	nodeClaim.Labels = instanceLabelsFromInstance(inst)
 	nodeClaim.CreationTimestamp = metav1.Time{Time: launchTime}
 
 	// Set Status
@@ -296,7 +292,11 @@ func (c *CloudProvider) Get(ctx context.Context, providerID string) (*coreapis.N
 // List retrieves all instances managed by Karpenter
 func (c *CloudProvider) List(ctx context.Context) ([]*coreapis.NodeClaim, error) {
 	// List all Karpenter-managed instances
-	instances, err := c.instanceProvider.List(ctx, managedInstanceTags())
+	tags := map[string]string{
+		v1alpha1.TagManagedBy: "karpenter",
+	}
+
+	instances, err := c.instanceProvider.List(ctx, tags)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +331,7 @@ func (c *CloudProvider) List(ctx context.Context) ([]*coreapis.NodeClaim, error)
 		// Create NodeClaim
 		nodeClaim := &coreapis.NodeClaim{}
 		nodeClaim.Name = inst.InstanceID
-		nodeClaim.Labels = inst.Tags
+		nodeClaim.Labels = instanceLabelsFromInstance(inst)
 		nodeClaim.CreationTimestamp = metav1.Time{Time: launchTime}
 
 		// Set Status
@@ -418,23 +418,22 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 			continue
 		}
 
-		// Create offerings from zones
+		// Create one offering per (zone, capacityType) combination.
+		// Requirements are required for Karpenter's topology spread and capacity-type scheduling.
 		offerings := make(cloudprovider.Offerings, 0)
 		for zoneID, zoneInfo := range it.Zones {
-			if availableZones[zoneID] && zoneInfo.Available {
-				for _, capacityType := range []string{v1alpha1.CapacityTypeOnDemand, v1alpha1.CapacityTypeSpot} {
-					offering := &cloudprovider.Offering{
-						Requirements: scheduling.NewRequirements(
-							scheduling.NewRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, zoneID),
-							scheduling.NewRequirement(v1alpha1.LabelCapacityType, corev1.NodeSelectorOpIn, capacityType),
-							scheduling.NewRequirement(v1alpha1.LabelCapacityReservationID, corev1.NodeSelectorOpDoesNotExist),
-							scheduling.NewRequirement(v1alpha1.LabelCapacityReservationType, corev1.NodeSelectorOpDoesNotExist),
-						),
-						Price:     0.0, // Pricing not implemented yet
-						Available: zoneInfo.Available,
-					}
-					offerings = append(offerings, offering)
-				}
+			if !availableZones[zoneID] || !zoneInfo.Available {
+				continue
+			}
+			for _, capacityType := range zoneInfo.CapacityTypes {
+				offerings = append(offerings, &cloudprovider.Offering{
+					Requirements: scheduling.NewRequirements(
+						scheduling.NewRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, zoneID),
+						scheduling.NewRequirement(coreapis.CapacityTypeLabelKey, corev1.NodeSelectorOpIn, capacityType),
+					),
+					Price:     0.0, // Pricing not implemented yet
+					Available: true,
+				})
 			}
 		}
 		// Skip instance types with no available offerings
@@ -469,12 +468,27 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 			corev1.ResourceCPU:    divideQuantity(totalOverhead[corev1.ResourceCPU], 3),
 		}
 
-		// Create core InstanceType
+		// Collect unique zones and capacity types across all offerings for InstanceType-level Requirements.
+		offeringZones := lo.Keys(lo.SliceToMap(offerings, func(o *cloudprovider.Offering) (string, struct{}) {
+			return o.Requirements.Get(corev1.LabelTopologyZone).Any(), struct{}{}
+		}))
+		offeringCapTypes := lo.Keys(lo.SliceToMap(offerings, func(o *cloudprovider.Offering) (string, struct{}) {
+			return o.Requirements.Get(coreapis.CapacityTypeLabelKey).Any(), struct{}{}
+		}))
+
+		// Create core InstanceType with fully-populated Requirements.
+		// Requirements are required for Karpenter's scheduling logic (arch, OS, zone, capacity-type filtering).
 		coreIT := &cloudprovider.InstanceType{
-			Name:         it.Name,
-			Requirements: computeInstanceTypeRequirements(it, inferRegionFromInstanceType(it)),
-			Capacity:     capacity,
-			Offerings:    offerings,
+			Name:      it.Name,
+			Capacity:  capacity,
+			Offerings: offerings,
+			Requirements: scheduling.NewRequirements(
+				scheduling.NewRequirement(corev1.LabelInstanceTypeStable, corev1.NodeSelectorOpIn, it.Name),
+				scheduling.NewRequirement(corev1.LabelArchStable, corev1.NodeSelectorOpIn, ecsArchToKubernetesArch(it.Architecture)),
+				scheduling.NewRequirement(corev1.LabelOSStable, corev1.NodeSelectorOpIn, string(corev1.Linux)),
+				scheduling.NewRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, offeringZones...),
+				scheduling.NewRequirement(coreapis.CapacityTypeLabelKey, corev1.NodeSelectorOpIn, offeringCapTypes...),
+			),
 			Overhead: &cloudprovider.InstanceTypeOverhead{
 				EvictionThreshold: evictionThreshold,
 				KubeReserved:      kubeReserved,
@@ -502,43 +516,9 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 
 // RepairPolicies returns the repair policies for Alibaba Cloud nodes
 func (c *CloudProvider) RepairPolicies() []cloudprovider.RepairPolicy {
-	return []cloudprovider.RepairPolicy{
-		{
-			ConditionType:      corev1.NodeReady,
-			ConditionStatus:    corev1.ConditionFalse,
-			TolerationDuration: 30 * time.Minute,
-		},
-		{
-			ConditionType:      corev1.NodeReady,
-			ConditionStatus:    corev1.ConditionUnknown,
-			TolerationDuration: 30 * time.Minute,
-		},
-		{
-			ConditionType:      "AcceleratedHardwareReady",
-			ConditionStatus:    corev1.ConditionFalse,
-			TolerationDuration: 10 * time.Minute,
-		},
-		{
-			ConditionType:      "StorageReady",
-			ConditionStatus:    corev1.ConditionFalse,
-			TolerationDuration: 30 * time.Minute,
-		},
-		{
-			ConditionType:      "NetworkingReady",
-			ConditionStatus:    corev1.ConditionFalse,
-			TolerationDuration: 30 * time.Minute,
-		},
-		{
-			ConditionType:      "KernelReady",
-			ConditionStatus:    corev1.ConditionFalse,
-			TolerationDuration: 30 * time.Minute,
-		},
-		{
-			ConditionType:      "ContainerRuntimeReady",
-			ConditionStatus:    corev1.ConditionFalse,
-			TolerationDuration: 30 * time.Minute,
-		},
-	}
+	// For Alibaba Cloud, we don't have specific repair policies yet
+	// Return an empty slice for now
+	return []cloudprovider.RepairPolicy{}
 }
 
 // GetSupportedNodeClasses returns the CloudProvider NodeClass that implements status.Object
@@ -641,61 +621,105 @@ func getCustomUserData(nodeClass *v1alpha1.ECSNodeClass) string {
 	return ""
 }
 
+// ecsArchToKubernetesArch maps ECS CpuArchitecture values to Kubernetes arch label values.
+// ECS returns "X86" for x86_64 and "ARM" or "ARM64" for AArch64.
+func ecsArchToKubernetesArch(ecsArch string) string {
+	if strings.HasPrefix(strings.ToLower(ecsArch), "arm") {
+		return "arm64"
+	}
+	return "amd64"
+}
+
 func buildInstanceTags(nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNodeClass) map[string]string {
 	tags := make(map[string]string)
 
-	protected := protectedInstanceTagKeys()
-
-	tags[v1alpha1.TagManagedBy] = v1alpha1.TagManagedByValue
+	// Layer 1: management tags — always present, required for List() tag filter
+	tags[v1alpha1.TagManagedBy] = "karpenter"
 	if nodeClass.Spec.ClusterID != "" {
 		tags[v1alpha1.TagClusterID] = nodeClass.Spec.ClusterID
 	}
-	if nodeClass.Spec.ClusterName != "" {
-		tags[v1alpha1.TagDiscovery] = nodeClass.Spec.ClusterName
-		tags[v1alpha1.TagCluster] = nodeClass.Spec.ClusterName
-	}
-	if nodePoolName := nodeClaim.Labels[coreapis.NodePoolLabelKey]; nodePoolName != "" {
-		tags[v1alpha1.TagNodePool] = nodePoolName
+
+	// Layer 2: traceability tags — values are K8s labels we wrote ourselves, always valid
+	if v, ok := nodeClaim.Labels[coreapis.NodePoolLabelKey]; ok {
+		tags[v1alpha1.TagNodePool] = v
 	}
 	if nodeClaim.Name != "" {
 		tags[v1alpha1.TagNodeClaim] = nodeClaim.Name
 	}
-	if nodeClass.Spec.Kubelet != nil && nodeClass.Spec.Kubelet.MaxPods != nil {
-		tags[v1alpha1.TagKubeletMaxPods] = strconv.FormatInt(int64(*nodeClass.Spec.Kubelet.MaxPods), 10)
-	}
 
-	for k, v := range nodeClaim.Labels {
-		if protected[k] {
-			continue
-		}
-		tags[k] = v
-	}
+	// Layer 3: user-defined tags — highest priority, may override layers 1 and 2
 	for k, v := range nodeClass.Spec.Tags {
-		if protected[k] {
-			continue
-		}
 		tags[k] = v
 	}
 
 	return tags
 }
 
-func managedInstanceTags() map[string]string {
-	return map[string]string{
-		v1alpha1.TagManagedBy: v1alpha1.TagManagedByValue,
+// instanceLabelsFromInstance builds K8s NodeClaim labels from a discovered ECS instance.
+// It never mirrors raw ECS tags as K8s labels — ECS tag values can contain characters
+// that K8s rejects (colons, slashes, @). Only values we control are trusted.
+func instanceLabelsFromInstance(inst *instance.Instance) map[string]string {
+	labels := map[string]string{
+		corev1.LabelTopologyZone:       inst.Zone,
+		v1alpha1.LabelCapacityType:     inst.CapacityType,
+		corev1.LabelArchStable:         ecsArchToKubernetesArch(inst.Architecture),
+		corev1.LabelOSStable:           "linux",
+		corev1.LabelInstanceTypeStable: inst.InstanceType,
 	}
+	// Restore NodePool label from the tag we wrote in buildInstanceTags (value is always valid)
+	if v, ok := inst.Tags[v1alpha1.TagNodePool]; ok {
+		labels[coreapis.NodePoolLabelKey] = v
+	}
+	return labels
 }
 
-func protectedInstanceTagKeys() map[string]bool {
-	return map[string]bool{
-		v1alpha1.TagManagedBy:      true,
-		v1alpha1.TagClusterID:      true,
-		v1alpha1.TagDiscovery:      true,
-		v1alpha1.TagNodePool:       true,
-		v1alpha1.TagNodeClaim:      true,
-		v1alpha1.TagCluster:        true,
-		v1alpha1.TagKubeletMaxPods: true,
+// capacityTypeFromRequirements returns "spot" when the NodeClaim requirements include
+// karpenter.sh/capacity-type In [spot], otherwise returns "on-demand".
+func capacityTypeFromRequirements(reqs []coreapis.NodeSelectorRequirementWithMinValues) string {
+	for _, req := range reqs {
+		if req.Key == v1alpha1.LabelCapacityType && req.Operator == corev1.NodeSelectorOpIn {
+			for _, v := range req.Values {
+				if v == "spot" {
+					return "spot"
+				}
+			}
+		}
 	}
+	return "on-demand"
+}
+
+// zonesFromRequirements extracts the allowed zones from a NodeClaim's requirements.
+// Returns nil when no topology.kubernetes.io/zone requirement is present (meaning any zone is allowed).
+func zonesFromRequirements(requirements []coreapis.NodeSelectorRequirementWithMinValues) []string {
+	for _, req := range requirements {
+		if req.Key == corev1.LabelTopologyZone && req.Operator == corev1.NodeSelectorOpIn {
+			return req.Values
+		}
+	}
+	return nil
+}
+
+// filterVSwitchesByZones returns only the vswitches whose zone matches one of the allowed zones.
+// When allowedZones is nil (no zone requirement), all vswitches are returned unchanged.
+func filterVSwitchesByZones(vswitches []v1alpha1.VSwitch, allowedZones []string) []v1alpha1.VSwitch {
+	if len(allowedZones) == 0 {
+		return vswitches
+	}
+	allowed := make(map[string]struct{}, len(allowedZones))
+	for _, z := range allowedZones {
+		allowed[z] = struct{}{}
+	}
+	var filtered []v1alpha1.VSwitch
+	for _, vs := range vswitches {
+		zone := vs.ZoneID
+		if zone == "" {
+			zone = vs.Zone
+		}
+		if _, ok := allowed[zone]; ok {
+			filtered = append(filtered, vs)
+		}
+	}
+	return filtered
 }
 
 // filterInstanceTypesByRequirements converts Karpenter requirements to instancetype requirements and filters
@@ -730,53 +754,40 @@ func (c *CloudProvider) filterInstanceTypesByRequirements(ctx context.Context, i
 	return c.instanceTypeProvider.Filter(ctx, instanceTypes, itRequirements)
 }
 
-func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClass *v1alpha1.ECSNodeClass, instanceTypes []*instancetype.InstanceType, images []v1alpha1.Image, vswitches []v1alpha1.VSwitch, securityGroups []v1alpha1.SecurityGroup, userData string, tags map[string]string) (string, error) {
-	// This is a simplified implementation that delegates to the instance provider
-	// In a production implementation, this should implement retry logic and capacity fallback
-
+func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNodeClass, instanceTypes []*instancetype.InstanceType, images []v1alpha1.Image, vswitches []v1alpha1.VSwitch, securityGroups []v1alpha1.SecurityGroup, userData string, tags map[string]string) (string, error) {
 	if len(instanceTypes) == 0 || len(images) == 0 || len(vswitches) == 0 || len(securityGroups) == 0 {
 		return "", fmt.Errorf("missing required parameters for instance creation")
 	}
 
-	// Select the first instance type, image, vswitch, and security group for simplicity
-	// In a real implementation, this should implement proper selection logic
 	instanceType := instanceTypes[0]
 	image := images[0]
-	vswitch := vswitches[0]
 	securityGroup := securityGroups[0]
 
-	// Build CreateOptions
-	opts := instance.CreateOptions{
+	baseOpts := instance.CreateOptions{
 		InstanceType: instanceType.Name,
 		ImageID:      image.ID,
-		VSwitchID:    vswitch.ID,
 		SecurityGroupIDs: []string{
 			securityGroup.ID,
 		},
 		UserData: userData,
 		Tags:     tags,
 		SystemDisk: instance.SystemDisk{
-			Category:         "cloud_essd", // Default category
-			Size:             40,           // Default size in GB
+			Category:         "cloud_essd",
+			Size:             40,
 			PerformanceLevel: "PL0",
 		},
 	}
-	if nodeClass.Status.RAMRole != nil {
-		opts.RAMRoleName = *nodeClass.Status.RAMRole
-	} else if nodeClass.Spec.Role != nil {
-		opts.RAMRoleName = *nodeClass.Spec.Role
-	}
 	if nodeClass.Spec.SystemDisk != nil {
-		opts.SystemDisk.Category = nodeClass.Spec.SystemDisk.Category
+		baseOpts.SystemDisk.Category = nodeClass.Spec.SystemDisk.Category
 		if nodeClass.Spec.SystemDisk.Size != nil {
-			opts.SystemDisk.Size = *nodeClass.Spec.SystemDisk.Size
+			baseOpts.SystemDisk.Size = *nodeClass.Spec.SystemDisk.Size
 		}
 		if nodeClass.Spec.SystemDisk.PerformanceLevel != nil {
-			opts.SystemDisk.PerformanceLevel = *nodeClass.Spec.SystemDisk.PerformanceLevel
+			baseOpts.SystemDisk.PerformanceLevel = *nodeClass.Spec.SystemDisk.PerformanceLevel
 		}
 	}
 	if nodeClass.Spec.DataDisks != nil {
-		opts.DataDisks = []instance.DataDisk{}
+		baseOpts.DataDisks = []instance.DataDisk{}
 		for _, disk := range nodeClass.Spec.DataDisks {
 			dataDisk := instance.DataDisk{
 				Category: disk.Category,
@@ -788,62 +799,70 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClass *
 			if disk.PerformanceLevel != nil {
 				dataDisk.PerformanceLevel = *disk.PerformanceLevel
 			}
-			opts.DataDisks = append(opts.DataDisks, dataDisk)
+			baseOpts.DataDisks = append(baseOpts.DataDisks, dataDisk)
 		}
 	}
-	if nodeClass.Spec.SpotStrategy != nil {
-		opts.SpotStrategy = *nodeClass.Spec.SpotStrategy
-	}
-	if nodeClass.Spec.SpotPriceLimit != nil {
-		opts.SpotPriceLimit = *nodeClass.Spec.SpotPriceLimit
-	}
-	if nodeClass.Spec.LaunchTemplateID != nil {
-		opts.LaunchTemplateID = *nodeClass.Spec.LaunchTemplateID
-	}
-	if nodeClass.Spec.LaunchTemplateVersion != nil {
-		opts.LaunchTemplateVersion = nodeClass.Spec.LaunchTemplateVersion
-	}
-	if nodeClass.Spec.CapacityReservationPreference != nil {
-		opts.CapacityReservationPreference = *nodeClass.Spec.CapacityReservationPreference
-	}
-	if strings.EqualFold(opts.CapacityReservationPreference, "target") {
-		if c.capacityReservationProvider == nil {
-			return "", fmt.Errorf("capacity reservation provider is required for target capacity reservation preference")
+	// Derive capacity type from NodeClaim requirements (karpenter.sh/capacity-type).
+	// ECSNodeClass.Spec.SpotStrategy controls the algorithm only when spot is requested.
+	capacityType := capacityTypeFromRequirements(nodeClaim.Spec.Requirements)
+	if capacityType == "spot" {
+		if nodeClass.Spec.SpotStrategy != nil {
+			baseOpts.SpotStrategy = *nodeClass.Spec.SpotStrategy
+		} else {
+			baseOpts.SpotStrategy = "SpotAsPriceGo"
 		}
-		capacityReservations, err := c.capacityReservationProvider.Resolve(ctx, nodeClass.Spec.CapacityReservationSelectorTerms)
-		if err != nil {
-			return "", fmt.Errorf("resolve capacity reservations: %w", err)
+		if nodeClass.Spec.SpotPriceLimit != nil {
+			baseOpts.SpotPriceLimit = *nodeClass.Spec.SpotPriceLimit
 		}
-		if len(capacityReservations) == 0 {
-			return "", fmt.Errorf("target capacity reservation preference requires at least one resolved capacity reservation")
-		}
-		opts.CapacityReservationID = capacityReservations[0].ID
+	} else {
+		baseOpts.SpotStrategy = "NoSpot"
 	}
 
-	// Call the instance provider's Create method
-	instanceID, err := c.instanceProvider.Create(ctx, opts)
-	if err != nil {
+	if c.clusterNetworkConfig != nil && c.clusterNetworkConfig.DualStack {
+		one := int32(1)
+		baseOpts.Ipv6AddressCount = &one
+	}
+
+	return vswitchFallbackCreate(ctx, baseOpts, vswitches, c.instanceProvider.Create)
+}
+
+// vswitchFallbackCreate tries vswitches in order, falling back to the next on capacity or IP-exhaustion
+// errors. Non-retryable errors cause an immediate return.
+func vswitchFallbackCreate(ctx context.Context, baseOpts instance.CreateOptions, vswitches []v1alpha1.VSwitch, createFn func(context.Context, instance.CreateOptions) (string, error)) (string, error) {
+	sorted := make([]v1alpha1.VSwitch, len(vswitches))
+	copy(sorted, vswitches)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].AvailableIPAddressCount > sorted[j].AvailableIPAddressCount
+	})
+
+	var lastErr error
+	for _, vsw := range sorted {
+		opts := baseOpts
+		opts.VSwitchID = vsw.ID
+		instanceID, err := createFn(ctx, opts)
+		if err == nil {
+			return instanceID, nil
+		}
+		if errors.IsInsufficientCapacityError(err) {
+			log.FromContext(ctx).Info("vSwitch capacity/IP exhausted, trying next",
+				"vswitch", vsw.ID, "zone", vsw.Zone, "error", err)
+			lastErr = err
+			continue
+		}
 		return "", fmt.Errorf("failed to create instance: %w", err)
 	}
-
-	return instanceID, nil
+	return "", fmt.Errorf("all vSwitches exhausted, last error: %w", lastErr)
 }
 
 func (c *CloudProvider) convertInstanceToNodeClaim(ctx context.Context, inst *instance.Instance, original *coreapis.NodeClaim, instanceTypes []*instancetype.InstanceType, clusterID string) *coreapis.NodeClaim {
-	labels := make(map[string]string, len(original.Labels)+16)
-	for k, v := range original.Labels {
-		labels[k] = v
-	}
+	labels := make(map[string]string)
 	// Find instance type info
 	var capacity corev1.ResourceList
 	var allocatable corev1.ResourceList
-	var matchedInstanceType *instancetype.InstanceType
 
 	for _, it := range instanceTypes {
 		if it.Name == inst.InstanceType {
-			matchedInstanceType = it
 			capacity, allocatable, _ = c.calculateCapacityAndAllocatable(ctx, it, clusterID)
-			capacity, allocatable = capPodCapacityFromInstanceTags(capacity, allocatable, inst.Tags)
 			break
 		}
 	}
@@ -853,60 +872,18 @@ func (c *CloudProvider) convertInstanceToNodeClaim(ctx context.Context, inst *in
 	nodeClaim.Status.ProviderID = fmt.Sprintf("%s.%s", inst.Region, inst.InstanceID)
 	nodeClaim.Status.Capacity = capacity
 	nodeClaim.Status.Allocatable = allocatable
-	nodeClaim.Status.ImageID = inst.ImageID
 
 	labels[corev1.LabelTopologyZone] = inst.Zone
 	labels[v1alpha1.LabelCapacityType] = inst.CapacityType
 	labels[v1alpha1.LabelInstanceType] = inst.InstanceType
-	labels[corev1.LabelTopologyRegion] = inst.Region
-	labels[corev1.LabelOSStable] = v1alpha1.OSLinux
-	if matchedInstanceType != nil {
-		labels[corev1.LabelArchStable] = kubeArchitecture(matchedInstanceType.Architecture)
-		labels[v1alpha1.LabelInstanceFamily] = instanceFamily(matchedInstanceType.Name)
-		labels[v1alpha1.LabelInstanceCategory] = instanceCategory(matchedInstanceType.Name)
-		labels[v1alpha1.LabelInstanceGeneration] = instanceGeneration(matchedInstanceType.Name)
-		labels[v1alpha1.LabelInstanceSize] = instanceSize(matchedInstanceType.Name)
-		labels[v1alpha1.LabelInstanceCPU] = quantityValue(matchedInstanceType.CPU)
-		labels[v1alpha1.LabelInstanceMemory] = quantityMiB(matchedInstanceType.Memory)
-		if matchedInstanceType.GPU != nil {
-			labels[v1alpha1.LabelInstanceGPUName] = v1alpha1.NormalizeLabelValue(matchedInstanceType.GPU.Model)
-			labels[v1alpha1.LabelInstanceGPUManufacturer] = "nvidia"
-			labels[v1alpha1.LabelInstanceGPUCount] = quantityValue(matchedInstanceType.GPU.Count)
-			labels[v1alpha1.LabelInstanceGPUMemory] = quantityValue(matchedInstanceType.GPU.Memory)
-		}
-	}
-	if v, ok := inst.Tags[coreapis.NodePoolLabelKey]; ok {
+	labels[corev1.LabelArchStable] = ecsArchToKubernetesArch(inst.Architecture)
+	labels[corev1.LabelOSStable] = "linux"
+	labels[corev1.LabelInstanceTypeStable] = inst.InstanceType
+	if v, ok := inst.Tags[v1alpha1.TagNodePool]; ok {
 		labels[coreapis.NodePoolLabelKey] = v
 	}
 	nodeClaim.Labels = labels
 	return nodeClaim
-}
-
-func capPodCapacityFromInstanceTags(capacity, allocatable corev1.ResourceList, tags map[string]string) (corev1.ResourceList, corev1.ResourceList) {
-	raw := strings.TrimSpace(tags[v1alpha1.TagKubeletMaxPods])
-	if raw == "" {
-		return capacity, allocatable
-	}
-	maxPods, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || maxPods <= 0 {
-		return capacity, allocatable
-	}
-	capacity = capResourcePods(capacity, maxPods)
-	allocatable = capResourcePods(allocatable, maxPods)
-	return capacity, allocatable
-}
-
-func capResourcePods(resources corev1.ResourceList, maxPods int64) corev1.ResourceList {
-	if resources == nil {
-		return resources
-	}
-	current, ok := resources[corev1.ResourcePods]
-	if !ok || current.Value() <= maxPods {
-		return resources
-	}
-	capped := resources.DeepCopy()
-	capped[corev1.ResourcePods] = *resource.NewQuantity(maxPods, resource.DecimalSI)
-	return capped
 }
 
 func setNodeClassHashAnnotation(nodeClaim *coreapis.NodeClaim, hash string) {
@@ -982,32 +959,24 @@ func isSecurityGroupAllowed(instanceSGs []string, allowedSGs []v1alpha1.Security
 func calculateNodeClassHash(nodeClass *v1alpha1.ECSNodeClass) string {
 	// NodeClassHashInput contains the fields that should trigger drift when changed
 	type NodeClassHashInput struct {
-		VSwitchSelectorTerms             []v1alpha1.VSwitchSelectorTerm             `json:"vSwitchSelectorTerms"`
-		SecurityGroupSelectorTerms       []v1alpha1.SecurityGroupSelectorTerm       `json:"securityGroupSelectorTerms"`
-		ImageSelectorTerms               []v1alpha1.ImageSelectorTerm               `json:"imageSelectorTerms"`
-		ImageFamily                      *string                                    `json:"imageFamily,omitempty"`
-		UserData                         *string                                    `json:"userData,omitempty"`
-		Kubelet                          *v1alpha1.KubeletConfiguration             `json:"kubelet,omitempty"`
-		SystemDisk                       *v1alpha1.SystemDiskSpec                   `json:"systemDisk,omitempty"`
-		DataDisks                        []v1alpha1.DataDiskSpec                    `json:"dataDisks,omitempty"`
-		Tags                             map[string]string                          `json:"tags,omitempty"`
-		Role                             *string                                    `json:"role,omitempty"`
-		CapacityReservationPreference    *string                                    `json:"capacityReservationPreference,omitempty"`
-		CapacityReservationSelectorTerms []v1alpha1.CapacityReservationSelectorTerm `json:"capacityReservationSelectorTerms,omitempty"`
+		VSwitchSelectorTerms       []v1alpha1.VSwitchSelectorTerm       `json:"vSwitchSelectorTerms"`
+		SecurityGroupSelectorTerms []v1alpha1.SecurityGroupSelectorTerm `json:"securityGroupSelectorTerms"`
+		ImageSelectorTerms         []v1alpha1.ImageSelectorTerm         `json:"imageSelectorTerms"`
+		ImageFamily                *string                              `json:"imageFamily,omitempty"`
+		UserData                   *string                              `json:"userData,omitempty"`
+		Kubelet                    *v1alpha1.KubeletConfiguration       `json:"kubelet,omitempty"`
+		Tags                       map[string]string                    `json:"tags,omitempty"`
+		Role                       *string                              `json:"role,omitempty"`
 	}
 
 	hashInput := NodeClassHashInput{
-		VSwitchSelectorTerms:             nodeClass.Spec.VSwitchSelectorTerms,
-		SecurityGroupSelectorTerms:       nodeClass.Spec.SecurityGroupSelectorTerms,
-		ImageSelectorTerms:               nodeClass.Spec.ImageSelectorTerms,
-		UserData:                         nodeClass.Spec.UserData,
-		Kubelet:                          nodeClass.Spec.Kubelet,
-		SystemDisk:                       nodeClass.Spec.SystemDisk,
-		DataDisks:                        nodeClass.Spec.DataDisks,
-		Tags:                             nodeClass.Spec.Tags,
-		Role:                             nodeClass.Spec.Role,
-		CapacityReservationPreference:    nodeClass.Spec.CapacityReservationPreference,
-		CapacityReservationSelectorTerms: nodeClass.Spec.CapacityReservationSelectorTerms,
+		VSwitchSelectorTerms:       nodeClass.Spec.VSwitchSelectorTerms,
+		SecurityGroupSelectorTerms: nodeClass.Spec.SecurityGroupSelectorTerms,
+		ImageSelectorTerms:         nodeClass.Spec.ImageSelectorTerms,
+		UserData:                   nodeClass.Spec.UserData,
+		Kubelet:                    nodeClass.Spec.Kubelet,
+		Tags:                       nodeClass.Spec.Tags,
+		Role:                       nodeClass.Spec.Role,
 	}
 
 	// Serialize to JSON with deterministic ordering
@@ -1135,130 +1104,6 @@ func (c *CloudProvider) calculateCapacityAndAllocatable(ctx context.Context, it 
 	allocatable = resourcesSubtract(capacity, overhead)
 
 	return capacity, allocatable, nil
-}
-
-func computeInstanceTypeRequirements(it *instancetype.InstanceType, region string) scheduling.Requirements {
-	zones := availableInstanceTypeZones(it)
-	requirements := scheduling.NewRequirements(
-		scheduling.NewRequirement(corev1.LabelInstanceTypeStable, corev1.NodeSelectorOpIn, it.Name),
-		scheduling.NewRequirement(corev1.LabelArchStable, corev1.NodeSelectorOpIn, kubeArchitecture(it.Architecture)),
-		scheduling.NewRequirement(corev1.LabelOSStable, corev1.NodeSelectorOpIn, v1alpha1.OSLinux),
-		scheduling.NewRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, zones...),
-		scheduling.NewRequirement(corev1.LabelTopologyRegion, corev1.NodeSelectorOpIn, region),
-		scheduling.NewRequirement(v1alpha1.LabelCapacityType, corev1.NodeSelectorOpIn, v1alpha1.CapacityTypeOnDemand, v1alpha1.CapacityTypeSpot),
-		scheduling.NewRequirement(v1alpha1.LabelInstanceFamily, corev1.NodeSelectorOpIn, instanceFamily(it.Name)),
-		scheduling.NewRequirement(v1alpha1.LabelInstanceCategory, corev1.NodeSelectorOpIn, instanceCategory(it.Name)),
-		scheduling.NewRequirement(v1alpha1.LabelInstanceGeneration, corev1.NodeSelectorOpIn, instanceGeneration(it.Name)),
-		scheduling.NewRequirement(v1alpha1.LabelInstanceSize, corev1.NodeSelectorOpIn, instanceSize(it.Name)),
-		scheduling.NewRequirement(v1alpha1.LabelInstanceCPU, corev1.NodeSelectorOpIn, quantityValue(it.CPU)),
-		scheduling.NewRequirement(v1alpha1.LabelInstanceMemory, corev1.NodeSelectorOpIn, quantityMiB(it.Memory)),
-		scheduling.NewRequirement(v1alpha1.LabelCapacityReservationID, corev1.NodeSelectorOpDoesNotExist),
-		scheduling.NewRequirement(v1alpha1.LabelCapacityReservationType, corev1.NodeSelectorOpDoesNotExist),
-	)
-	if it.GPU != nil {
-		requirements.Add(
-			scheduling.NewRequirement(v1alpha1.LabelInstanceGPUName, corev1.NodeSelectorOpIn, v1alpha1.NormalizeLabelValue(it.GPU.Model)),
-			scheduling.NewRequirement(v1alpha1.LabelInstanceGPUManufacturer, corev1.NodeSelectorOpIn, "nvidia"),
-			scheduling.NewRequirement(v1alpha1.LabelInstanceGPUCount, corev1.NodeSelectorOpIn, quantityValue(it.GPU.Count)),
-			scheduling.NewRequirement(v1alpha1.LabelInstanceGPUMemory, corev1.NodeSelectorOpIn, quantityValue(it.GPU.Memory)),
-		)
-	} else {
-		requirements.Add(
-			scheduling.NewRequirement(v1alpha1.LabelInstanceGPUName, corev1.NodeSelectorOpDoesNotExist),
-			scheduling.NewRequirement(v1alpha1.LabelInstanceGPUManufacturer, corev1.NodeSelectorOpDoesNotExist),
-			scheduling.NewRequirement(v1alpha1.LabelInstanceGPUCount, corev1.NodeSelectorOpDoesNotExist),
-			scheduling.NewRequirement(v1alpha1.LabelInstanceGPUMemory, corev1.NodeSelectorOpDoesNotExist),
-		)
-	}
-	return requirements
-}
-
-func availableInstanceTypeZones(it *instancetype.InstanceType) []string {
-	zones := make([]string, 0, len(it.Zones))
-	for zone, info := range it.Zones {
-		if info.Available {
-			zones = append(zones, zone)
-		}
-	}
-	sort.Strings(zones)
-	return zones
-}
-
-func inferRegionFromInstanceType(it *instancetype.InstanceType) string {
-	for _, zone := range availableInstanceTypeZones(it) {
-		if idx := strings.LastIndex(zone, "-"); idx > 0 {
-			return zone[:idx]
-		}
-	}
-	return ""
-}
-
-func instanceFamily(name string) string {
-	parts := strings.Split(strings.TrimPrefix(name, "ecs."), ".")
-	if len(parts) == 0 {
-		return ""
-	}
-	return parts[0]
-}
-
-func instanceSize(name string) string {
-	parts := strings.Split(strings.TrimPrefix(name, "ecs."), ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	return parts[1]
-}
-
-func instanceCategory(name string) string {
-	family := instanceFamily(name)
-	var b strings.Builder
-	for _, r := range family {
-		if r < 'a' || r > 'z' {
-			break
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
-func instanceGeneration(name string) string {
-	family := instanceFamily(name)
-	var b strings.Builder
-	for _, r := range family {
-		if r >= '0' && r <= '9' {
-			b.WriteRune(r)
-			continue
-		}
-		if b.Len() > 0 {
-			break
-		}
-	}
-	return b.String()
-}
-
-func quantityValue(q *resource.Quantity) string {
-	if q == nil {
-		return ""
-	}
-	return fmt.Sprint(q.Value())
-}
-
-func quantityMiB(q *resource.Quantity) string {
-	if q == nil {
-		return ""
-	}
-	return fmt.Sprint(q.Value() / (1024 * 1024))
-}
-
-func kubeArchitecture(arch string) string {
-	switch strings.ToLower(strings.TrimSpace(arch)) {
-	case "x86", "x86_64", "amd64":
-		return v1alpha1.ArchitectureAmd64
-	case "arm64", "aarch64":
-		return v1alpha1.ArchitectureArm64
-	default:
-		return arch
-	}
 }
 
 // parseLaunchTime parses instance creation time with fallback to current time
