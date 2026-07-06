@@ -42,13 +42,14 @@ import (
 	"time"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
+	cs "github.com/AliyunContainerService/karpenter-provider-alibabacloud/test/pkg/cs"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
@@ -75,6 +76,7 @@ var _ = Describe("ZoneFiltering", Label("zone-filtering"), func() {
 		vswitchA  string
 		vswitchB  string
 		sgID      string
+		clusterID string
 	)
 
 	BeforeEach(func() {
@@ -85,6 +87,7 @@ var _ = Describe("ZoneFiltering", Label("zone-filtering"), func() {
 		vswitchA = mustEnv("TEST_VSWITCH_ZONE_A")
 		vswitchB = mustEnv("TEST_VSWITCH_ZONE_B")
 		sgID = mustEnv("TEST_SECURITY_GROUP_ID")
+		clusterID = mustEnv("TEST_CLUSTER_ID")
 
 		kubeconfig := os.Getenv("KUBECONFIG")
 		if kubeconfig == "" {
@@ -97,17 +100,29 @@ var _ = Describe("ZoneFiltering", Label("zone-filtering"), func() {
 		k8sClient, err = client.New(cfg, client.Options{Scheme: scheme})
 		Expect(err).NotTo(HaveOccurred())
 
+		imageID := cs.DefaultImageID
+		diskSize := int32(40)
 		nodeClass = &v1alpha1.ECSNodeClass{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "zone-filter-test-nc",
 			},
 			Spec: v1alpha1.ECSNodeClassSpec{
+				ClusterID: clusterID,
 				VSwitchSelectorTerms: []v1alpha1.VSwitchSelectorTerm{
 					{ID: &vswitchA},
 					{ID: &vswitchB},
 				},
 				SecurityGroupSelectorTerms: []v1alpha1.SecurityGroupSelectorTerm{
 					{ID: &sgID},
+				},
+				ImageSelectorTerms: []v1alpha1.ImageSelectorTerm{
+					{ID: &imageID},
+				},
+				// Use cloud_efficiency (universally supported) to avoid
+				// InvalidInstanceType.NotSupportDiskCategory errors.
+				SystemDisk: &v1alpha1.SystemDiskSpec{
+					Category: "cloud_efficiency",
+					Size:     &diskSize,
 				},
 				Tags: map[string]string{
 					"testing/purpose": "zone-filter",
@@ -211,17 +226,7 @@ var _ = Describe("ZoneFiltering", Label("zone-filtering"), func() {
 })
 
 func buildScheme() *runtime.Scheme {
-	s := runtime.NewScheme()
-	_ = corev1.AddToScheme(s)
-	_ = v1alpha1.AddToScheme(s)
-	// karpenter v1 types (NodePool, NodeClaim) are registered via init() in karpv1 package;
-	// mirror that registration here so the controller-runtime client can encode/decode them.
-	karpGV := schema.GroupVersion{Group: "karpenter.sh", Version: "v1"}
-	s.AddKnownTypes(karpGV,
-		&karpv1.NodePool{},
-		&karpv1.NodePoolList{},
-		&karpv1.NodeClaim{},
-		&karpv1.NodeClaimList{},
-	)
-	return s
+	// karpv1 init() and cs init() already register all types (NodePool, NodeClaim,
+	// ECSNodeClass, core types, and GroupVersion options) into clientgoscheme.Scheme.
+	return clientgoscheme.Scheme
 }
