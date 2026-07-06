@@ -2,6 +2,27 @@ apiVersion: v1
 entries:
   karpenter:
   - apiVersion: v2
+    appVersion: 0.2.2
+    created: "2026-07-06T09:47:44.005151+08:00"
+    description: A Helm chart for Karpenter AlibabaCloud Provider
+    digest: e7b91b72e2448aa0838a0394f7a6eb2709b1a126a4a746c0d643757853c4af7c
+    home: https://github.com/AliyunContainerService/karpenter-provider-alibabacloud
+    keywords:
+    - karpenter
+    - alibabacloud
+    - kubernetes
+    - autoscaling
+    maintainers:
+    - email: kubernetes@alibaba-inc.com
+      name: Alibaba Cloud Container Service Team
+    name: karpenter
+    sources:
+    - https://github.com/AliyunContainerService/karpenter-provider-alibabacloud
+    type: application
+    urls:
+    - https://github.com/AliyunContainerService/karpenter-provider-alibabacloud/releases/download/v0.2.2/karpenter-0.2.2.tgz
+    version: 0.2.2
+  - apiVersion: v2
     appVersion: 0.2.1
     created: "2026-03-23T03:31:55.177091+08:00"
     description: A Helm chart for Karpenter AlibabaCloud Provider
@@ -43,4 +64,4 @@ entries:
     urls:
     - https://github.com/AliyunContainerService/karpenter-provider-alibabacloud/releases/download/v0.2.0/karpenter-0.2.0.tgz
     version: 0.2.0
-generated: "2026-03-23T03:31:55.174375+08:00"
+generated: "2026-07-06T09:47:44.005151+08:00"
