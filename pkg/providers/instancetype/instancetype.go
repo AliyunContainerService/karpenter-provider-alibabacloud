@@ -89,10 +89,35 @@ type InstanceType struct {
 	EniPrivateIpAddressQuantity int
 }
 
-// ZoneInfo represents information about an instance type in a specific zone
+// ZoneInfo describes the availability of an instance type in one availability zone.
+//
+// # Design contract: Available=false entries must be preserved
+//
+// Karpenter's drift controller (nodeclaim/disruption/drift.go) calls GetInstanceTypes()
+// and then checks Offerings.HasCompatible(nodeLabels). HasCompatible does NOT filter by
+// Offering.Available — it only checks requirement labels (zone, capacityType).
+//
+// Consequence: if a zone temporarily runs out of inventory and we drop the ZoneInfo entry
+// (or set CapacityTypes to empty without preserving KnownCapacityTypes), GetInstanceTypes()
+// will produce no Offering for the (zone, capacityType) that the running node was launched
+// with. HasCompatible returns false → node is falsely marked InstanceTypeNotFound → evicted.
+//
+// Rule: once a (zone, capacityType) combination has been seen in DescribeAvailableResource
+// (even as WithoutStock), keep it in KnownCapacityTypes and set Available=false until the
+// entry disappears from the API entirely (i.e., the instance type is permanently removed).
 type ZoneInfo struct {
-	Available     bool
-	CapacityTypes []string // Karpenter capacity types with stock: "on-demand", "spot"
+	// Available is true when at least one capacity type has current inventory in this zone.
+	// Used by the scheduler: Offerings.Available() filters to Available=true before placement.
+	Available bool
+	// CapacityTypes lists capacity types that currently have stock ("on-demand", "spot").
+	// The scheduler uses this set to create Available=true Offerings.
+	CapacityTypes []string
+	// KnownCapacityTypes lists all capacity types seen in DescribeAvailableResource for this
+	// zone, regardless of stock status. It is a superset of CapacityTypes.
+	// GetInstanceTypes uses this to emit Available=false Offerings, ensuring the drift
+	// controller can always find a compatible Offering for running nodes even after inventory
+	// drops to zero. Never shrink this set based on a single API poll.
+	KnownCapacityTypes []string
 }
 
 // GPU represents GPU information
@@ -335,21 +360,24 @@ func (p *Provider) getAvailableZones(ctx context.Context) (map[string]ZoneInfo, 
 }
 
 // getInventory fetches per-instance-type per-zone stock from DescribeAvailableResource for
-// on-demand and spot capacity types. Returns map[instanceTypeID]map[zoneID][]capacityType
-// where capacityType is a karpenter capacity type ("on-demand" or "spot").
+// on-demand and spot capacity types. Returns map[instanceTypeID]map[zoneID]map[capacityType]hasStock
+// where hasStock indicates whether the capacity type currently has inventory in that zone.
+// Entries with WithoutStock/ClosedWithoutStock are included with hasStock=false so that
+// drift detection can distinguish "temporarily out of stock" from "never supported here".
 // Returns nil on API error — callers treat nil as "optimistic: all capacity types available".
-func (p *Provider) getInventory(ctx context.Context) map[string]map[string][]string {
+func (p *Provider) getInventory(ctx context.Context) map[string]map[string]map[string]bool {
 	logger := log.FromContext(ctx)
 
 	cacheKey := "inventory"
 	if cachedValue, exists := p.getCachedValue(cacheKey); exists {
-		if inv, ok := cachedValue.(map[string]map[string][]string); ok {
+		if inv, ok := cachedValue.(map[string]map[string]map[string]bool); ok {
 			logger.V(1).Info("Found inventory in cache")
 			return inv
 		}
 	}
 
-	inventory := make(map[string]map[string][]string)
+	// map[instanceTypeID]map[zoneID]map[capacityType]hasCurrentStock
+	inventory := make(map[string]map[string]map[string]bool)
 
 	type queryParams struct {
 		spotStrategy string
@@ -389,14 +417,23 @@ func (p *Provider) getInventory(ctx context.Context) map[string]map[string][]str
 						continue
 					}
 					status := *sr.StatusCategory
-					if status != stockStatusWithStock && status != stockStatusClosedWithStock {
-						continue
+					hasStock := status == stockStatusWithStock || status == stockStatusClosedWithStock
+					// Track all known statuses (WithoutStock included) so we can distinguish
+					// "temporarily unavailable" from "never existed in this zone".
+					if !hasStock && status != stockStatusWithoutStock && status != stockStatusClosedWithoutStock {
+						continue // unrecognised status — skip
 					}
 					itID := *sr.Value
 					if inventory[itID] == nil {
-						inventory[itID] = make(map[string][]string)
+						inventory[itID] = make(map[string]map[string]bool)
 					}
-					inventory[itID][zoneID] = append(inventory[itID][zoneID], q.capacityType)
+					if inventory[itID][zoneID] == nil {
+						inventory[itID][zoneID] = make(map[string]bool)
+					}
+					// Never downgrade a "has stock" entry to "no stock" within the same batch.
+					if existing, seen := inventory[itID][zoneID][q.capacityType]; !seen || (!existing && hasStock) {
+						inventory[itID][zoneID][q.capacityType] = hasStock
+					}
 				}
 			}
 		}
@@ -436,7 +473,11 @@ func (p *Provider) List(ctx context.Context) ([]*InstanceType, error) {
 		return nil, fmt.Errorf("failed to describe instance types: %w", err)
 	}
 
-	// Convert to our InstanceType type, filtering zones by inventory stock
+	// Convert to our InstanceType type, reflecting real-time stock from DescribeAvailableResource.
+	// Zones that are temporarily out-of-stock are included with Available=false so that the
+	// karpenter drift controller does not falsely evict running nodes (see cloudprovider.go
+	// GetInstanceTypes). The scheduler uses Offerings.Available() and therefore ignores
+	// Available=false offerings when placing new pods.
 	var instanceTypes []*InstanceType
 	for _, it := range response.Body.InstanceTypes.InstanceType {
 		if it == nil || it.InstanceTypeId == nil {
@@ -444,26 +485,49 @@ func (p *Provider) List(ctx context.Context) ([]*InstanceType, error) {
 		}
 		itID := *it.InstanceTypeId
 
-		// Build zone map filtered by real stock data from DescribeAvailableResource
+		// Build zone map from DescribeAvailableResource data.
+		// Zones that appear in the API (even as WithoutStock) are preserved with Available=false
+		// so that drift detection keeps working after a transient inventory shortage.
 		itZones := make(map[string]ZoneInfo)
 		for zoneID, zoneInfo := range zones {
 			if !zoneInfo.Available {
 				continue
 			}
-			var capacityTypes []string
 			if inventory == nil {
-				// API unavailable: optimistic fallback — assume both capacity types available
-				capacityTypes = []string{capacityTypeOnDemand, capacityTypeSpot}
-			} else if invZones, ok := inventory[itID]; ok {
-				capacityTypes = invZones[zoneID]
+				// API unavailable: optimistic fallback — assume both capacity types available.
+				itZones[zoneID] = ZoneInfo{
+					Available:          true,
+					CapacityTypes:      []string{capacityTypeOnDemand, capacityTypeSpot},
+					KnownCapacityTypes: []string{capacityTypeOnDemand, capacityTypeSpot},
+				}
+				continue
 			}
-			if len(capacityTypes) == 0 {
-				continue // no stock for this instance type in this zone
+			invZones, itKnown := inventory[itID]
+			if !itKnown {
+				// Instance type not seen in DescribeAvailableResource at all — skip zone.
+				continue
 			}
-			itZones[zoneID] = ZoneInfo{Available: true, CapacityTypes: capacityTypes}
+			capTypeMap, zoneKnown := invZones[zoneID]
+			if !zoneKnown {
+				// Zone not seen for this instance type — skip.
+				continue
+			}
+			// Build available and known capacity-type slices.
+			var availCapTypes, knownCapTypes []string
+			for ct, hasStock := range capTypeMap {
+				knownCapTypes = append(knownCapTypes, ct)
+				if hasStock {
+					availCapTypes = append(availCapTypes, ct)
+				}
+			}
+			itZones[zoneID] = ZoneInfo{
+				Available:          len(availCapTypes) > 0,
+				CapacityTypes:      availCapTypes,
+				KnownCapacityTypes: knownCapTypes,
+			}
 		}
 
-		// Skip instance types with no stock in any zone
+		// Skip instance types with no known zones at all (truly unsupported in the region).
 		if len(itZones) == 0 {
 			continue
 		}

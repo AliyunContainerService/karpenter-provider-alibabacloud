@@ -118,8 +118,20 @@ const (
 	DefaultPodsLimit                                       = 110
 )
 
-// Create creates a new instance for the given NodeClaim
-// This implements the cloudprovider.CloudProvider interface
+// Create creates a new instance for the given NodeClaim.
+//
+// # Karpenter contract (upstream: cloudprovider/types.go)
+//
+//   - Return cloudprovider.NewNodeClassNotReadyError() when the NodeClass is not ready.
+//     Karpenter treats this as a non-fatal signal and retries; any other error is treated
+//     as a hard failure.
+//   - Return cloudprovider.NewCreateError() with a reason/message for structured failures
+//     (e.g. quota exhaustion, unsupported config) so the event is surfaced on the NodeClaim.
+//   - The returned NodeClaim must have Labels populated (at minimum topology.kubernetes.io/zone,
+//     node.kubernetes.io/instance-type, karpenter.sh/capacity-type, kubernetes.io/arch, kubernetes.io/os)
+//     because Karpenter core reads those labels to build NodePool scheduling constraints.
+//   - Set the NodeClass hash annotation (v1alpha1.AnnotationECSNodeClassHash) on the returned
+//     NodeClaim so that IsDrifted can detect config changes.
 func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClaim) (*coreapis.NodeClaim, error) {
 	// 1. Get ECSNodeClass from NodeClassRef
 	nodeClass := &v1alpha1.ECSNodeClass{}
@@ -211,7 +223,15 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
 	return createdNodeClaim, nil
 }
 
-// Delete deletes the instance for the given NodeClaim
+// Delete terminates the cloud instance backing the given NodeClaim.
+//
+// # Karpenter contract (upstream: cloudprovider/types.go)
+//
+//   - Return cloudprovider.NewNodeClaimNotFoundError() when the instance is already gone.
+//     Karpenter keeps retrying Delete until it receives this error, so returning nil when
+//     the instance does not exist will cause an infinite retry loop.
+//   - Return nil only after deletion has been successfully *triggered* (not necessarily
+//     completed); Karpenter will confirm via Get/List once the node disappears.
 func (c *CloudProvider) Delete(ctx context.Context, nodeClaim *coreapis.NodeClaim) error {
 	log.FromContext(ctx).Info("CloudProvider.Delete called", "nodeClaimName", nodeClaim.Name, "providerID", nodeClaim.Status.ProviderID)
 
@@ -346,7 +366,40 @@ func (c *CloudProvider) List(ctx context.Context) ([]*coreapis.NodeClaim, error)
 	return nodeClaims, nil
 }
 
-// GetInstanceTypes returns available instance types for the NodePool
+// GetInstanceTypes returns instance types supported by this provider for the given NodePool.
+//
+// # Karpenter contract (upstream: cloudprovider/types.go, controllers/nodeclaim/disruption/drift.go)
+//
+// ## Offerings must include temporarily-unavailable entries (Available: false)
+//
+// The drift controller calls GetInstanceTypes() every 30 min (starting 1 h after node creation)
+// and runs instanceTypeNotFound(), which checks:
+//
+//  1. Is the node's instance type present in the returned list?  (lo.Find by name)
+//  2. Does any Offering match the node's (zone, capacityType) labels?  (Offerings.HasCompatible)
+//
+// HasCompatible does NOT filter by Offering.Available — it only checks requirements.
+// Therefore: if zone inventory drops to zero and we omit the offering entirely, the drift
+// controller sees "no compatible offering" and marks the node as InstanceTypeNotFound,
+// triggering an unnecessary replacement.
+//
+// Correct behaviour: always emit an Offering for every known (zone, capacityType) combination,
+// even when inventory is zero. Set Offering.Available = false for out-of-stock combinations.
+//
+// Callers that create NEW nodes use Offerings.Available() to filter — they correctly skip
+// Available=false offerings. Only drift detection uses HasCompatible, which must find them.
+//
+// ## Offering.Available controls scheduling, not drift
+//
+//   - Scheduling path: Offerings.Available().HasCompatible(req) — needs Available=true.
+//   - Drift path:      Offerings.HasCompatible(req)             — ignores Available.
+//   - Price sort:      also filters by Available=true (cloudprovider/types.go:228).
+//
+// ## InstanceType.Requirements must cover all known zones and capacity types
+//
+// Requirements on the InstanceType struct are used as a pre-filter by the scheduler.
+// They should be built from ALL offerings (including Available=false ones) so that the
+// scheduler does not silently exclude an instance type from the result set during drift checks.
 func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis.NodePool) ([]*cloudprovider.InstanceType, error) {
 	logger := log.FromContext(ctx)
 
@@ -419,27 +472,40 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 		}
 
 		// Create one offering per (zone, capacityType) combination.
-		// Requirements are required for Karpenter's topology spread and capacity-type scheduling.
+		// Offerings are created for ALL known capacity types in each configured zone, including
+		// temporarily-unavailable ones (Available=false). This prevents the karpenter drift
+		// controller from falsely evicting running nodes when zone inventory drops to zero:
+		// HasCompatible() finds the offering regardless of Available; the scheduler uses
+		// Offerings.Available() and therefore only places NEW pods on Available=true offerings.
 		offerings := make(cloudprovider.Offerings, 0)
 		for zoneID, zoneInfo := range it.Zones {
-			if !availableZones[zoneID] || !zoneInfo.Available {
-				continue
+			if !availableZones[zoneID] {
+				continue // zone not configured in NodeClass VSwitches — always skip
 			}
-			for _, capacityType := range zoneInfo.CapacityTypes {
+			// Build per-capacity-type availability: KnownCapacityTypes drives the offering set;
+			// CapacityTypes (subset) marks which ones currently have stock.
+			capTypeAvailability := make(map[string]bool)
+			for _, ct := range zoneInfo.KnownCapacityTypes {
+				capTypeAvailability[ct] = false // default: no current stock
+			}
+			for _, ct := range zoneInfo.CapacityTypes {
+				capTypeAvailability[ct] = true // has stock
+			}
+			for capType, isAvailable := range capTypeAvailability {
 				offerings = append(offerings, &cloudprovider.Offering{
 					Requirements: scheduling.NewRequirements(
 						scheduling.NewRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, zoneID),
-						scheduling.NewRequirement(coreapis.CapacityTypeLabelKey, corev1.NodeSelectorOpIn, capacityType),
+						scheduling.NewRequirement(coreapis.CapacityTypeLabelKey, corev1.NodeSelectorOpIn, capType),
 					),
 					Price:     0.0, // Pricing not implemented yet
-					Available: true,
+					Available: isAvailable,
 				})
 			}
 		}
-		// Skip instance types with no available offerings
+		// Skip instance types that have no offerings at all in the configured zones
+		// (e.g. NodeClass has no VSwitches, or the instance type is truly unknown here).
 		if len(offerings) == 0 {
-			// Log the instance type that has no available offerings (only at debug level)
-			logger.V(1).Info("Instance type has no available offerings in specified zones",
+			logger.V(1).Info("Instance type has no offerings in specified zones",
 				"instanceType", it.Name,
 				"instanceZones", it.Zones,
 				"availableZones", availableZones)
@@ -531,7 +597,35 @@ func (c *CloudProvider) Name() string {
 	return "alibabacloud"
 }
 
-// IsDrifted checks if the node has drifted from its desired configuration
+// IsDrifted reports whether the running node has drifted from its desired configuration.
+//
+// # Karpenter contract (upstream: controllers/nodeclaim/disruption/drift.go)
+//
+// ## Call order
+//
+// The drift controller calls static checks first (NodePool hash, Requirements), then calls
+// GetInstanceTypes() + instanceTypeNotFound(), and finally calls IsDrifted() here.
+// IsDrifted is NOT called when the instance type can no longer be found in GetInstanceTypes(),
+// so provider-level drift checks run only for nodes whose instance type is still known.
+//
+// ## Return value semantics
+//
+//   - Return ("", nil):        node is not drifted — drift condition is cleared.
+//   - Return (reason, nil):    node is drifted for reason — drift condition is set and the
+//     node becomes a disruption candidate.
+//   - Return ("", err):        transient error — drift condition unchanged, reconciler retries.
+//
+// ## What to check here vs. in GetInstanceTypes
+//
+// IsDrifted should cover cloud-provider-specific config drift (image, vSwitch, security group,
+// NodeClass hash). Instance-type availability drift is handled upstream via instanceTypeNotFound;
+// do not duplicate it here. Duplicating it risks false positives when inventory is temporarily
+// zero (the upstream check is guarded by a 1-hour delay + 30-min cache; this one is not).
+//
+// ## Reconcile frequency
+//
+// The drift reconciler re-queues every 5 minutes, so IsDrifted is called frequently.
+// Avoid expensive or rate-limited API calls on the hot path; cache where possible.
 func (c *CloudProvider) IsDrifted(ctx context.Context, nodeClaim *coreapis.NodeClaim) (cloudprovider.DriftReason, error) {
 	// 1. Get NodeClass
 	nodeClass := &v1alpha1.ECSNodeClass{}

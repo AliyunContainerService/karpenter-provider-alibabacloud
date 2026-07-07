@@ -25,6 +25,7 @@ import (
 	"github.com/alibabacloud-go/tea/tea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -687,7 +688,7 @@ func TestGetInventory_WithStock(t *testing.T) {
 
 	postPaidResp := buildInventoryResponse([]struct{ zone, itID, status string }{
 		{"cn-hangzhou-h", "ecs.g6.large", stockStatusWithStock},
-		{"cn-hangzhou-i", "ecs.g6.large", stockStatusWithoutStock},     // no stock
+		{"cn-hangzhou-i", "ecs.g6.large", stockStatusWithoutStock},     // no stock but KNOWN
 		{"cn-hangzhou-h", "ecs.c6.xlarge", stockStatusClosedWithStock}, // included
 	})
 	spotResp := buildInventoryResponse([]struct{ zone, itID, status string }{
@@ -705,15 +706,17 @@ func TestGetInventory_WithStock(t *testing.T) {
 
 	assert.NotNil(t, inventory)
 
-	// ecs.g6.large in cn-hangzhou-h has on-demand (NoSpot) + spot (SpotAsPriceGo) stock
-	assert.ElementsMatch(t, []string{capacityTypeOnDemand, capacityTypeSpot},
-		inventory["ecs.g6.large"]["cn-hangzhou-h"])
+	// ecs.g6.large in cn-hangzhou-h: on-demand has stock, spot has stock
+	assert.True(t, inventory["ecs.g6.large"]["cn-hangzhou-h"][capacityTypeOnDemand])
+	assert.True(t, inventory["ecs.g6.large"]["cn-hangzhou-h"][capacityTypeSpot])
 
-	// ecs.g6.large in cn-hangzhou-i has on-demand but WithoutStock → not in inventory
-	assert.Empty(t, inventory["ecs.g6.large"]["cn-hangzhou-i"])
+	// ecs.g6.large in cn-hangzhou-i: on-demand WithoutStock → known but hasStock=false
+	require.NotNil(t, inventory["ecs.g6.large"]["cn-hangzhou-i"],
+		"WithoutStock zone must still appear in inventory for drift-safe behaviour")
+	assert.False(t, inventory["ecs.g6.large"]["cn-hangzhou-i"][capacityTypeOnDemand])
 
-	// ecs.c6.xlarge in cn-hangzhou-h has ClosedWithStock → included as on-demand
-	assert.Contains(t, inventory["ecs.c6.xlarge"]["cn-hangzhou-h"], capacityTypeOnDemand)
+	// ecs.c6.xlarge in cn-hangzhou-h has ClosedWithStock → hasStock=true
+	assert.True(t, inventory["ecs.c6.xlarge"]["cn-hangzhou-h"][capacityTypeOnDemand])
 
 	mockClient.AssertExpectations(t)
 }
@@ -747,11 +750,15 @@ func TestGetInventory_Caching(t *testing.T) {
 
 	assert.NotNil(t, inv1)
 	assert.NotNil(t, inv2)
+	assert.True(t, inv1["ecs.g6.large"]["cn-hangzhou-h"][capacityTypeOnDemand])
 	// API was called exactly twice (NoSpot + SpotAsPriceGo), not four times
 	mockClient.AssertExpectations(t)
 }
 
-func TestGetInventory_WithoutStockExcluded(t *testing.T) {
+func TestGetInventory_WithoutStockIncludedAsUnavailable(t *testing.T) {
+	// WithoutStock/ClosedWithoutStock entries must be recorded with hasStock=false.
+	// This lets drift detection distinguish "temporarily unavailable" from "never existed",
+	// preventing false InstanceTypeNotFound drift when inventory drops to zero.
 	mockClient := new(MockECSClient)
 
 	resp := buildInventoryResponse([]struct{ zone, itID, status string }{
@@ -765,9 +772,17 @@ func TestGetInventory_WithoutStockExcluded(t *testing.T) {
 	inventory := provider.getInventory(context.Background())
 
 	assert.NotNil(t, inventory)
-	assert.Nil(t, inventory["ecs.g6.large"])
-	assert.Nil(t, inventory["ecs.c6.xlarge"])
-	assert.NotNil(t, inventory["ecs.r6.xlarge"])
+
+	// WithoutStock → recorded with hasStock=false (not nil)
+	require.NotNil(t, inventory["ecs.g6.large"], "WithoutStock entry must be in inventory")
+	assert.False(t, inventory["ecs.g6.large"]["cn-hangzhou-h"][capacityTypeOnDemand])
+
+	require.NotNil(t, inventory["ecs.c6.xlarge"], "ClosedWithoutStock entry must be in inventory")
+	assert.False(t, inventory["ecs.c6.xlarge"]["cn-hangzhou-h"][capacityTypeOnDemand])
+
+	// WithStock → hasStock=true
+	require.NotNil(t, inventory["ecs.r6.xlarge"])
+	assert.True(t, inventory["ecs.r6.xlarge"]["cn-hangzhou-h"][capacityTypeOnDemand])
 }
 
 func TestGetInventory_NonInstanceTypeResourceSkipped(t *testing.T) {
@@ -805,15 +820,17 @@ func TestGetInventory_NonInstanceTypeResourceSkipped(t *testing.T) {
 
 // --- List() with inventory tests ---
 
-func TestListInventoryFiltersNoStockZones(t *testing.T) {
+func TestListInventoryFiltersAbsentZones(t *testing.T) {
 	mockClient := new(MockECSClient)
 
-	// Two zones, but instance type only has stock in cn-hangzhou-h
+	// Two zones, but instance type appears only in cn-hangzhou-h (absent from cn-hangzhou-i
+	// entirely — not even WithoutStock). This simulates a zone that never supported the
+	// instance type, not a transient inventory shortage.
 	mockClient.On("DescribeZones", mock.Anything).Return(makeZonesResponse("cn-hangzhou-h", "cn-hangzhou-i"), nil)
 
 	invResp := buildInventoryResponse([]struct{ zone, itID, status string }{
 		{"cn-hangzhou-h", "ecs.g6.large", stockStatusWithStock},
-		// cn-hangzhou-i is not in inventory → no stock
+		// cn-hangzhou-i entirely absent from DescribeAvailableResource
 	})
 	mockClient.On("DescribeAvailableResource", mock.Anything, mock.Anything).Return(invResp, nil)
 	mockClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).
@@ -825,9 +842,55 @@ func TestListInventoryFiltersNoStockZones(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, result, 1)
 	it := result[0]
-	// Only cn-hangzhou-h should be in zones (cn-hangzhou-i had no stock)
 	assert.Contains(t, it.Zones, "cn-hangzhou-h")
+	assert.True(t, it.Zones["cn-hangzhou-h"].Available)
+	// cn-hangzhou-i is absent from DescribeAvailableResource → not known → excluded
 	assert.NotContains(t, it.Zones, "cn-hangzhou-i")
+}
+
+func TestListInventoryKeepsWithoutStockZoneAsUnavailable(t *testing.T) {
+	// Regression test: when zone inventory drops to zero (WithoutStock), the zone must
+	// stay in Zones with Available=false. Without this, GetInstanceTypes omits the
+	// (instanceType, zone, capacityType) offering and the karpenter drift controller
+	// falsely evicts the running node with InstanceTypeNotFound.
+	mockClient := new(MockECSClient)
+
+	mockClient.On("DescribeZones", mock.Anything).Return(makeZonesResponse("cn-hangzhou-h", "cn-hangzhou-i"), nil)
+
+	onDemandResp := buildInventoryResponse([]struct{ zone, itID, status string }{
+		{"cn-hangzhou-h", "ecs.g6.large", stockStatusWithStock},
+		{"cn-hangzhou-i", "ecs.g6.large", stockStatusWithoutStock}, // inventory gone to zero
+	})
+	spotResp := buildInventoryResponse([]struct{ zone, itID, status string }{
+		{"cn-hangzhou-h", "ecs.g6.large", stockStatusWithStock},
+	})
+	mockClient.On("DescribeAvailableResource", mock.Anything, mock.MatchedBy(func(r *ecs.DescribeAvailableResourceRequest) bool {
+		return r.SpotStrategy != nil && *r.SpotStrategy == ecsSpotStrategyNoSpot
+	})).Return(onDemandResp, nil)
+	mockClient.On("DescribeAvailableResource", mock.Anything, mock.MatchedBy(func(r *ecs.DescribeAvailableResourceRequest) bool {
+		return r.SpotStrategy != nil && *r.SpotStrategy == ecsSpotStrategyAsPriceGo
+	})).Return(spotResp, nil)
+	mockClient.On("DescribeInstanceTypes", mock.Anything, mock.Anything).
+		Return(makeInstanceTypesResponse("ecs.g6.large", 2, 8.0), nil)
+
+	provider := NewProvider("cn-hangzhou", mockClient)
+	result, err := provider.List(context.Background())
+
+	assert.NoError(t, err)
+	require.Len(t, result, 1)
+	it := result[0]
+
+	// cn-hangzhou-h: has stock → Available=true
+	require.Contains(t, it.Zones, "cn-hangzhou-h")
+	assert.True(t, it.Zones["cn-hangzhou-h"].Available)
+	assert.Contains(t, it.Zones["cn-hangzhou-h"].CapacityTypes, capacityTypeOnDemand)
+
+	// cn-hangzhou-i: WithoutStock → must stay in Zones with Available=false
+	require.Contains(t, it.Zones, "cn-hangzhou-i",
+		"zone with WithoutStock inventory must remain in Zones so drift detection can match running nodes")
+	assert.False(t, it.Zones["cn-hangzhou-i"].Available)
+	assert.Empty(t, it.Zones["cn-hangzhou-i"].CapacityTypes)
+	assert.Contains(t, it.Zones["cn-hangzhou-i"].KnownCapacityTypes, capacityTypeOnDemand)
 }
 
 func TestListInventoryZoneChargeTypesPopulated(t *testing.T) {
