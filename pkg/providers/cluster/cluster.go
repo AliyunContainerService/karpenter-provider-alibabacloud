@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
 	"k8s.io/klog/v2"
@@ -22,7 +23,7 @@ type NetworkConfig struct {
 	TrunkEniEnabled bool
 	// ExclusiveEniEnabled indicates if exclusive ENI mode is enabled (managed terway only)
 	ExclusiveEniEnabled bool
-	// DualStack is true when cluster IpStack is "ipv6" (dual-stack)
+	// DualStack is true when cluster IpStack is "dual" (IPv6 dual-stack enabled)
 	DualStack bool
 }
 
@@ -90,8 +91,12 @@ func InitializeClusterNetworkConfig(csClient clients.CSClient, clusterID string)
 				klog.Warningf("failed to parse NodeCidrMask %s for cluster %s, using default 24", *detail.Body.NodeCidrMask, clusterID)
 			}
 		}
-		if detail.Body.IpStack != nil && *detail.Body.IpStack == "ipv6" {
-			dualStack = true
+		if detail.Body.IpStack != nil {
+			// When a cluster has IPv6 dual-stack enabled, the IpStack field is
+			// reported as "dual" (not "ipv6"). Only "dual" indicates dual-stack.
+			if strings.EqualFold(strings.TrimSpace(*detail.Body.IpStack), "dual") {
+				dualStack = true
+			}
 		}
 	}
 
