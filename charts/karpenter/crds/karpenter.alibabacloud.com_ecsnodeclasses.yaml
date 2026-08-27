@@ -214,6 +214,11 @@ spec:
                 description: LaunchTemplateID specifies the launch template ID to
                   use
                 type: string
+              launchTemplateVersion:
+                description: LaunchTemplateVersion specifies the launch template version
+                  to use
+                format: int64
+                type: integer
               metadataOptions:
                 description: MetadataOptions specifies metadata service options
                 properties:
@@ -327,11 +332,17 @@ spec:
                   type: object
                 minItems: 1
                 type: array
-            required:
-            - imageSelectorTerms
-            - securityGroupSelectorTerms
-            - vSwitchSelectorTerms
             type: object
+            x-kubernetes-validations:
+            - message: spec.vSwitchSelectorTerms is required when launchTemplateID
+                is not specified
+              rule: has(self.launchTemplateID) || has(self.vSwitchSelectorTerms)
+            - message: spec.securityGroupSelectorTerms is required when launchTemplateID
+                is not specified
+              rule: has(self.launchTemplateID) || has(self.securityGroupSelectorTerms)
+            - message: spec.imageSelectorTerms is required when launchTemplateID is
+                not specified
+              rule: has(self.launchTemplateID) || has(self.imageSelectorTerms)
           status:
             description: ECSNodeClassStatus defines the observed state of ECSNodeClass
             properties:

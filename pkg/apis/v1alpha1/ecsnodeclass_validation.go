@@ -23,6 +23,15 @@ import (
 
 // Validate validates the ECSNodeClass spec
 func (nc *ECSNodeClass) Validate() error {
+	if err := nc.validateTags(); err != nil {
+		return err
+	}
+	if err := nc.validateLaunchTemplate(); err != nil {
+		return err
+	}
+	if nc.Spec.LaunchTemplateID != nil {
+		return nil
+	}
 	if err := nc.validateVSwitchSelectors(); err != nil {
 		return err
 	}
@@ -47,6 +56,52 @@ func (nc *ECSNodeClass) Validate() error {
 	if err := nc.validateMetadataOptions(); err != nil {
 		return err
 	}
+	if err := nc.validateKubelet(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (nc *ECSNodeClass) validateLaunchTemplate() error {
+	if nc.Spec.LaunchTemplateVersion != nil && nc.Spec.LaunchTemplateID == nil {
+		return fmt.Errorf("launchTemplateVersion requires launchTemplateID")
+	}
+	if nc.Spec.LaunchTemplateVersion != nil && *nc.Spec.LaunchTemplateVersion <= 0 {
+		return fmt.Errorf("launchTemplateVersion must be greater than 0")
+	}
+	if nc.Spec.LaunchTemplateID == nil {
+		return nil
+	}
+	if !isValidResourceID(*nc.Spec.LaunchTemplateID, "lt") {
+		return fmt.Errorf("launchTemplateID is not a valid launch template ID")
+	}
+	if len(nc.Spec.VSwitchSelectorTerms) > 0 ||
+		len(nc.Spec.SecurityGroupSelectorTerms) > 0 ||
+		len(nc.Spec.ImageSelectorTerms) > 0 ||
+		nc.Spec.SystemDisk != nil ||
+		len(nc.Spec.DataDisks) > 0 ||
+		nc.Spec.UserData != nil ||
+		nc.Spec.SpotStrategy != nil ||
+		nc.Spec.SpotPriceLimit != nil {
+		return fmt.Errorf("launchTemplateID cannot be combined with selectors, disk configuration, userData, or spot configuration")
+	}
+	return nil
+}
+
+func (nc *ECSNodeClass) validateTags() error {
+	restricted := map[string]bool{
+		TagManagedBy:            true,
+		TagClusterID:            true,
+		TagNodePool:             true,
+		TagNodeClaim:            true,
+		TagKubeletMaxPods:       true,
+		"kubernetes.io/cluster": true,
+	}
+	for key := range nc.Spec.Tags {
+		if restricted[key] {
+			return fmt.Errorf("tags contains restricted key %q", key)
+		}
+	}
 	return nil
 }
 
@@ -57,6 +112,9 @@ func (nc *ECSNodeClass) validateVSwitchSelectors() error {
 	for i, term := range nc.Spec.VSwitchSelectorTerms {
 		if term.ID == nil && len(term.Tags) == 0 && term.ZoneID == nil {
 			return fmt.Errorf("vSwitchSelectorTerms[%d] must specify at least one of: id, tags, or zoneID", i)
+		}
+		if term.ID != nil && (len(term.Tags) > 0 || term.ZoneID != nil) {
+			return fmt.Errorf("vSwitchSelectorTerms[%d].id cannot be combined with tags or zoneID", i)
 		}
 		if term.ID != nil && !isValidResourceID(*term.ID, "vsw") {
 			return fmt.Errorf("vSwitchSelectorTerms[%d].id is not a valid VSwitch ID", i)
@@ -75,6 +133,9 @@ func (nc *ECSNodeClass) validateSecurityGroupSelectors() error {
 	for i, term := range nc.Spec.SecurityGroupSelectorTerms {
 		if term.ID == nil && term.Name == nil && len(term.Tags) == 0 {
 			return fmt.Errorf("securityGroupSelectorTerms[%d] must specify at least one of: id, name, or tags", i)
+		}
+		if term.ID != nil && (term.Name != nil || len(term.Tags) > 0) {
+			return fmt.Errorf("securityGroupSelectorTerms[%d].id cannot be combined with name or tags", i)
 		}
 		if term.ID != nil && !isValidResourceID(*term.ID, "sg") {
 			return fmt.Errorf("securityGroupSelectorTerms[%d].id is not a valid security group ID", i)
@@ -98,11 +159,17 @@ func (nc *ECSNodeClass) validateImageSelectors() error {
 		if term.Name != nil {
 			count++
 		}
+		if term.ImageFamily != nil {
+			count++
+		}
 		if len(term.Tags) > 0 {
 			count++
 		}
 		if count == 0 {
-			return fmt.Errorf("imageSelectorTerms[%d] must specify at least one of: id, alias, name, or tags", i)
+			return fmt.Errorf("imageSelectorTerms[%d] must specify at least one of: id, alias, name, family, or tags", i)
+		}
+		if term.ID != nil && count > 1 {
+			return fmt.Errorf("imageSelectorTerms[%d].id cannot be combined with other filters", i)
 		}
 		if term.ID != nil && !isValidResourceID(*term.ID, "m") {
 			return fmt.Errorf("imageSelectorTerms[%d].id is not a valid image ID", i)
@@ -175,7 +242,10 @@ func (nc *ECSNodeClass) validateCapacityReservation() error {
 		if term.ID == nil && len(term.Tags) == 0 {
 			return fmt.Errorf("capacityReservationSelectorTerms[%d] must specify at least one of: id or tags", i)
 		}
-		if term.ID != nil && !isValidResourceID(*term.ID, "cr") {
+		if term.ID != nil && len(term.Tags) > 0 {
+			return fmt.Errorf("capacityReservationSelectorTerms[%d].id cannot be combined with tags", i)
+		}
+		if term.ID != nil && !isValidResourceID(*term.ID, "crp") {
 			return fmt.Errorf("capacityReservationSelectorTerms[%d].id is not a valid capacity reservation ID", i)
 		}
 	}
@@ -219,6 +289,28 @@ func isValidSpotStrategy(strategy string) bool {
 
 func isValidCapacityReservationPreference(pref string) bool {
 	return pref == "open" || pref == "none" || pref == "target"
+}
+
+func (nc *ECSNodeClass) validateKubelet() error {
+	if nc.Spec.Kubelet == nil {
+		return nil
+	}
+	kubelet := nc.Spec.Kubelet
+	if kubelet.ImageGCHighThresholdPercent != nil {
+		if *kubelet.ImageGCHighThresholdPercent < 0 || *kubelet.ImageGCHighThresholdPercent > 100 {
+			return fmt.Errorf("kubelet.imageGCHighThresholdPercent must be between 0 and 100")
+		}
+	}
+	if kubelet.ImageGCLowThresholdPercent != nil {
+		if *kubelet.ImageGCLowThresholdPercent < 0 || *kubelet.ImageGCLowThresholdPercent > 100 {
+			return fmt.Errorf("kubelet.imageGCLowThresholdPercent must be between 0 and 100")
+		}
+	}
+	if kubelet.ImageGCHighThresholdPercent != nil && kubelet.ImageGCLowThresholdPercent != nil &&
+		*kubelet.ImageGCHighThresholdPercent < *kubelet.ImageGCLowThresholdPercent {
+		return fmt.Errorf("kubelet.imageGCHighThresholdPercent must be greater than or equal to imageGCLowThresholdPercent")
+	}
+	return nil
 }
 
 func (nc *ECSNodeClass) validateMetadataOptions() error {

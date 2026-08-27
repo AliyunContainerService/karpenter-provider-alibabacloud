@@ -1,0 +1,22 @@
+name: Run tests in private cluster
+description: Run E2E tests against an already configured private ACK cluster.
+inputs:
+  suite:
+    required: true
+  source:
+    required: false
+    default: alibabacloud
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        SUITE: ${{ inputs.suite }}
+        SOURCE: ${{ inputs.source }}
+      run: |
+        set -euo pipefail
+        if [[ "${SOURCE}" == "upstream" ]]; then
+          FOCUS="${SUITE}" make upstream-e2etests
+        else
+          TEST_SUITE="${SUITE}" make e2etests
+        fi

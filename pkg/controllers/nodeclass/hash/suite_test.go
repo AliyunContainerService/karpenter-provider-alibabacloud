@@ -134,6 +134,7 @@ var _ = Describe("HashController", func() {
 
 			// Verify hash annotation exists
 			Expect(updated.Annotations).To(HaveKey(v1alpha1.AnnotationECSNodeClassHash))
+			Expect(updated.Annotations).To(HaveKeyWithValue(v1alpha1.AnnotationECSNodeClassHashVersion, "v1"))
 			Expect(updated.Annotations[v1alpha1.AnnotationECSNodeClassHash]).ToNot(BeEmpty())
 		})
 
@@ -314,7 +315,7 @@ var _ = Describe("HashController", func() {
 			Expect(newHash).ToNot(Equal(originalHash))
 		})
 
-		It("should handle multiple selector terms in VSwitchSelectorTerms", func() {
+		It("should update hash when multiple VSwitchSelectorTerms are reordered", func() {
 			// Create with multiple VSwitch terms
 			nodeClass.Spec.VSwitchSelectorTerms = []v1alpha1.VSwitchSelectorTerm{
 				{ID: stringPtr("vsw-1")},
@@ -329,7 +330,7 @@ var _ = Describe("HashController", func() {
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
 			originalHash := updated.Annotations[v1alpha1.AnnotationECSNodeClassHash]
 
-			// Change order (hash should still be consistent due to sorting)
+			// Change order to match the cloudprovider drift hash semantics.
 			updated.Spec.VSwitchSelectorTerms = []v1alpha1.VSwitchSelectorTerm{
 				{ID: stringPtr("vsw-3")},
 				{ID: stringPtr("vsw-1")},
@@ -343,13 +344,13 @@ var _ = Describe("HashController", func() {
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), final)).To(Succeed())
 			newHash := final.Annotations[v1alpha1.AnnotationECSNodeClassHash]
 
-			// Hash should be same (sorted internally)
-			Expect(newHash).To(Equal(originalHash))
+			// Hash should change.
+			Expect(newHash).ToNot(Equal(originalHash))
 		})
 	})
 
 	Context("Dynamic Field Changes", func() {
-		It("should NOT update hash when Tags change", func() {
+		It("should update hash when Tags change", func() {
 			// Create and get initial hash
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			_, err := hashController.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(nodeClass)})
@@ -359,7 +360,7 @@ var _ = Describe("HashController", func() {
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
 			originalHash := updated.Annotations[v1alpha1.AnnotationECSNodeClassHash]
 
-			// Update Tags (not included in hash)
+			// Update Tags (included in drift hash)
 			updated.Spec.Tags = map[string]string{
 				"new-tag": "new-value",
 			}
@@ -374,11 +375,11 @@ var _ = Describe("HashController", func() {
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), final)).To(Succeed())
 			newHash := final.Annotations[v1alpha1.AnnotationECSNodeClassHash]
 
-			// Hash should be same (Tags not in hash calculation)
-			Expect(newHash).To(Equal(originalHash))
+			// Hash should change
+			Expect(newHash).ToNot(Equal(originalHash))
 		})
 
-		It("should NOT update hash when UserData changes", func() {
+		It("should update hash when UserData changes", func() {
 			// Create and get initial hash
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			_, err := hashController.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(nodeClass)})
@@ -388,7 +389,7 @@ var _ = Describe("HashController", func() {
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
 			originalHash := updated.Annotations[v1alpha1.AnnotationECSNodeClassHash]
 
-			// Update UserData (not included in current hash implementation)
+			// Update UserData (included in drift hash)
 			updated.Spec.UserData = stringPtr("#!/bin/bash\necho 'new userdata'")
 			Expect(env.Client.Update(ctx, updated)).To(Succeed())
 
@@ -401,11 +402,38 @@ var _ = Describe("HashController", func() {
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), final)).To(Succeed())
 			newHash := final.Annotations[v1alpha1.AnnotationECSNodeClassHash]
 
-			// Hash should be same
-			Expect(newHash).To(Equal(originalHash))
+			// Hash should change
+			Expect(newHash).ToNot(Equal(originalHash))
 		})
 
-		It("should NOT update hash when SystemDisk changes", func() {
+		It("should update hash when Kubelet changes", func() {
+			// Create and get initial hash
+			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
+			_, err := hashController.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(nodeClass)})
+			Expect(err).ToNot(HaveOccurred())
+
+			updated := &v1alpha1.ECSNodeClass{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
+			originalHash := updated.Annotations[v1alpha1.AnnotationECSNodeClassHash]
+
+			// Update Kubelet (included in drift hash)
+			updated.Spec.Kubelet = &v1alpha1.KubeletConfiguration{MaxPods: int32Ptr(42)}
+			Expect(env.Client.Update(ctx, updated)).To(Succeed())
+
+			// Reconcile again
+			_, err = hashController.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(updated)})
+			Expect(err).ToNot(HaveOccurred())
+
+			// Get new hash
+			final := &v1alpha1.ECSNodeClass{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), final)).To(Succeed())
+			newHash := final.Annotations[v1alpha1.AnnotationECSNodeClassHash]
+
+			// Hash should change
+			Expect(newHash).ToNot(Equal(originalHash))
+		})
+
+		It("should update hash when SystemDisk changes", func() {
 			// Create and get initial hash
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			_, err := hashController.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(nodeClass)})
@@ -431,8 +459,98 @@ var _ = Describe("HashController", func() {
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), final)).To(Succeed())
 			newHash := final.Annotations[v1alpha1.AnnotationECSNodeClassHash]
 
-			// Hash should be same
-			Expect(newHash).To(Equal(originalHash))
+			// Hash should change
+			Expect(newHash).ToNot(Equal(originalHash))
+		})
+
+		It("should update hash when DataDisks change", func() {
+			// Create and get initial hash
+			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
+			_, err := hashController.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(nodeClass)})
+			Expect(err).ToNot(HaveOccurred())
+
+			updated := &v1alpha1.ECSNodeClass{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
+			originalHash := updated.Annotations[v1alpha1.AnnotationECSNodeClassHash]
+
+			// Update DataDisks
+			updated.Spec.DataDisks = []v1alpha1.DataDiskSpec{
+				{
+					Category:         "cloud_essd",
+					Size:             120,
+					PerformanceLevel: stringPtr("PL0"),
+				},
+			}
+			Expect(env.Client.Update(ctx, updated)).To(Succeed())
+
+			// Reconcile again
+			_, err = hashController.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(updated)})
+			Expect(err).ToNot(HaveOccurred())
+
+			// Get new hash
+			final := &v1alpha1.ECSNodeClass{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), final)).To(Succeed())
+			newHash := final.Annotations[v1alpha1.AnnotationECSNodeClassHash]
+
+			// Hash should change
+			Expect(newHash).ToNot(Equal(originalHash))
+		})
+
+		It("should update hash when capacity reservation preference changes", func() {
+			preference := "target"
+			nodeClass.Spec.CapacityReservationPreference = &preference
+			nodeClass.Spec.CapacityReservationSelectorTerms = []v1alpha1.CapacityReservationSelectorTerm{
+				{ID: stringPtr("crp-123456")},
+			}
+			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
+			_, err := hashController.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(nodeClass)})
+			Expect(err).ToNot(HaveOccurred())
+
+			updated := &v1alpha1.ECSNodeClass{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
+			originalHash := updated.Annotations[v1alpha1.AnnotationECSNodeClassHash]
+
+			preference = "none"
+			updated.Spec.CapacityReservationPreference = &preference
+			Expect(env.Client.Update(ctx, updated)).To(Succeed())
+
+			_, err = hashController.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(updated)})
+			Expect(err).ToNot(HaveOccurred())
+
+			final := &v1alpha1.ECSNodeClass{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), final)).To(Succeed())
+			newHash := final.Annotations[v1alpha1.AnnotationECSNodeClassHash]
+
+			Expect(newHash).ToNot(Equal(originalHash))
+		})
+
+		It("should update hash when capacity reservation selector terms change", func() {
+			preference := "target"
+			nodeClass.Spec.CapacityReservationPreference = &preference
+			nodeClass.Spec.CapacityReservationSelectorTerms = []v1alpha1.CapacityReservationSelectorTerm{
+				{ID: stringPtr("crp-123456")},
+			}
+			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
+			_, err := hashController.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(nodeClass)})
+			Expect(err).ToNot(HaveOccurred())
+
+			updated := &v1alpha1.ECSNodeClass{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
+			originalHash := updated.Annotations[v1alpha1.AnnotationECSNodeClassHash]
+
+			updated.Spec.CapacityReservationSelectorTerms = []v1alpha1.CapacityReservationSelectorTerm{
+				{ID: stringPtr("crp-654321")},
+			}
+			Expect(env.Client.Update(ctx, updated)).To(Succeed())
+
+			_, err = hashController.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(updated)})
+			Expect(err).ToNot(HaveOccurred())
+
+			final := &v1alpha1.ECSNodeClass{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), final)).To(Succeed())
+			newHash := final.Annotations[v1alpha1.AnnotationECSNodeClassHash]
+
+			Expect(newHash).ToNot(Equal(originalHash))
 		})
 
 		It("should NOT update hash when ClusterName changes", func() {
@@ -592,6 +710,26 @@ var _ = Describe("HashController", func() {
 
 			// Hashes should be identical
 			Expect(hash1).To(Equal(hash2))
+		})
+
+		It("should not update ECSNodeClass when hash annotations are current", func() {
+			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
+
+			// First reconciliation writes the hash annotations.
+			_, err := hashController.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(nodeClass)})
+			Expect(err).ToNot(HaveOccurred())
+
+			updated1 := &v1alpha1.ECSNodeClass{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated1)).To(Succeed())
+			resourceVersion := updated1.ResourceVersion
+
+			// Second reconciliation should be a no-op and avoid racing callers updating spec.
+			_, err = hashController.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(nodeClass)})
+			Expect(err).ToNot(HaveOccurred())
+
+			updated2 := &v1alpha1.ECSNodeClass{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated2)).To(Succeed())
+			Expect(updated2.ResourceVersion).To(Equal(resourceVersion))
 		})
 
 		It("should produce different hashes for different configurations", func() {

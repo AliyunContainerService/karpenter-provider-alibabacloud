@@ -21,6 +21,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"github.com/alibabacloud-go/tea/tea"
 	"github.com/stretchr/testify/assert"
@@ -376,6 +377,39 @@ func TestFilter(t *testing.T) {
 			expectedLen: 1,
 		},
 		{
+			name: "filter by AlibabaCloud instance category",
+			requirements: []InstanceTypeRequirement{
+				{
+					Key:      v1alpha1.LabelInstanceCategory,
+					Operator: InstanceTypeOperatorIn,
+					Values:   []string{"g"},
+				},
+			},
+			expectedLen: 1,
+		},
+		{
+			name: "filter by AlibabaCloud instance cpu",
+			requirements: []InstanceTypeRequirement{
+				{
+					Key:      v1alpha1.LabelInstanceCPU,
+					Operator: InstanceTypeOperatorIn,
+					Values:   []string{"4"},
+				},
+			},
+			expectedLen: 1,
+		},
+		{
+			name: "filter by spot capacity type",
+			requirements: []InstanceTypeRequirement{
+				{
+					Key:      v1alpha1.LabelCapacityType,
+					Operator: InstanceTypeOperatorIn,
+					Values:   []string{v1alpha1.CapacityTypeSpot},
+				},
+			},
+			expectedLen: 2,
+		},
+		{
 			name:         "no filter",
 			requirements: []InstanceTypeRequirement{},
 			expectedLen:  2,
@@ -430,6 +464,21 @@ func TestClearCache(t *testing.T) {
 	// Verify cache is cleared
 	_, exists = provider.getCachedValue("test-key")
 	assert.False(t, exists)
+}
+
+func TestGPUModelNormalizesKubernetesLabelValue(t *testing.T) {
+	gpuCount := resource.MustParse("1")
+	gpuMemory := resource.MustParse("16")
+
+	result := gpuModel(&InstanceType{
+		GPU: &GPU{
+			Count:  &gpuCount,
+			Model:  "NVIDIA V100",
+			Memory: &gpuMemory,
+		},
+	})
+
+	assert.Equal(t, "nvidia-v100", result)
 }
 
 func TestCalculateGPUMemory(t *testing.T) {

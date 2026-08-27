@@ -1,0 +1,15 @@
+name: Install Prometheus
+description: Install a lightweight Prometheus stack for E2E metrics.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+        helm repo update
+        helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+          --namespace monitoring \
+          --create-namespace \
+          --set grafana.enabled=false \
+          --set alertmanager.enabled=false

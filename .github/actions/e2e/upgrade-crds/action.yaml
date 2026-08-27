@@ -1,0 +1,10 @@
+name: Upgrade CRDs
+description: Apply current Karpenter CRDs to the target cluster.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        make manifests
+        kubectl apply -f charts/karpenter/crds/

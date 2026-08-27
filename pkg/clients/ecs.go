@@ -116,6 +116,11 @@ func (c *DefaultECSClient) DescribeLaunchTemplates(ctx context.Context, request 
 	return c.client.DescribeLaunchTemplates(request)
 }
 
+// DescribeLaunchTemplateVersions describes the concrete data for launch template versions.
+func (c *DefaultECSClient) DescribeLaunchTemplateVersions(ctx context.Context, request *ecs.DescribeLaunchTemplateVersionsRequest) (*ecs.DescribeLaunchTemplateVersionsResponse, error) {
+	return c.client.DescribeLaunchTemplateVersions(request)
+}
+
 // DeleteLaunchTemplate implements ECSClient interface
 func (c *DefaultECSClient) DeleteLaunchTemplate(ctx context.Context, request *ecs.DeleteLaunchTemplateRequest) (*ecs.DeleteLaunchTemplateResponse, error) {
 

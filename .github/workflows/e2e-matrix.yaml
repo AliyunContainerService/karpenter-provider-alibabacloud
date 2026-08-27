@@ -1,0 +1,63 @@
+name: E2EMatrix
+on:
+  workflow_call:
+    inputs:
+      git_ref:
+        type: string
+      source:
+        type: string
+        default: alibabacloud
+      region:
+        type: string
+        default: cn-hangzhou
+      cleanup:
+        type: boolean
+        default: true
+      discover_gpu:
+        type: boolean
+        default: true
+      max_parallel:
+        type: number
+        default: 10
+    secrets:
+      ALIBABA_CLOUD_E2E_CONFIG:
+        required: true
+      ALIBABA_CLOUD_ACCESS_KEY_ID:
+        required: true
+      ALIBABA_CLOUD_ACCESS_KEY_SECRET:
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: e2e-matrix-${{ github.workflow }}-${{ github.ref }}-${{ inputs.region }}-${{ inputs.source }}
+  cancel-in-progress: false
+jobs:
+  matrix:
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix:
+        suite:
+          - Integration
+          - NodeClaim
+          - Consolidation
+          - Interruption
+          - Drift
+          - Scale
+          - LocalZone
+          - Scheduling
+          - Storage
+          - AMI
+    uses: ./.github/workflows/e2e.yaml
+    with:
+      suite: ${{ matrix.suite }}
+      git_ref: ${{ inputs.git_ref }}
+      source: ${{ inputs.source }}
+      region: ${{ inputs.region }}
+      cleanup: ${{ inputs.cleanup }}
+      discover_gpu: false
+      workflow_trigger: matrix
+    secrets:
+      ALIBABA_CLOUD_E2E_CONFIG: ${{ secrets.ALIBABA_CLOUD_E2E_CONFIG }}
+      ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+      ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}

@@ -8,7 +8,7 @@ metadata:
 rules:
   # Read
   - apiGroups: ["karpenter.sh"]
-    resources: ["nodepools", "nodeclaims", "nodepools/status", "nodeclaims/status"]
+    resources: ["nodepools", "nodeclaims", "nodeoverlays", "nodepools/status", "nodeclaims/status", "nodeoverlays/status"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["karpenter.alibabacloud.com"]
     resources: ["ecsnodeclasses", "ecsnodeclasses/status"]
@@ -30,7 +30,7 @@ rules:
     verbs: ["get", "list", "watch"]
   # Write
   - apiGroups: ["karpenter.sh"]
-    resources: ["nodepools", "nodeclaims", "nodepools/status", "nodeclaims/status"]
+    resources: ["nodepools", "nodeclaims", "nodeoverlays", "nodepools/status", "nodeclaims/status", "nodeoverlays/status"]
     verbs: ["create", "delete", "patch", "update"]
   - apiGroups: ["karpenter.alibabacloud.com"]
     resources: ["ecsnodeclasses", "ecsnodeclasses/status"]

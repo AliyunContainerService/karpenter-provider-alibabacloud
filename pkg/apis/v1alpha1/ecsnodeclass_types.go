@@ -48,6 +48,9 @@ type ECSNodeClassList struct {
 // ECSNodeClassSpec defines the desired state of ECSNodeClass
 // +kubebuilder:object:generate=true
 // +kubebuilder:object:root=false
+// +kubebuilder:validation:XValidation:rule="has(self.launchTemplateID) || has(self.vSwitchSelectorTerms)",message="spec.vSwitchSelectorTerms is required when launchTemplateID is not specified"
+// +kubebuilder:validation:XValidation:rule="has(self.launchTemplateID) || has(self.securityGroupSelectorTerms)",message="spec.securityGroupSelectorTerms is required when launchTemplateID is not specified"
+// +kubebuilder:validation:XValidation:rule="has(self.launchTemplateID) || has(self.imageSelectorTerms)",message="spec.imageSelectorTerms is required when launchTemplateID is not specified"
 type ECSNodeClassSpec struct {
 	// ClusterID is the ACK cluster ID
 	// +optional
@@ -62,19 +65,19 @@ type ECSNodeClassSpec struct {
 	ClusterEndpoint string `json:"clusterEndpoint,omitempty"`
 
 	// VSwitchSelectorTerms is a list of VSwitch selector requirements
-	// +kubebuilder:validation:Required
+	// +optional
 	// +kubebuilder:validation:MinItems=1
-	VSwitchSelectorTerms []VSwitchSelectorTerm `json:"vSwitchSelectorTerms"`
+	VSwitchSelectorTerms []VSwitchSelectorTerm `json:"vSwitchSelectorTerms,omitempty"`
 
 	// SecurityGroupSelectorTerms is a list of security group selector requirements
-	// +kubebuilder:validation:Required
+	// +optional
 	// +kubebuilder:validation:MinItems=1
-	SecurityGroupSelectorTerms []SecurityGroupSelectorTerm `json:"securityGroupSelectorTerms"`
+	SecurityGroupSelectorTerms []SecurityGroupSelectorTerm `json:"securityGroupSelectorTerms,omitempty"`
 
 	// ImageSelectorTerms is a list of image selector requirements
-	// +kubebuilder:validation:Required
+	// +optional
 	// +kubebuilder:validation:MinItems=1
-	ImageSelectorTerms []ImageSelectorTerm `json:"imageSelectorTerms"`
+	ImageSelectorTerms []ImageSelectorTerm `json:"imageSelectorTerms,omitempty"`
 
 	// Role is the name of the RAM role to use for the instance
 	// +optional
@@ -123,6 +126,10 @@ type ECSNodeClassSpec struct {
 	// LaunchTemplateID specifies the launch template ID to use
 	// +optional
 	LaunchTemplateID *string `json:"launchTemplateID,omitempty"`
+
+	// LaunchTemplateVersion specifies the launch template version to use
+	// +optional
+	LaunchTemplateVersion *int64 `json:"launchTemplateVersion,omitempty"`
 }
 
 // VSwitchSelectorTerm defines selection logic for VSwitch
