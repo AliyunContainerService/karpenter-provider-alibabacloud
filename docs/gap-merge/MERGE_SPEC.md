@@ -63,8 +63,8 @@
 | 序 | Issue | 源 commit | 依赖 | 状态 |
 |---|---|---|---|---|
 | 1 | 08 多安全组 | `69bfa93` | — | ✅ 已合并 `69127b7`（仅取多安全组；drift 已随主线；测试由 instance 层覆盖，cloudprovider 层测试脚手架依赖前置项故未移植） |
-| 2 | 03 RAM Role | `71f4495` | — | 待办 |
-| 3 | 05 MetadataOptions/IMDS | `bebbf5b` | — | 待办 |
+| 2 | 03 RAM Role | `71f4495` | — | ✅ 已合并 `4ce4eb4` |
+| 3 | 05 MetadataOptions/IMDS | `bebbf5b` | — | ✅ 已合并 `3c712fa`（hash 采用主线 inline+MetadataOptions；删除混入的 nodeclass_hash.go） |
 | 4 | 09-P0 磁盘全选项 | `b4ffa7c` | — | 待办 |
 | 5 | 07 DeploymentSet | `4384e5a` | — | 待办 |
 | 6 | 15 Terway pod 密度 | `431196e` | — | 待办 |
@@ -115,6 +115,8 @@
 |---|---|---|---|---|---|
 | 2026-08-30 | — | 建分支 + 写 spec | 基线 `66b419c` | — | — |
 | 2026-08-30 | 08 多安全组 | cherry-pick `69bfa93` | 3 冲突文件；cloudprovider.go 仅取多安全组、drift(exact-set)随主线；instance_test 去掉 MetadataOptions 用例；cloudprovider_test 保持主线(脚手架依赖前置项) | ✅ instance/cloudprovider/batcher/securitygroups 通过 | ⬜ 待接 |
+| 2026-08-30 | 03 RAM Role | cherry-pick `71f4495` | 4 冲突；instance.go 并列保留 Ipv6+RAMRole；validation_test 统一辅助函数名 ptrForUnit；cloudprovider_test 保持主线 | ✅ 通过 | ⬜ 待接 |
+| 2026-08-30 | 05 MetadataOptions | cherry-pick `bebbf5b` | 5 冲突；关键决策：删除 gap 的 nodeclass_hash.go，calculateNodeClassHash/computeHash 均回归主线 inline 并追加 MetadataOptions 字段，避免双 hash 实现导致 drift 误判；补回 sha256/hex/json import | ✅ 通过；envtest(status/hash) suite 因本机缺 etcd/apiserver 失败(与改动无关，基线同样失败) | ⬜ 待接 |
 
 ---
 
