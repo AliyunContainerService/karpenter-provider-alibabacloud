@@ -23,6 +23,16 @@
 - **所有权 tag 语义**：`labels.go` 主线 `TagManagedByValue="true"`，gap-impl `"karpenter"` → 契约级对撞，需统一命名 + legacy 迁移。
 - **cloudprovider.go**：主线重构 + gap-impl 加 ~810 行，单文件 11 冲突块 → 需在主线新结构上重写。
 
+### 依赖拓扑再发现（合并中实测，2026-08-30）
+> 合并推进中发现 gap 分支后半段（06/11/12/16）存在**契约级链式依赖**，远比初始批次表复杂：
+- **DescribePrice 接口签名分歧**：11(`3ceaa65`) 把 `DescribePrice(ctx, instanceType string)` 改为 `DescribePrice(ctx, *ecs.DescribePriceRequest)` 并新增 `DescribeSpotPriceHistory`；主线保留旧签名，06 继承了 11 的新签名 → 所有 `MockECSClient`（7+ 处）同源冲突。
+- **metrics/classifier 契约**：12(`a0dad22`) 引入 `pkg/errors/classifier.go` + `pkg/metrics/metrics.go` 子集（create_attempts_total / create_duration_seconds / unavailable_cache_entries）；16(`be54a28`) 是其**完整超集**（metrics.go 439 行 + classifier.go + `pkg/clients/wrappers`），且依赖 11 的 `pkg/controllers/pricing/controller.go` → 12 与 16 对 metrics.go/classifier.go 直接对撞。
+- **CR 基础设施 vs 接入**：主线**已吸收** 06 的 CR 基础设施（`CapacityReservation` type、`instancetype.ReservedOfferingIdentity`、`labels.go` 私有池 label/annotation 全含、`CapacityTypeReserved`），但**缺接入逻辑**（`addReservedOfferings`/`capacityReservationDrift`/`usablePrivatePool`/`capacityReservationPreference`）；06 diff 又强耦合 04/07 的 status 类型（`LaunchTemplateStatus`/`DeploymentSet`/`ZoneCapacity`）。
+
+**修正后的依赖链（后半段）**：`17(已合并)` -> `11 pricing(含 DescribePrice 签名变更, 基石)` -> `12 unavailable cache(classifier+metrics 子集)` -> `16 metrics/classifier 完整契约(+wrappers, 依赖 11 pricing controller)` -> `13 候选回退(依赖 12)` / `06 CR 接入(手工移植)` / `15/14(依赖 16)`。09-P1 不动接口，相对独立可并行。
+
+**批次再排（后半段）**：先落 **11（pricing + DescribePrice 新签名，作为 mock 契约基石）**，再 12 -> 16（metrics 契约统一），随后 13、09-P1，最后 06/07/15/14/18-P*。
+
 ---
 
 ## 1. 18 项差距 → 处置决策总览
