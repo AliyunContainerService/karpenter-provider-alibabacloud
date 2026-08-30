@@ -74,7 +74,7 @@
 | 5 | 17 provider options/feature gates | `5c76cec` | — | ✅ 已合并 `47018f9`（基石；仅 values.yaml 冲突，合并 core+provider gates；options/featuregates 单测通过） |
 | 6 | 01 selector 语义与字段消费 | `36ca169` | — | ✅ 已合并 `c8524af`（selector 必填 MaxItems=30；id 与 tags/zoneID/name/owner* 互斥校验；resolver 完整消费 VSwitch.zoneID/SG.name/Image.name/tags/owner*；DescribeSecurityGroups 新签名） |
 | 7 | 04 LaunchTemplate | `2c15efe` | 17 | ⚪ 主线已实现核心（`GetData` 读取 LT 版本→status controller 消费→cloudprovider 注入 create path + drift + annotation；`Spec.LaunchTemplateVersion` 已存在）；gap 增量仅 `ResolutionError` 错误分类（可选增强），13 文件方向冲突。**忽略合并**，错误分类降级为后续可选增强 |
-| 8 | 06 容量预留私有池 | `2f5f2da` | 17 | 待办 |
+| 8 | 06 容量预留私有池 | `2f5f2da` | 17 | 🟠 改归**批3手工重写**：主线已吸收 CR 基础设施（`CapacityReservation` type/`ReservedOfferingIdentity`/私有池 labels+annotations/`CapacityTypeReserved`），但缺接入逻辑（`addReservedOfferings`/`capacityReservationDrift`/`usablePrivatePool`/`capacityReservationPreference`）。06 cherry-pick 横切 24 文件且强耦合 04/07 status 类型（`LaunchTemplateStatus`/`DeploymentSet`/`ZoneCapacity`），需手工移植纯 CR 增量 |
 | 9 | 09-P1 InstanceStore RAID0 | `88f4c34` | 09-P0, 17 | 待办 |
 | 10 | 11 pricing refresh | `3ceaa65` | 17 | 待办 |
 | 11 | 12 不可用机型缓存 | `a0dad22` | 17 | 待办 |
@@ -123,6 +123,7 @@
 | 2026-08-30 | 17 options/feature gates | cherry-pick `5c76cec` | 基石落地；仅 charts/values.yaml 1 处冲突（合并 core featureGates 注释 + provider pricing/podDensity/terway/featureGates 配置块）；options.go/operator.go/unavailable_offerings.go 自动合并 | ✅ options/featuregates 单测通过 | ⬜ 待接 |
 | 2026-08-30 | 01 selector 语义与字段消费 | cherry-pick `36ca169` | 7 冲突文件全解：types.go selector terms 取 gap 侧(去 omitempty + MaxItems=30 使 selector 必填)；validation.go 取 gap 侧(id 与 tags/zoneID/name/owner* 互斥 + imageOwnerID 校验)；clients/ecs.go 采纳 DescribeSecurityGroups(ctx,id,name,tags) 新签名；vswitch.go 取 gap getByQuery(支持 zoneID)；status/controller.go 保留主线 requeue consts + 追加 defaultSecurityGroupAttachLimit；imagefamily_test 保留主线 DescribeAvailableResource + 采纳新 SG 签名；cloudprovider_test 重置主线版。build 修复：删除 zz_generated.deepcopy.go 中已删类型(Normalized*)的孤儿 deepcopy；测试断言 mutually exclusive 对齐实现文案 | ✅ v1alpha1/vswitch/imagefamily/securitygroup/clients/cloudprovider/instance 通过（cluster DualStack 失败为主线既存问题，与本项无关） | ⬜ 待接 |
 | 2026-08-30 | 04 LaunchTemplate | 试 cherry-pick `2c15efe` 后**忽略** | 实测主线走不同且更完整路径已实现 04 核心：launchtemplate.go 有 `GetData`+`LaunchTemplateData`+`launchTemplateVersionDescriber` 读取 LT 版本具体配置；status/controller.go:236 用 `Spec.LaunchTemplateVersion` 消费；cloudprovider.go:923/1059/1123 注入 create path + drift + annotation。gap 增量仅 `ResolutionError` 错误分类，却引入 13 文件方向冲突（含已按铁律处理的 hash/cloudprovider_test）。判定主线已覆盖，abort 归入忽略类 | — | — |
+| 2026-08-30 | 06 容量预留私有池 | 试 cherry-pick `2f5f2da` 后**abort**，改归批3手工重写 | 冲突横切 24 文件。核心发现：主线**已有** CR 基础设施(labels.go 私有池 label/annotation 全含、instancetype.ReservedOfferingIdentity、CapacityTypeReserved、CapacityReservation type)，但**缺接入**(cloudprovider 无 addReservedOfferings/capacityReservationDrift/usablePrivatePool/capacityReservationPreference)。06 diff 强耦合 04/07 的 status 类型(LaunchTemplateStatus/DeploymentSet/ZoneCapacity/LastSuccessfulPreflightHash，均属父提交)，纯 cherry-pick 会误引入主线不需要的类型并连锁 deepcopy/controller。判定为真实缺口但需外科式手工移植，顺延批3 | — | — |
 
 ---
 
