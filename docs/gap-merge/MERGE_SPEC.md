@@ -73,7 +73,7 @@
 |---|---|---|---|---|
 | 5 | 17 provider options/feature gates | `5c76cec` | — | ✅ 已合并 `47018f9`（基石；仅 values.yaml 冲突，合并 core+provider gates；options/featuregates 单测通过） |
 | 6 | 01 selector 语义与字段消费 | `36ca169` | — | ✅ 已合并 `c8524af`（selector 必填 MaxItems=30；id 与 tags/zoneID/name/owner* 互斥校验；resolver 完整消费 VSwitch.zoneID/SG.name/Image.name/tags/owner*；DescribeSecurityGroups 新签名） |
-| 7 | 04 LaunchTemplate | `2c15efe` | 17 | 待办 |
+| 7 | 04 LaunchTemplate | `2c15efe` | 17 | ⚪ 主线已实现核心（`GetData` 读取 LT 版本→status controller 消费→cloudprovider 注入 create path + drift + annotation；`Spec.LaunchTemplateVersion` 已存在）；gap 增量仅 `ResolutionError` 错误分类（可选增强），13 文件方向冲突。**忽略合并**，错误分类降级为后续可选增强 |
 | 8 | 06 容量预留私有池 | `2f5f2da` | 17 | 待办 |
 | 9 | 09-P1 InstanceStore RAID0 | `88f4c34` | 09-P0, 17 | 待办 |
 | 10 | 11 pricing refresh | `3ceaa65` | 17 | 待办 |
@@ -122,6 +122,7 @@
 | 2026-08-30 | 07/15 试合并 | cherry-pick `4384e5a`/`431196e` 后**回退** | 实测二者非自包含：07 依赖 04/06 的 readiness reconcile 重构 + `ValidationSucceeded`/`PlacementReady` 条件；15 依赖 17 的 options（PodDensity/Terway/FeatureGates）+ 16 的 `EventReasonPodDensity*`。均 abort，重排到 16/17（及 04/06）之后 | — | — |
 | 2026-08-30 | 17 options/feature gates | cherry-pick `5c76cec` | 基石落地；仅 charts/values.yaml 1 处冲突（合并 core featureGates 注释 + provider pricing/podDensity/terway/featureGates 配置块）；options.go/operator.go/unavailable_offerings.go 自动合并 | ✅ options/featuregates 单测通过 | ⬜ 待接 |
 | 2026-08-30 | 01 selector 语义与字段消费 | cherry-pick `36ca169` | 7 冲突文件全解：types.go selector terms 取 gap 侧(去 omitempty + MaxItems=30 使 selector 必填)；validation.go 取 gap 侧(id 与 tags/zoneID/name/owner* 互斥 + imageOwnerID 校验)；clients/ecs.go 采纳 DescribeSecurityGroups(ctx,id,name,tags) 新签名；vswitch.go 取 gap getByQuery(支持 zoneID)；status/controller.go 保留主线 requeue consts + 追加 defaultSecurityGroupAttachLimit；imagefamily_test 保留主线 DescribeAvailableResource + 采纳新 SG 签名；cloudprovider_test 重置主线版。build 修复：删除 zz_generated.deepcopy.go 中已删类型(Normalized*)的孤儿 deepcopy；测试断言 mutually exclusive 对齐实现文案 | ✅ v1alpha1/vswitch/imagefamily/securitygroup/clients/cloudprovider/instance 通过（cluster DualStack 失败为主线既存问题，与本项无关） | ⬜ 待接 |
+| 2026-08-30 | 04 LaunchTemplate | 试 cherry-pick `2c15efe` 后**忽略** | 实测主线走不同且更完整路径已实现 04 核心：launchtemplate.go 有 `GetData`+`LaunchTemplateData`+`launchTemplateVersionDescriber` 读取 LT 版本具体配置；status/controller.go:236 用 `Spec.LaunchTemplateVersion` 消费；cloudprovider.go:923/1059/1123 注入 create path + drift + annotation。gap 增量仅 `ResolutionError` 错误分类，却引入 13 文件方向冲突（含已按铁律处理的 hash/cloudprovider_test）。判定主线已覆盖，abort 归入忽略类 | — | — |
 
 ---
 
