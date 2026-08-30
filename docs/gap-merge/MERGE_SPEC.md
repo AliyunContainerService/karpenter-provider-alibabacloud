@@ -62,7 +62,7 @@
 
 | 序 | Issue | 源 commit | 依赖 | 状态 |
 |---|---|---|---|---|
-| 1 | 08 多安全组 | `69bfa93` | — | 待办 |
+| 1 | 08 多安全组 | `69bfa93` | — | ✅ 已合并 `69127b7`（仅取多安全组；drift 已随主线；测试由 instance 层覆盖，cloudprovider 层测试脚手架依赖前置项故未移植） |
 | 2 | 03 RAM Role | `71f4495` | — | 待办 |
 | 3 | 05 MetadataOptions/IMDS | `bebbf5b` | — | 待办 |
 | 4 | 09-P0 磁盘全选项 | `b4ffa7c` | — | 待办 |
@@ -114,6 +114,7 @@
 | 日期 | Issue | 动作 | 冲突/结果 | 单测 | E2E |
 |---|---|---|---|---|---|
 | 2026-08-30 | — | 建分支 + 写 spec | 基线 `66b419c` | — | — |
+| 2026-08-30 | 08 多安全组 | cherry-pick `69bfa93` | 3 冲突文件；cloudprovider.go 仅取多安全组、drift(exact-set)随主线；instance_test 去掉 MetadataOptions 用例；cloudprovider_test 保持主线(脚手架依赖前置项) | ✅ instance/cloudprovider/batcher/securitygroups 通过 | ⬜ 待接 |
 
 ---
 
