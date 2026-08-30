@@ -44,7 +44,9 @@ func TestNodeClaim(t *testing.T) {
 		env = environmentcs.NewEnvironment(t)
 	})
 	AfterSuite(func() {
-		env.Stop()
+		if env != nil {
+			env.Stop()
+		}
 	})
 	RunSpecs(t, "GarbageCollection")
 }

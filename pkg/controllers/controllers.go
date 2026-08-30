@@ -43,6 +43,7 @@ func NewControllers(
 			alibabaOperator.VSwitchProvider,
 			alibabaOperator.SecurityGroupProvider,
 			alibabaOperator.ImageFamilyProvider,
+			alibabaOperator.LaunchTemplateProvider,
 			alibabaOperator.RAMProvider,
 		),
 		// NodeClass hash controller for drift detection

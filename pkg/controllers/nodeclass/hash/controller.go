@@ -18,9 +18,10 @@ package hash
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
-	"sort"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"k8s.io/client-go/util/retry"
@@ -49,18 +50,6 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Compute hash of the nodeclass spec
-	hash, err := computeHash(nodeClass.Spec)
-	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to compute hash: %w", err)
-	}
-
-	// Store hash in annotation
-	if nodeClass.Annotations == nil {
-		nodeClass.Annotations = map[string]string{}
-	}
-	nodeClass.Annotations[v1alpha1.AnnotationECSNodeClassHash] = hash
-
 	// Update the nodeclass with retry on conflict
 	if err := c.updateNodeClass(ctx, nodeClass); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to update nodeclass: %w", err)
@@ -70,53 +59,39 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 }
 
 func computeHash(spec v1alpha1.ECSNodeClassSpec) (string, error) {
-	// Create a consistent string representation of the spec
-	// We need to ensure the same spec always produces the same hash
-	// regardless of map ordering or other non-deterministic factors
-
-	// For VSwitch selector terms, sort by ID for consistency
-	vswitchTerms := make([]string, len(spec.VSwitchSelectorTerms))
-	for i, term := range spec.VSwitchSelectorTerms {
-		if term.ID != nil {
-			vswitchTerms[i] = *term.ID
-		} else {
-			vswitchTerms[i] = ""
-		}
+	type nodeClassHashInput struct {
+		VSwitchSelectorTerms             []v1alpha1.VSwitchSelectorTerm             `json:"vSwitchSelectorTerms"`
+		SecurityGroupSelectorTerms       []v1alpha1.SecurityGroupSelectorTerm       `json:"securityGroupSelectorTerms"`
+		ImageSelectorTerms               []v1alpha1.ImageSelectorTerm               `json:"imageSelectorTerms"`
+		UserData                         *string                                    `json:"userData,omitempty"`
+		Kubelet                          *v1alpha1.KubeletConfiguration             `json:"kubelet,omitempty"`
+		SystemDisk                       *v1alpha1.SystemDiskSpec                   `json:"systemDisk,omitempty"`
+		DataDisks                        []v1alpha1.DataDiskSpec                    `json:"dataDisks,omitempty"`
+		Tags                             map[string]string                          `json:"tags,omitempty"`
+		Role                             *string                                    `json:"role,omitempty"`
+		CapacityReservationPreference    *string                                    `json:"capacityReservationPreference,omitempty"`
+		CapacityReservationSelectorTerms []v1alpha1.CapacityReservationSelectorTerm `json:"capacityReservationSelectorTerms,omitempty"`
 	}
-	sort.Strings(vswitchTerms)
 
-	// For Security Group selector terms, sort by ID for consistency
-	sgTerms := make([]string, len(spec.SecurityGroupSelectorTerms))
-	for i, term := range spec.SecurityGroupSelectorTerms {
-		if term.ID != nil {
-			sgTerms[i] = *term.ID
-		} else {
-			sgTerms[i] = ""
-		}
+	hashInput := nodeClassHashInput{
+		VSwitchSelectorTerms:             spec.VSwitchSelectorTerms,
+		SecurityGroupSelectorTerms:       spec.SecurityGroupSelectorTerms,
+		ImageSelectorTerms:               spec.ImageSelectorTerms,
+		UserData:                         spec.UserData,
+		Kubelet:                          spec.Kubelet,
+		SystemDisk:                       spec.SystemDisk,
+		DataDisks:                        spec.DataDisks,
+		Tags:                             spec.Tags,
+		Role:                             spec.Role,
+		CapacityReservationPreference:    spec.CapacityReservationPreference,
+		CapacityReservationSelectorTerms: spec.CapacityReservationSelectorTerms,
 	}
-	sort.Strings(sgTerms)
-
-	// For Image selector terms, sort by ID for consistency
-	imageTerms := make([]string, len(spec.ImageSelectorTerms))
-	for i, term := range spec.ImageSelectorTerms {
-		if term.ID != nil {
-			imageTerms[i] = *term.ID
-		} else {
-			imageTerms[i] = ""
-		}
+	data, err := json.Marshal(hashInput)
+	if err != nil {
+		return "", err
 	}
-	sort.Strings(imageTerms)
-
-	// Build a consistent string representation
-	str := fmt.Sprintf("%v|%v|%v|%v",
-		vswitchTerms,
-		sgTerms,
-		imageTerms,
-		spec.Role)
-
-	// Compute MD5 hash
-	h := md5.Sum([]byte(str))
-	return fmt.Sprintf("%x", h), nil
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:8]), nil
 }
 
 // updateNodeClass updates the nodeclass with retry on conflict
@@ -128,13 +103,20 @@ func (c *Controller) updateNodeClass(ctx context.Context, nodeClass *v1alpha1.EC
 			return err
 		}
 
-		// Copy the annotations to the latest object
+		hash, err := computeHash(latest.Spec)
+		if err != nil {
+			return fmt.Errorf("failed to compute hash: %w", err)
+		}
+		if latest.Annotations[v1alpha1.AnnotationECSNodeClassHash] == hash &&
+			latest.Annotations[v1alpha1.AnnotationECSNodeClassHashVersion] == "v1" {
+			return nil
+		}
+
 		if latest.Annotations == nil {
 			latest.Annotations = map[string]string{}
 		}
-		for k, v := range nodeClass.Annotations {
-			latest.Annotations[k] = v
-		}
+		latest.Annotations[v1alpha1.AnnotationECSNodeClassHash] = hash
+		latest.Annotations[v1alpha1.AnnotationECSNodeClassHashVersion] = "v1"
 
 		// Update the latest object
 		return c.kubeClient.Update(ctx, latest)

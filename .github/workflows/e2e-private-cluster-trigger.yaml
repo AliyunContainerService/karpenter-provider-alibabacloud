@@ -1,0 +1,31 @@
+name: E2EPrivateClusterTrigger
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        type: string
+        default: cn-hangzhou
+      suite:
+        type: string
+        default: Integration
+      cleanup:
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: e2e-private-cluster-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  private-cluster:
+    uses: ./.github/workflows/e2e.yaml
+    with:
+      suite: ${{ inputs.suite }}
+      region: ${{ inputs.region }}
+      cleanup: ${{ inputs.cleanup }}
+      workflow_trigger: private_cluster
+      source: alibabacloud
+    secrets:
+      ALIBABA_CLOUD_E2E_CONFIG: ${{ secrets.ALIBABA_CLOUD_E2E_CONFIG }}
+      ALIBABA_CLOUD_ACCESS_KEY_ID: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_ID }}
+      ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALIBABA_CLOUD_ACCESS_KEY_SECRET }}

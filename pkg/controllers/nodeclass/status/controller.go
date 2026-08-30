@@ -27,6 +27,7 @@ import (
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/imagefamily"
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/launchtemplate"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/securitygroup"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/vswitch"
 
@@ -49,12 +50,20 @@ func init() {
 // Controller reconciles ECSNodeClass status
 // This controller is separate from the main controller to avoid conflicts
 type Controller struct {
-	client                client.Client
-	vswitchProvider       *vswitch.Provider
-	securityGroupProvider *securitygroup.Provider
-	imageFamilyProvider   *imagefamily.Provider
-	ramProvider           *ramrole.Provider
+	client                 client.Client
+	vswitchProvider        *vswitch.Provider
+	securityGroupProvider  *securitygroup.Provider
+	imageFamilyProvider    *imagefamily.Provider
+	launchTemplateProvider *launchtemplate.Provider
+	ramProvider            *ramrole.Provider
 }
+
+const (
+	successfulRequeueBase         = 15 * time.Minute
+	successfulRequeueJitter       = 5 * time.Minute
+	failedResolutionRequeueBase   = 5 * time.Minute
+	failedResolutionRequeueJitter = time.Minute
+)
 
 // NewController creates a new NodeClass status controller
 func NewController(
@@ -62,14 +71,16 @@ func NewController(
 	vswitchProvider *vswitch.Provider,
 	securityGroupProvider *securitygroup.Provider,
 	imageFamilyProvider *imagefamily.Provider,
+	launchTemplateProvider *launchtemplate.Provider,
 	ramProvider *ramrole.Provider,
 ) *Controller {
 	return &Controller{
-		client:                client,
-		vswitchProvider:       vswitchProvider,
-		securityGroupProvider: securityGroupProvider,
-		imageFamilyProvider:   imageFamilyProvider,
-		ramProvider:           ramProvider,
+		client:                 client,
+		vswitchProvider:        vswitchProvider,
+		securityGroupProvider:  securityGroupProvider,
+		imageFamilyProvider:    imageFamilyProvider,
+		launchTemplateProvider: launchTemplateProvider,
+		ramProvider:            ramProvider,
 	}
 }
 
@@ -85,6 +96,125 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	stored := nodeClass.DeepCopy()
+	var resolveErr error
+
+	if nodeClass.Spec.LaunchTemplateID != nil {
+		resolveErr = c.resolveLaunchTemplate(nodeClass, ctx)
+	} else {
+		resolveErr = c.resolveSelectorResources(nodeClass, ctx)
+	}
+
+	// Validate RAM Role
+	if nodeClass.Spec.Role != nil {
+		result := c.ramProvider.ValidateRole(ctx, *nodeClass.Spec.Role)
+		if result != nil && !result.Valid {
+			c.setCondition(nodeClass, v1alpha1.ConditionTypeRAMRoleResolved,
+				metav1.ConditionFalse, result.Reason, result.Message)
+			c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+				"ResourceResolutionFailed", "RAM role validation failed")
+			if resolveErr == nil {
+				resolveErr = fmt.Errorf("failed to validate RAM role: %s", result.Message)
+			}
+		} else {
+			// Validation successful - set status
+			nodeClass.Status.RAMRole = nodeClass.Spec.Role
+			c.setCondition(nodeClass, v1alpha1.ConditionTypeRAMRoleResolved, metav1.ConditionTrue,
+				"RAMRoleResolved", "RAM role is valid")
+		}
+	} else {
+		// Validation successful - set status
+		nodeClass.Status.RAMRole = nodeClass.Spec.Role
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeRAMRoleResolved, metav1.ConditionTrue,
+			"RAMRoleResolved", "RAM role is valid")
+	}
+
+	// Set Ready condition based on other conditions
+	if c.isReady(nodeClass) {
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionTrue,
+			"Ready", "ECSNodeClass is ready")
+	}
+
+	// Update status if changed
+	if !equality.Semantic.DeepEqual(stored, nodeClass) {
+		if err := c.updateStatus(ctx, nodeClass); err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to update ECSNodeClass status: %w", err)
+		}
+	}
+
+	// If there was a resolve error, return it to trigger rate limiter backoff
+	if resolveErr != nil {
+		jitter := time.Duration(rand.Int63n(int64(failedResolutionRequeueJitter)))
+		log.FromContext(ctx).Error(resolveErr, "failed to resolve ECSNodeClass resources, will retry after backoff", "requeueAfter", failedResolutionRequeueBase+jitter)
+		return reconcile.Result{RequeueAfter: failedResolutionRequeueBase + jitter}, nil
+	}
+
+	// Add jitter to avoid synchronized updates with other controllers
+	jitter := time.Duration(rand.Int63n(int64(successfulRequeueJitter)))
+	return reconcile.Result{RequeueAfter: successfulRequeueBase + jitter}, nil
+}
+
+func (c *Controller) resolveLaunchTemplate(nodeClass *v1alpha1.ECSNodeClass, ctx context.Context) error {
+	if c.launchTemplateProvider == nil {
+		err := fmt.Errorf("launch template provider is required")
+		c.setSelectorConditionsFromLaunchTemplateError(nodeClass, err)
+		return err
+	}
+	data, err := c.launchTemplateProvider.GetData(ctx, *nodeClass.Spec.LaunchTemplateID, nodeClass.Spec.LaunchTemplateVersion)
+	if err != nil {
+		c.setSelectorConditionsFromLaunchTemplateError(nodeClass, err)
+		return fmt.Errorf("failed to resolve launch template: %w", err)
+	}
+	if data.ImageID == "" || data.VSwitchID == "" || len(data.SecurityGroupIDs) == 0 {
+		err := fmt.Errorf("launch template must specify image, vswitch, and security group")
+		c.setSelectorConditionsFromLaunchTemplateError(nodeClass, err)
+		return err
+	}
+
+	nodeClass.Status.Images = []v1alpha1.Image{{ID: data.ImageID}}
+	vSwitchID := data.VSwitchID
+	vswitches, err := c.vswitchProvider.Resolve(ctx, []v1alpha1.VSwitchSelectorTerm{{ID: &vSwitchID}})
+	if err != nil {
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionFalse,
+			"LaunchTemplateResolutionFailed", err.Error())
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			"ResourceResolutionFailed", "Launch template VSwitch resolution failed")
+		return fmt.Errorf("failed to resolve launch template vswitch: %w", err)
+	}
+	if len(vswitches) == 0 {
+		err := fmt.Errorf("launch template vswitch not found")
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionFalse,
+			"LaunchTemplateResolutionFailed", err.Error())
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			"ResourceResolutionFailed", "Launch template VSwitch resolution failed")
+		return err
+	}
+	nodeClass.Status.VSwitches = vswitches
+	nodeClass.Status.SecurityGroups = make([]v1alpha1.SecurityGroup, 0, len(data.SecurityGroupIDs))
+	for _, id := range data.SecurityGroupIDs {
+		nodeClass.Status.SecurityGroups = append(nodeClass.Status.SecurityGroups, v1alpha1.SecurityGroup{ID: id})
+	}
+	c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionTrue,
+		"LaunchTemplateResolved", "Resolved VSwitch from launch template")
+	c.setCondition(nodeClass, v1alpha1.ConditionTypeSecurityGroupResolved, metav1.ConditionTrue,
+		"LaunchTemplateResolved", fmt.Sprintf("Resolved %d SecurityGroups from launch template", len(data.SecurityGroupIDs)))
+	c.setCondition(nodeClass, v1alpha1.ConditionTypeImageResolved, metav1.ConditionTrue,
+		"LaunchTemplateResolved", "Resolved Image from launch template")
+	return nil
+}
+
+func (c *Controller) setSelectorConditionsFromLaunchTemplateError(nodeClass *v1alpha1.ECSNodeClass, err error) {
+	message := err.Error()
+	c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionFalse,
+		"LaunchTemplateResolutionFailed", message)
+	c.setCondition(nodeClass, v1alpha1.ConditionTypeSecurityGroupResolved, metav1.ConditionFalse,
+		"LaunchTemplateResolutionFailed", message)
+	c.setCondition(nodeClass, v1alpha1.ConditionTypeImageResolved, metav1.ConditionFalse,
+		"LaunchTemplateResolutionFailed", message)
+	c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+		"ResourceResolutionFailed", "Launch template resolution failed")
+}
+
+func (c *Controller) resolveSelectorResources(nodeClass *v1alpha1.ECSNodeClass, ctx context.Context) error {
 	var resolveErr error
 
 	// Resolve VSwitches
@@ -155,51 +285,7 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			"ImageResolved", fmt.Sprintf("Resolved %d Images", len(images)))
 	}
 
-	// Validate RAM Role
-	if nodeClass.Spec.Role != nil {
-		result := c.ramProvider.ValidateRole(ctx, *nodeClass.Spec.Role)
-		if result != nil && !result.Valid {
-			c.setCondition(nodeClass, v1alpha1.ConditionTypeRAMRoleResolved,
-				metav1.ConditionFalse, result.Reason, result.Message)
-			c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
-				"ResourceResolutionFailed", "RAM role validation failed")
-			if resolveErr == nil {
-				resolveErr = fmt.Errorf("failed to validate RAM role: %s", result.Message)
-			}
-		} else {
-			// Validation successful - set status
-			nodeClass.Status.RAMRole = nodeClass.Spec.Role
-			c.setCondition(nodeClass, v1alpha1.ConditionTypeRAMRoleResolved, metav1.ConditionTrue,
-				"RAMRoleResolved", "RAM role is valid")
-		}
-	} else {
-		// Validation successful - set status
-		nodeClass.Status.RAMRole = nodeClass.Spec.Role
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeRAMRoleResolved, metav1.ConditionTrue,
-			"RAMRoleResolved", "RAM role is valid")
-	}
-
-	// Set Ready condition based on other conditions
-	if c.isReady(nodeClass) {
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionTrue,
-			"Ready", "ECSNodeClass is ready")
-	}
-
-	// Update status if changed
-	if !equality.Semantic.DeepEqual(stored, nodeClass) {
-		if err := c.updateStatus(ctx, nodeClass); err != nil {
-			return reconcile.Result{}, fmt.Errorf("failed to update ECSNodeClass status: %w", err)
-		}
-	}
-
-	// If there was a resolve error, return it to trigger rate limiter backoff
-	if resolveErr != nil {
-		return reconcile.Result{}, resolveErr
-	}
-
-	// Add jitter to avoid synchronized updates with other controllers
-	jitter := time.Duration(rand.Int63n(300)) * time.Second // 0-5 minutes random jitter
-	return reconcile.Result{RequeueAfter: 15*time.Minute + jitter}, nil
+	return resolveErr
 }
 
 // setCondition sets a condition on the ECSNodeClass
@@ -303,7 +389,7 @@ func (c *Controller) Register(ctx context.Context, mgr manager.Manager) error {
 				1*time.Second, // Initial backoff
 				5*time.Minute, // Max backoff
 			),
-			MaxConcurrentReconciles: 10,
+			MaxConcurrentReconciles: 1,
 		}).
 		Complete(c)
 }

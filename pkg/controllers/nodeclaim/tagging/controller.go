@@ -90,18 +90,13 @@ func getInstanceIDFromProviderID(providerID string) string {
 
 func buildTags(nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNodeClass) map[string]string {
 	tags := map[string]string{
-		"karpenter.sh/nodeclaim":  nodeClaim.Name,
-		"karpenter.sh/nodepool":   nodeClaim.Labels[coreapis.NodePoolLabelKey],
-		"karpenter.sh/managed-by": "karpenter",
+		v1alpha1.TagNodeClaim: nodeClaim.Name,
+		v1alpha1.TagNodePool:  nodeClaim.Labels[coreapis.NodePoolLabelKey],
+		v1alpha1.TagManagedBy: v1alpha1.TagManagedByValue,
 	}
 
 	// Add custom tags from nodeclass
 	for k, v := range nodeClass.Spec.Tags {
-		tags[k] = v
-	}
-
-	// Add labels from nodeclaim
-	for k, v := range nodeClaim.Labels {
 		tags[k] = v
 	}
 

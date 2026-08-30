@@ -20,8 +20,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/aws/karpenter-provider-aws/test/pkg/debug"
 	"k8s.io/apimachinery/pkg/types"
@@ -47,6 +51,7 @@ import (
 
 	"github.com/samber/lo"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/util/retry"
 	karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -60,6 +65,8 @@ func init() {
 }
 
 var persistedSettings []corev1.EnvVar
+
+var DefaultImageFamily = "acs:alibaba_cloud_linux_3_2104_x64_container_optimized"
 
 var DefaultImageID = "aliyun_4_x64_20G_container_optimized_alibase_20260430.vhd"
 
@@ -97,6 +104,34 @@ type Environment struct {
 	ZoneInfo        []ZoneInfo
 }
 
+func (env *Environment) ExpectUpdated(objects ...client.Object) {
+	GinkgoHelper()
+	for _, object := range objects {
+		if nodeClass, ok := object.(*v1alpha1.ECSNodeClass); ok {
+			env.expectECSNodeClassPatched(nodeClass)
+			continue
+		}
+		env.Environment.ExpectUpdated(object)
+	}
+}
+
+func (env *Environment) expectECSNodeClassPatched(nodeClass *v1alpha1.ECSNodeClass) {
+	GinkgoHelper()
+	Eventually(func(g Gomega) {
+		current := &v1alpha1.ECSNodeClass{}
+		g.Expect(env.Client.Get(env.Context, client.ObjectKeyFromObject(nodeClass), current)).To(Succeed())
+		base := current.DeepCopy()
+		if nodeClass.Labels != nil {
+			current.Labels = nodeClass.Labels
+		}
+		if nodeClass.Annotations != nil {
+			current.Annotations = nodeClass.Annotations
+		}
+		current.Spec = nodeClass.Spec
+		g.Expect(env.Client.Patch(env.Context, current, client.MergeFrom(base))).To(Succeed())
+	}).WithTimeout(30 * time.Second).Should(Succeed())
+}
+
 type ZoneInfo struct {
 	Zone     string
 	ZoneID   string
@@ -111,11 +146,7 @@ type TestConfig struct {
 
 func NewEnvironment(t *testing.T) *Environment {
 	env := common.NewEnvironment(t)
-	cfg := TestConfig{
-		Region:          lo.Must(os.LookupEnv("TEST_REGION")),
-		AccessKeyID:     lo.Must(os.LookupEnv("ALIBABA_CLOUD_ACCESS_KEY_ID")),
-		AccessKeySecret: lo.Must(os.LookupEnv("ALIBABA_CLOUD_ACCESS_KEY_SECRET")),
-	}
+	cfg := lo.Must(loadTestConfig())
 
 	csAPI, err := operator.InitCSClient(cfg.Region, cfg.AccessKeyID, cfg.AccessKeySecret)
 	Expect(err).ToNot(HaveOccurred())
@@ -140,7 +171,72 @@ func NewEnvironment(t *testing.T) *Environment {
 	return testEnv
 }
 
+func loadTestConfig() (TestConfig, error) {
+	cfg := TestConfig{
+		Region:          strings.TrimSpace(os.Getenv("TEST_REGION")),
+		AccessKeyID:     strings.TrimSpace(os.Getenv("ALIBABA_CLOUD_ACCESS_KEY_ID")),
+		AccessKeySecret: strings.TrimSpace(os.Getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET")),
+	}
+	if cfg.Region != "" && cfg.AccessKeyID != "" && cfg.AccessKeySecret != "" {
+		return cfg, nil
+	}
+	if path := strings.TrimSpace(os.Getenv("TEST_DEPLOY_CONFIG")); path != "" {
+		fileCfg, err := loadDeployConfigTestCredentials(path)
+		if err != nil {
+			return TestConfig{}, err
+		}
+		if cfg.Region == "" {
+			cfg.Region = fileCfg.Region
+		}
+		if cfg.AccessKeyID == "" {
+			cfg.AccessKeyID = fileCfg.AccessKeyID
+		}
+		if cfg.AccessKeySecret == "" {
+			cfg.AccessKeySecret = fileCfg.AccessKeySecret
+		}
+	}
+	if cfg.Region == "" {
+		return TestConfig{}, fmt.Errorf("TEST_REGION is required")
+	}
+	if cfg.AccessKeyID == "" {
+		return TestConfig{}, fmt.Errorf("ALIBABA_CLOUD_ACCESS_KEY_ID or TEST_DEPLOY_CONFIG is required")
+	}
+	if cfg.AccessKeySecret == "" {
+		return TestConfig{}, fmt.Errorf("ALIBABA_CLOUD_ACCESS_KEY_SECRET or TEST_DEPLOY_CONFIG is required")
+	}
+	return cfg, nil
+}
+
+func loadDeployConfigTestCredentials(path string) (TestConfig, error) {
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return TestConfig{}, fmt.Errorf("read TEST_DEPLOY_CONFIG: %w", err)
+	}
+	var raw struct {
+		AlibabaCloud struct {
+			RegionID        string `yaml:"region_id"`
+			AccessKeyID     string `yaml:"access_key_id"`
+			AccessKeySecret string `yaml:"access_key_secret"`
+		} `yaml:"alibaba_cloud"`
+	}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return TestConfig{}, fmt.Errorf("parse TEST_DEPLOY_CONFIG: %w", err)
+	}
+	return TestConfig{
+		Region:          strings.TrimSpace(raw.AlibabaCloud.RegionID),
+		AccessKeyID:     strings.TrimSpace(raw.AlibabaCloud.AccessKeyID),
+		AccessKeySecret: strings.TrimSpace(raw.AlibabaCloud.AccessKeySecret),
+	}, nil
+}
+
 func (env *Environment) BeforeEach() {
+	Expect(validateTestClusterTarget(env.ClusterID, env.ClusterName)).To(Succeed())
+
 	d := &appsv1.Deployment{}
 	Expect(env.Client.Get(env.Context, types.NamespacedName{Namespace: "karpenter", Name: "karpenter"}, d)).To(Succeed())
 	Expect(d.Spec.Template.Spec.Containers).To(HaveLen(1))
@@ -212,12 +308,7 @@ func (env *Environment) BeforeEach() {
 			}
 		}
 		if !hasTaint {
-			node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{
-				Key:    "karpenter-test",
-				Value:  "true",
-				Effect: corev1.TaintEffectNoSchedule,
-			})
-			Expect(env.Client.Update(context.Background(), node, &client.UpdateOptions{})).To(Succeed())
+			Expect(env.ensureBootstrapNodeTaint(node.Name)).To(Succeed())
 		}
 	}
 
@@ -228,34 +319,56 @@ func (env *Environment) BeforeEach() {
 	env.StartingNodeCount = env.Monitor.NodeCountAtReset()
 }
 
+func (env *Environment) ensureBootstrapNodeTaint(name string) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		node := &corev1.Node{}
+		if err := env.Client.Get(context.Background(), types.NamespacedName{Name: name}, node); err != nil {
+			return client.IgnoreNotFound(err)
+		}
+		for _, taint := range node.Spec.Taints {
+			if taint.Key == "karpenter-test" {
+				return nil
+			}
+		}
+		node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{
+			Key:    "karpenter-test",
+			Value:  "true",
+			Effect: corev1.TaintEffectNoSchedule,
+		})
+		return env.Client.Update(context.Background(), node, &client.UpdateOptions{})
+	})
+}
+
 func (env *Environment) AfterEach() {
 	env.CleanupObjects(CleanableObjects...)
-	env.Environment.AfterEach()
+	debug.AfterEach(env.Context)
 }
 
 func (env *Environment) ValidateCleanEnvironment() {
-	var nodes corev1.NodeList
-	Expect(env.Client.List(env.Context, &nodes)).To(Succeed())
-	for _, node := range nodes.Items {
-		if len(node.Spec.Taints) == 0 && !node.Spec.Unschedulable {
-			Fail(fmt.Sprintf("expected system pool node %s to be tainted", node.Name))
+	Eventually(func(g Gomega) {
+		var nodes corev1.NodeList
+		g.Expect(env.Client.List(env.Context, &nodes)).To(Succeed())
+		for _, node := range nodes.Items {
+			if node.Labels[karpv1.NodePoolLabelKey] != "" && len(node.Spec.Taints) == 0 && !node.Spec.Unschedulable {
+				g.Expect(node.Name).To(BeEmpty(), fmt.Sprintf("expected system pool node %s to be tainted", node.Name))
+			}
 		}
-	}
-	var pods corev1.PodList
-	Expect(env.Client.List(env.Context, &pods)).To(Succeed())
-	for i := range pods.Items {
-		Expect(pod.IsProvisionable(&pods.Items[i])).To(BeFalse(),
-			fmt.Sprintf("expected to have no provisionable pods, found %s/%s", pods.Items[i].Namespace, pods.Items[i].Name))
-		Expect(pods.Items[i].Namespace).ToNot(Equal("default"),
-			fmt.Sprintf("expected no pods in the `default` namespace, found %s/%s", pods.Items[i].Namespace, pods.Items[i].Name))
-	}
-	for _, obj := range []client.Object{&karpv1.NodePool{}, &v1alpha1.ECSNodeClass{}} {
-		metaList := &metav1.PartialObjectMetadataList{}
-		gvk := lo.Must(apiutil.GVKForObject(obj, env.Client.Scheme()))
-		metaList.SetGroupVersionKind(gvk)
-		Expect(env.Client.List(env.Context, metaList, client.Limit(1))).To(Succeed())
-		Expect(metaList.Items).To(HaveLen(0), fmt.Sprintf("expected no %s to exist", gvk.Kind))
-	}
+		var pods corev1.PodList
+		g.Expect(env.Client.List(env.Context, &pods)).To(Succeed())
+		for i := range pods.Items {
+			g.Expect(pod.IsProvisionable(&pods.Items[i])).To(BeFalse(),
+				fmt.Sprintf("expected to have no provisionable pods, found %s/%s", pods.Items[i].Namespace, pods.Items[i].Name))
+			g.Expect(pods.Items[i].Namespace).ToNot(Equal("default"),
+				fmt.Sprintf("expected no pods in the `default` namespace, found %s/%s", pods.Items[i].Namespace, pods.Items[i].Name))
+		}
+		for _, obj := range []client.Object{&karpv1.NodePool{}, &v1alpha1.ECSNodeClass{}} {
+			metaList := &metav1.PartialObjectMetadataList{}
+			gvk := lo.Must(apiutil.GVKForObject(obj, env.Client.Scheme()))
+			metaList.SetGroupVersionKind(gvk)
+			g.Expect(env.Client.List(env.Context, metaList, client.Limit(1))).To(Succeed())
+			g.Expect(metaList.Items).To(HaveLen(0), fmt.Sprintf("expected no %s to exist", gvk.Kind))
+		}
+	}).WithTimeout(10 * time.Minute).WithPolling(5 * time.Second).Should(Succeed())
 }
 
 func (env *Environment) DefaultECSNodeClass() *v1alpha1.ECSNodeClass {
@@ -264,23 +377,13 @@ func (env *Environment) DefaultECSNodeClass() *v1alpha1.ECSNodeClass {
 	nodeClass.ObjectMeta = test.ObjectMeta(nodeClass.ObjectMeta)
 
 	nodeClass.Spec.ClusterID = env.ClusterID
-	nodeClass.Spec.Tags = map[string]string{
-		"testing/cluster": env.ClusterName,
-	}
-	nodeClass.Spec.SecurityGroupSelectorTerms = []v1alpha1.SecurityGroupSelectorTerm{
-		{
-			Tags: map[string]string{"karpenter.sh/discovery": env.ClusterName},
-		},
-	}
-	nodeClass.Spec.VSwitchSelectorTerms = []v1alpha1.VSwitchSelectorTerm{
-		{
-			Tags: map[string]string{"karpenter.sh/discovery": env.ClusterName},
-		},
-	}
-	nodeClass.Spec.ImageSelectorTerms = []v1alpha1.ImageSelectorTerm{
-		{
-			ID: &DefaultImageID,
-		},
+	nodeClass.Spec.ClusterName = env.ClusterName
+	nodeClass.Spec.Tags = env.OwnershipTags()
+	nodeClass.Spec.SecurityGroupSelectorTerms = securityGroupSelectorTerms(env.ClusterName)
+	nodeClass.Spec.VSwitchSelectorTerms = vSwitchSelectorTerms(env.ClusterName)
+	nodeClass.Spec.ImageSelectorTerms = imageSelectorTerms()
+	if role := strings.TrimSpace(os.Getenv("TEST_RAM_ROLE")); role != "" {
+		nodeClass.Spec.Role = lo.ToPtr(role)
 	}
 	nodeClass.Spec.SystemDisk = &v1alpha1.SystemDiskSpec{
 		Category:         "cloud_essd",
@@ -295,6 +398,85 @@ func (env *Environment) DefaultECSNodeClass() *v1alpha1.ECSNodeClass {
 		},
 	}
 	return nodeClass
+}
+
+func (env *Environment) OwnershipTags() map[string]string {
+	return map[string]string{
+		"testing/cluster":        env.ClusterName,
+		"karpenter.sh/discovery": env.ClusterName,
+		v1alpha1.TagManagedBy:    v1alpha1.TagManagedByValue,
+	}
+}
+
+func (env *Environment) TestTags(testType string) map[string]string {
+	tags := env.OwnershipTags()
+	tags["testing/type"] = testType
+	return tags
+}
+
+func validateTestClusterTarget(clusterID, clusterName string) error {
+	if strings.TrimSpace(clusterID) == "" {
+		return fmt.Errorf("TEST_CLUSTER_ID is required before mutating an E2E cluster")
+	}
+	if strings.TrimSpace(clusterName) == "" {
+		return fmt.Errorf("TEST_CLUSTER_NAME is required before mutating an E2E cluster")
+	}
+	if strings.HasPrefix(clusterName, "karpenter-alibabacloud-e2e-") || os.Getenv("ALLOW_UNSAFE_E2E_CLUSTER") == "true" {
+		return nil
+	}
+	return fmt.Errorf("refusing to run destructive E2E setup against non-e2e cluster %q", clusterName)
+}
+
+func vSwitchSelectorTerms(clusterName string) []v1alpha1.VSwitchSelectorTerm {
+	if ids := splitEnvList("TEST_VSWITCH_IDS"); len(ids) > 0 {
+		return lo.Map(ids, func(id string, _ int) v1alpha1.VSwitchSelectorTerm {
+			return v1alpha1.VSwitchSelectorTerm{ID: lo.ToPtr(id)}
+		})
+	}
+	return []v1alpha1.VSwitchSelectorTerm{
+		{
+			Tags: map[string]string{"karpenter.sh/discovery": clusterName},
+		},
+	}
+}
+
+func securityGroupSelectorTerms(clusterName string) []v1alpha1.SecurityGroupSelectorTerm {
+	if ids := splitEnvList("TEST_SECURITY_GROUP_IDS"); len(ids) > 0 {
+		return lo.Map(ids, func(id string, _ int) v1alpha1.SecurityGroupSelectorTerm {
+			return v1alpha1.SecurityGroupSelectorTerm{ID: lo.ToPtr(id)}
+		})
+	}
+	return []v1alpha1.SecurityGroupSelectorTerm{
+		{
+			Tags: map[string]string{"karpenter.sh/discovery": clusterName},
+		},
+	}
+}
+
+func imageSelectorTerms() []v1alpha1.ImageSelectorTerm {
+	if imageID := strings.TrimSpace(os.Getenv("TEST_IMAGE_ID")); imageID != "" {
+		return []v1alpha1.ImageSelectorTerm{{ID: lo.ToPtr(imageID)}}
+	}
+	imageFamily := strings.TrimSpace(os.Getenv("TEST_IMAGE_FAMILY"))
+	if imageFamily == "" {
+		imageFamily = DefaultImageFamily
+	}
+	return []v1alpha1.ImageSelectorTerm{{ImageFamily: lo.ToPtr(imageFamily)}}
+}
+
+func splitEnvList(key string) []string {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if value := strings.TrimSpace(part); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 func (env *Environment) DefaultNodePool(nodeClass *v1alpha1.ECSNodeClass) *karpv1.NodePool {
@@ -331,7 +513,7 @@ func (env *Environment) DefaultNodePool(nodeClass *v1alpha1.ECSNodeClass) *karpv
 							NodeSelectorRequirement: corev1.NodeSelectorRequirement{
 								Key:      corev1.LabelInstanceTypeStable,
 								Operator: corev1.NodeSelectorOpIn,
-								Values:   []string{"ecs.c6.xlarge", "ecs.g6.xlarge"},
+								Values:   []string{"ecs.c9i.large", "ecs.c9i.xlarge"},
 							},
 						},
 					},

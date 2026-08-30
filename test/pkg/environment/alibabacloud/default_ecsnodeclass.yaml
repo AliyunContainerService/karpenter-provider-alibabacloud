@@ -1,0 +1,43 @@
+apiVersion: karpenter.alibabacloud.com/v1alpha1
+kind: ECSNodeClass
+metadata:
+  name: default
+spec:
+  clusterID: "{{ .ClusterID }}"
+  clusterName: "{{ .ClusterName }}"
+  clusterEndpoint: "{{ .ClusterEndpoint }}"
+  vSwitchSelectorTerms:
+{{- if .VSwitchIDs }}
+{{- range .VSwitchIDs }}
+    - id: "{{ . }}"
+{{- end }}
+{{- else }}
+    - tags:
+        karpenter.sh/discovery: "{{ .ClusterName }}"
+{{- end }}
+  securityGroupSelectorTerms:
+{{- if .SecurityGroupIDs }}
+{{- range .SecurityGroupIDs }}
+    - id: "{{ . }}"
+{{- end }}
+{{- else }}
+    - tags:
+        karpenter.sh/discovery: "{{ .ClusterName }}"
+{{- end }}
+  imageSelectorTerms:
+{{- if .ImageID }}
+    - id: "{{ .ImageID }}"
+{{- else }}
+    - imageFamily: "{{ .ImageFamily }}"
+{{- end }}
+{{- if .RAMRole }}
+  role: "{{ .RAMRole }}"
+{{- end }}
+  systemDisk:
+    category: cloud_essd
+    size: 40
+    performanceLevel: PL0
+  tags:
+    testing/type: e2e
+    testing/cluster: "{{ .ClusterName }}"
+    karpenter.sh/discovery: "{{ .ClusterName }}"
