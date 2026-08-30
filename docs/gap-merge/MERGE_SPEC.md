@@ -57,8 +57,9 @@
 
 ## 2. 合并批次与顺序（严格按依赖）
 
-### 批 1 · 低风险自包含（直接 cherry-pick，冲突 <=1 块）
-> 只在 instance.go request 构造处加字段 + CRD 加字段，与主线重构区隔清晰。
+> ⚠️ 重要修正（实测）：原计划把 07/15 列为「批1 自包含」，实际 cherry-pick 发现二者都强依赖 **17（options/feature gates）与 16（metrics events）**，07 还依赖 **04/06** 的 readiness reconcile 重构（`reconcileLaunchTemplate`/`reconcileCapacityReservations`/`ValidationSucceeded`）。因此已把 **17 提前为整体基石**，07/15 顺延到 16/17（及 04/06）之后。
+
+### 批 1 · 低风险自包含（instance.go request 构造处加字段 + CRD 加字段，与主线重构区隔清晰）
 
 | 序 | Issue | 源 commit | 依赖 | 状态 |
 |---|---|---|---|---|
@@ -66,28 +67,28 @@
 | 2 | 03 RAM Role | `71f4495` | — | ✅ 已合并 `4ce4eb4` |
 | 3 | 05 MetadataOptions/IMDS | `bebbf5b` | — | ✅ 已合并 `3c712fa`（hash 采用主线 inline+MetadataOptions；删除混入的 nodeclass_hash.go） |
 | 4 | 09-P0 磁盘全选项 | `b4ffa7c` | — | ✅ 已合并 `0374f6c`（磁盘全选项+drift；hash 走主线 inline，追加 SystemDisk/DataDisks/InstanceStorePolicy 字段） |
-| 5 | 07 DeploymentSet | `4384e5a` | — | 待办 |
-| 6 | 15 Terway pod 密度 | `431196e` | — | 待办 |
 
-### 批 2 · 中风险需适配（先落 17 gates，再在主线新结构上重写）
+### 批 2 · 基石 + 中风险适配（先落 17/16 基石，再在主线新结构上重写）
 | 序 | Issue | 源 commit | 依赖 | 状态 |
 |---|---|---|---|---|
-| 7 | 17 provider options/feature gates | `5c76cec` | — | 待办 |
-| 8 | 01 selector 语义与字段消费 | `36ca169` | — | 待办 |
-| 9 | 04 LaunchTemplate | `2c15efe` | 17 | 待办 |
-| 10 | 06 容量预留私有池 | `2f5f2da` | 17 | 待办 |
-| 11 | 09-P1 InstanceStore RAID0 | `88f4c34` | 09-P0 | 待办 |
-| 12 | 11 pricing refresh | `3ceaa65` | — | 待办 |
-| 13 | 12 不可用机型缓存 | `a0dad22` | — | 待办 |
-| 14 | 13 候选回退 | `30bc787` | 12 | 待办 |
+| 5 | 17 provider options/feature gates | `5c76cec` | — | ✅ 已合并 `47018f9`（基石；仅 values.yaml 冲突，合并 core+provider gates；options/featuregates 单测通过） |
+| 6 | 01 selector 语义与字段消费 | `36ca169` | — | 待办 |
+| 7 | 04 LaunchTemplate | `2c15efe` | 17 | 待办 |
+| 8 | 06 容量预留私有池 | `2f5f2da` | 17 | 待办 |
+| 9 | 09-P1 InstanceStore RAID0 | `88f4c34` | 09-P0, 17 | 待办 |
+| 10 | 11 pricing refresh | `3ceaa65` | 17 | 待办 |
+| 11 | 12 不可用机型缓存 | `a0dad22` | 17 | 待办 |
+| 12 | 13 候选回退 | `30bc787` | 12 | 待办 |
+| 13 | 07 DeploymentSet | `4384e5a` | 17, 04, 06 | 待办（原批1，实测依赖 readiness reconcile 重构，顺延） |
+| 14 | 15 Terway pod 密度 | `431196e` | 17, 16 | 待办（原批1，实测依赖 options + metrics events，顺延） |
 
 ### 批 3 · 契约级/全局耦合需重写（不能 cherry-pick）
 | 序 | Issue | 源 commit | 依赖 | 状态 |
 |---|---|---|---|---|
-| 15 | 18-P0 所有权 tag 契约 + List/Delete/GC 守卫 | `ac8abbb` | — | 待办 |
-| 16 | 18-P1 Get 所有权 predicate | `c9aad97` | 18-P0 | 待办 |
-| 17 | 18-P2 孤儿实例 GC（gate+dry-run） | `58c864d` | 17, 18-P0/P1 | 待办 |
-| 18 | 16 provider metrics/events | `be54a28` | 17 | 待办 |
+| 15 | 16 provider metrics/events | `be54a28` | 17 | 待办（提前：07/15/14 都依赖其 EventReason/metrics 定义） |
+| 16 | 18-P0 所有权 tag 契约 + List/Delete/GC 守卫 | `ac8abbb` | — | 待办 |
+| 17 | 18-P1 Get 所有权 predicate | `c9aad97` | 18-P0 | 待办 |
+| 18 | 18-P2 孤儿实例 GC（gate+dry-run） | `58c864d` | 17, 18-P0/P1 | 待办 |
 | 19 | 14 阿里云中断事件处理 | `ab0dbd9` | 17, 16 | 待办 |
 
 ### 忽略（主线已实现，不合并）
@@ -118,6 +119,8 @@
 | 2026-08-30 | 03 RAM Role | cherry-pick `71f4495` | 4 冲突；instance.go 并列保留 Ipv6+RAMRole；validation_test 统一辅助函数名 ptrForUnit；cloudprovider_test 保持主线 | ✅ 通过 | ⬜ 待接 |
 | 2026-08-30 | 05 MetadataOptions | cherry-pick `bebbf5b` | 5 冲突；关键决策：删除 gap 的 nodeclass_hash.go，calculateNodeClassHash/computeHash 均回归主线 inline 并追加 MetadataOptions 字段，避免双 hash 实现导致 drift 误判；补回 sha256/hex/json import | ✅ 通过；envtest(status/hash) suite 因本机缺 etcd/apiserver 失败(与改动无关，基线同样失败) | ⬜ 待接 |
 | 2026-08-30 | 09-P0 磁盘全选项 | cherry-pick `b4ffa7c` | 6 冲突；新增 disks_normalize.go(NormalizeDisks)；cloudprovider.go 采纳 NormalizeDisks 生成全磁盘 baseOpts；再次删除 gap 混入的 nodeclass_hash.go，两处 hash inline 追加 SystemDisk/DataDisks/InstanceStorePolicy；cloudprovider_test 重置主线版；suite_test 取主线(已覆盖磁盘drift)；instance_test 仅保留 TestCreateDiskOptionsOmitSendSemantics(去重 TestCreateMetadataOptions)；测试辅助名 loPtr→ptrForUnit | ✅ cloudprovider/instance/v1alpha1 通过 | ⬜ 待接 |
+| 2026-08-30 | 07/15 试合并 | cherry-pick `4384e5a`/`431196e` 后**回退** | 实测二者非自包含：07 依赖 04/06 的 readiness reconcile 重构 + `ValidationSucceeded`/`PlacementReady` 条件；15 依赖 17 的 options（PodDensity/Terway/FeatureGates）+ 16 的 `EventReasonPodDensity*`。均 abort，重排到 16/17（及 04/06）之后 | — | — |
+| 2026-08-30 | 17 options/feature gates | cherry-pick `5c76cec` | 基石落地；仅 charts/values.yaml 1 处冲突（合并 core featureGates 注释 + provider pricing/podDensity/terway/featureGates 配置块）；options.go/operator.go/unavailable_offerings.go 自动合并 | ✅ options/featuregates 单测通过 | ⬜ 待接 |
 
 ---
 
