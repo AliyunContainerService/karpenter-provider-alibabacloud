@@ -33,6 +33,27 @@
 
 **批次再排（后半段）**：先落 **11（pricing + DescribePrice 新签名，作为 mock 契约基石）**，再 12 -> 16（metrics 契约统一），随后 13、09-P1，最后 06/07/15/14/18-P*。
 
+### 🔴 重大发现：主线与 gap 是两套不兼容的 offering 架构（2026-08-30，合并 11 时定位）
+合并 11 时逐层定位到根因：**issue 10（`4af683d`）此前被误判为「主线已实现，忽略」，实际是 11/12/13/06 共同依赖的架构基石，且主线走的是完全不同的模型。**
+
+| 维度 | 主线 opensource-main | gap feature0622（issue 10 起） |
+|---|---|---|
+| 机型可用性模型 | `InstanceType.Zones map[string]ZoneInfo`（zone→Available/CapacityTypes/KnownCapacityTypes），重点是保留 Available=false 防 drift 误判 | `InstanceType.Offerings []Offering`（含 `Price`/`Available`/`ZoneID`/`CapacityType`） |
+| 价格 | **未接入**：`GetInstanceTypes` 第6步注释「Update pricing … skip for now」，`pricingProvider` 仅持引用 | `withPricedOfferings`→`resolveOfferingPrice`→`SpotPrice/OnDemandPrice` 完整链路 + 成本排序 |
+| 候选/回退 | `createInstanceWithRetry` 简单重试 | `LaunchCandidate` 机型×AZ×容量类型确定性生成 + 有界回退 |
+| 可用性来源 | core cloudprovider 从 ZoneInfo 派生 offering | `AvailabilityProvider` + `pkg/providers/instancetype/availability.go` |
+
+**影响**：
+- 11/12/13/06 无法在主线上直接 cherry-pick——它们假定的 `withPricedOfferings`/`buildCoreInstanceType`/`LaunchCandidate`/`Offering`/`AvailabilityProvider` 主线全不存在（实测 grep 计数=0）。
+- 这不是漂移冲突，而是**架构选型分歧**：需决策「以哪套 offering 模型为准」。两套各有取舍——主线 ZoneInfo 模型强于 drift 安全（Available=false 保留），gap Offering 模型强于成本排序/候选回退（对应汇报中的「创建策略优化：成本排序 + 机型×AZ×容量类型重试」）。
+
+**待决策（需与用户确认再继续后半段）**：
+1. **方案 A｜以 gap offering 模型为基石**：先整体移植 issue 10（priced-offering + AvailabilityProvider + LaunchCandidate），改造主线 `GetInstanceTypes`/`InstanceType` 结构，再顺次落 11→12→13→06。工作量大、触及调度核心，但能完整交付「成本排序 + 候选回退 + 定价 + 不可用缓存 + CR」这一串能力。需回归验证 drift 安全（保留主线 Available=false 语义）。
+2. **方案 B｜保留主线 ZoneInfo 模型，按能力点增量嫁接**：不移植 10 整套架构，仅把「静态定价兜底、失败分类+unavailable cache、候选回退」以适配主线结构的方式重写。改动更聚焦，但等于放弃 gap 现成实现、逐个重写，且部分能力（reserved offering 排序）与 ZoneInfo 模型不天然契合。
+3. **方案 C｜后半段整体延后**：本轮只交付已完成的自包含能力（01/03/05/08/09-P0/17 已合并），offering 架构相关（10/11/12/13/06）作为独立里程碑另立分支专项推进。
+
+**已确定不受影响、可继续推进的项**：09-P1（InstanceStore RAID0，不动 offering/接口，仅依赖 09-P0）、18-P0/P1/P2（所有权 tag/GC，独立于 offering）、16（metrics/events，虽横切但不依赖 offering 模型选型）、14（interruption，独立 controller）、07/15（依赖 04/16 及 readiness，与 offering 模型弱相关）。
+
 ---
 
 ## 1. 18 项差距 → 处置决策总览
@@ -44,15 +65,15 @@
 | 03 | ram-role | RunInstances 未挂 RAM Role | 无 | RamRoleName | 合并（低风险，批1） |
 | 04 | launch-template | 未解析 LaunchTemplate ID/Version 到 create | 无 | 有 + drift | 适配合并（批2） |
 | 05 | metadata-options | 未传 IMDS MetadataOptions | 无 | 有 + drift | 合并（批1） |
-| 06 | capacity-reservation | 无容量预留私有池 offering | 无 | 私有池 + reserved offering + drift | 适配合并（批2） |
+| 06 | capacity-reservation | 无容量预留私有池 offering | 基础设施已吸收（CR type/ReservedOfferingIdentity/私有池 labels/CapacityTypeReserved），**缺接入**（addReservedOfferings/capacityReservationDrift/usablePrivatePool） | 私有池 + reserved offering + drift | 🟠 批3手工移植；依赖 10 priced-offering + 11 签名 + 04/07 status 类型 |
 | 07 | deployment-set | 无 DeploymentSet 部署集放置 | 无 | 有 + placement readiness + drift | 合并（批1，注意文件多） |
 | 08 | multi-security-group | create 仅用 SecurityGroupIDs[0]（单安全组） | 单安全组 | 全安全组 + exact-set drift | 合并（批1，首推） |
 | 09-P0 | disk-options | 磁盘参数不全（加密/性能级别/多数据盘等） | 不全 | 全磁盘选项 + drift | 合并（批1） |
 | 09-P1 | instance-store-raid0 | 无 InstanceStore RAID0 容量/调度/bootstrap | 无 | 有 | 适配合并（批2，依赖 09-P0） |
-| 10 | instance-type-offering | offering 模型不完整（价格未接、候选回退缺） | 已实现（`bca87b8` #8 offering/inventory） | 有 | 忽略（主线已有，价格另见 11） |
-| 11 | pricing-refresh | 无定价 reader/updater/refresh controller，价格恒 0 | 无（`Price: 0.0`） | 静态兜底 + refresh controller | 适配合并（批2） |
-| 12 | unavailable-cache | 无不可用机型缓存，创建失败无分类 | 无 | 失败分类 + unavailable cache | 适配合并（批2，配合 13） |
-| 13 | candidate-fallback | 无确定性候选生成 + 有界回退循环 | 部分（vswitch fallback `fb8b0c5`） | 机型×AZ×容量类型确定性回退 | 适配合并（批2） |
+| 10 | instance-type-offering | **priced-offering 架构基石**：`InstanceType.Offerings[]Offering(含 Price)`、`AvailabilityProvider`、`LaunchCandidate`、`withPricedOfferings`/`buildCoreInstanceType`/`resolveOfferingPrice` | ❌ **架构不同**：主线为 `InstanceType.Zones map[string]ZoneInfo`（无价格，`GetInstanceTypes` 里明确 skip pricing），非 gap 的 priced-offering 模型 | 完整 priced-offering + candidate fallback | 🔴 **修正：从「忽略」改判「架构级重写基石」**。11/12/13/06 全部依赖此架构，主线缺失 |
+| 11 | pricing-refresh | 无定价 reader/updater/refresh controller，价格恒 0 | 无（`Price: 0.0`；`pricingProvider` 仅持有引用未接入） | 静态兜底 + refresh controller（Reader/Updater/Price） | 🔴 **依赖 10 架构**：cherry-pick 实测 `withPricedOfferings`/`resolveOfferingPrice`/`buildCoreInstanceType` 主线全缺（属 10）。需先落 10 |
+| 12 | unavailable-cache | 无不可用机型缓存，创建失败无分类 | 无（`pkg/errors` 仅 errors.go；无 `pkg/metrics`） | 失败分类(classifier.go) + unavailable cache + metrics 子集 | 🔴 **依赖 10 + 与 16 metrics 对撞**：classifier/metrics 与 16 是子集/超集关系，需 16 契约先定 |
+| 13 | candidate-fallback | 无确定性候选生成 + 有界回退循环 | 部分（vswitch fallback `fb8b0c5`），无 `LaunchCandidate` 机型×AZ×容量类型回退 | 机型×AZ×容量类型确定性回退 | 🔴 **依赖 10（LaunchCandidate）+ 12** |
 | 14 | interruption | interruption controller 仅空 stub，未注册 | stub | MNS consumer + parser + resolver | 重写落地（批3，controller 注册耦合） |
 | 15 | pod-density | Terway pod ENI 密度计算缺共享实现 | 无 | 共享密度计算器 | 合并（批1，相对自包含） |
 | 16 | metrics-events | 仅 batcher metrics(7)，缺 ~10 业务 metrics + event 契约 | 缺 | 集中 metrics + wrapped client + recorder | 重写落地（批3，全局埋点耦合） |
@@ -103,7 +124,7 @@
 
 ### 忽略（主线已实现，不合并）
 - 02 nodeclass-readiness（`b449add`）
-- 10 instance-type-offering（`4af683d`）
+- ~~10 instance-type-offering~~ → **已修正为架构级基石，见下方「重大发现」，不再忽略**
 
 ---
 
@@ -134,6 +155,7 @@
 | 2026-08-30 | 01 selector 语义与字段消费 | cherry-pick `36ca169` | 7 冲突文件全解：types.go selector terms 取 gap 侧(去 omitempty + MaxItems=30 使 selector 必填)；validation.go 取 gap 侧(id 与 tags/zoneID/name/owner* 互斥 + imageOwnerID 校验)；clients/ecs.go 采纳 DescribeSecurityGroups(ctx,id,name,tags) 新签名；vswitch.go 取 gap getByQuery(支持 zoneID)；status/controller.go 保留主线 requeue consts + 追加 defaultSecurityGroupAttachLimit；imagefamily_test 保留主线 DescribeAvailableResource + 采纳新 SG 签名；cloudprovider_test 重置主线版。build 修复：删除 zz_generated.deepcopy.go 中已删类型(Normalized*)的孤儿 deepcopy；测试断言 mutually exclusive 对齐实现文案 | ✅ v1alpha1/vswitch/imagefamily/securitygroup/clients/cloudprovider/instance 通过（cluster DualStack 失败为主线既存问题，与本项无关） | ⬜ 待接 |
 | 2026-08-30 | 04 LaunchTemplate | 试 cherry-pick `2c15efe` 后**忽略** | 实测主线走不同且更完整路径已实现 04 核心：launchtemplate.go 有 `GetData`+`LaunchTemplateData`+`launchTemplateVersionDescriber` 读取 LT 版本具体配置；status/controller.go:236 用 `Spec.LaunchTemplateVersion` 消费；cloudprovider.go:923/1059/1123 注入 create path + drift + annotation。gap 增量仅 `ResolutionError` 错误分类，却引入 13 文件方向冲突（含已按铁律处理的 hash/cloudprovider_test）。判定主线已覆盖，abort 归入忽略类 | — | — |
 | 2026-08-30 | 06 容量预留私有池 | 试 cherry-pick `2f5f2da` 后**abort**，改归批3手工重写 | 冲突横切 24 文件。核心发现：主线**已有** CR 基础设施(labels.go 私有池 label/annotation 全含、instancetype.ReservedOfferingIdentity、CapacityTypeReserved、CapacityReservation type)，但**缺接入**(cloudprovider 无 addReservedOfferings/capacityReservationDrift/usablePrivatePool/capacityReservationPreference)。06 diff 强耦合 04/07 的 status 类型(LaunchTemplateStatus/DeploymentSet/ZoneCapacity/LastSuccessfulPreflightHash，均属父提交)，纯 cherry-pick 会误引入主线不需要的类型并连锁 deepcopy/controller。判定为真实缺口但需外科式手工移植，顺延批3 | — | — |
+| 2026-08-30 | 11 pricing + 10 架构 | 试 cherry-pick `3ceaa65` 后**abort**，定位架构级根因 | ecs.go 采纳 11 的 request-based `DescribePrice` 新签名；pricing.go/pricing_test.go 全量采纳 gap 版(Reader/Updater/Price/静态兜底)。但 cloudprovider.go 巨型冲突暴露根因：`withPricedOfferings`/`resolveOfferingPrice`/`buildCoreInstanceType`/`LaunchCandidate`/`Offering`/`AvailabilityProvider` 主线**全缺**(grep=0)，均属 **issue 10(`4af683d`)**——此前被误判忽略。主线为 `InstanceType.Zones map[ZoneInfo]` 无价格模型，与 gap priced-offering 模型不兼容。11/12/13/06 全依赖 10。**架构选型需用户决策**(方案A/B/C 见上) | — | — |
 
 ---
 
