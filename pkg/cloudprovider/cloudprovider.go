@@ -314,7 +314,7 @@ func (c *CloudProvider) Get(ctx context.Context, providerID string) (*coreapis.N
 func (c *CloudProvider) List(ctx context.Context) ([]*coreapis.NodeClaim, error) {
 	// List all Karpenter-managed instances
 	tags := map[string]string{
-		v1alpha1.TagManagedBy: "karpenter",
+		v1alpha1.TagManagedBy: v1alpha1.TagManagedByValue,
 	}
 
 	instances, err := c.instanceProvider.List(ctx, tags)
@@ -729,7 +729,7 @@ func buildInstanceTags(nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNod
 	tags := make(map[string]string)
 
 	// Layer 1: management tags — always present, required for List() tag filter
-	tags[v1alpha1.TagManagedBy] = "karpenter"
+	tags[v1alpha1.TagManagedBy] = v1alpha1.TagManagedByValue
 	if nodeClass.Spec.ClusterID != "" {
 		tags[v1alpha1.TagClusterID] = nodeClass.Spec.ClusterID
 	}
