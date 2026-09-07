@@ -28,17 +28,17 @@ func TestScaleConfigDefaults(t *testing.T) {
 	t.Setenv("TEST_GPU_ZONES", "")
 	t.Setenv("TEST_ZONES", "")
 
-	require.Equal(t, []string{"ecs.c9i.large", "ecs.c9i.xlarge"}, testInstanceTypes())
+	require.Equal(t, []string{"ecs.g7.large", "ecs.g7.xlarge"}, testInstanceTypes())
 	require.Empty(t, testGPUInstanceTypes())
 	require.Empty(t, testGPUZones())
 }
 
 func TestScaleConfigUsesEnvironmentOverrides(t *testing.T) {
-	t.Setenv("TEST_INSTANCE_TYPES", "ecs.c9i.large, ecs.c9i.xlarge")
+	t.Setenv("TEST_INSTANCE_TYPES", "ecs.g7.large, ecs.g7.xlarge")
 	t.Setenv("TEST_GPU_INSTANCE_TYPES", "ecs.gn6i-c4g1.xlarge")
 	t.Setenv("TEST_GPU_ZONES", "cn-hangzhou-i")
 
-	require.Equal(t, []string{"ecs.c9i.large", "ecs.c9i.xlarge"}, testInstanceTypes())
+	require.Equal(t, []string{"ecs.g7.large", "ecs.g7.xlarge"}, testInstanceTypes())
 	require.Equal(t, []string{"ecs.gn6i-c4g1.xlarge"}, testGPUInstanceTypes())
 	require.Equal(t, []string{"cn-hangzhou-i"}, testGPUZones())
 }
