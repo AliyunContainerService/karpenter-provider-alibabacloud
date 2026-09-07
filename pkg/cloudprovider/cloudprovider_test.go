@@ -366,7 +366,7 @@ func TestBuildInstanceTagsThreeLayerMerge(t *testing.T) {
 		// user tag can override management tag (layer 3 wins)
 	}
 
-	tags := buildInstanceTags(nc, nodeClass)
+	tags := BuildInstanceTags(nc, nodeClass)
 
 	// Layer 1: management tags always present
 	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy])
@@ -385,7 +385,7 @@ func TestBuildInstanceTagsNilUserTags(t *testing.T) {
 	nc := &coreapis.NodeClaim{}
 	nodeClass := &v1alpha1.ECSNodeClass{}
 	// nodeClass.Spec.Tags is nil — must not panic
-	tags := buildInstanceTags(nc, nodeClass)
+	tags := BuildInstanceTags(nc, nodeClass)
 	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy])
 }
 
@@ -557,7 +557,7 @@ func TestCapacityTypeFromRequirements(t *testing.T) {
 }
 
 func TestBuildInstanceTagsManagedByValue(t *testing.T) {
-	tags := buildInstanceTags(&coreapis.NodeClaim{}, &v1alpha1.ECSNodeClass{})
+	tags := BuildInstanceTags(&coreapis.NodeClaim{}, &v1alpha1.ECSNodeClass{})
 	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy],
 		"TagManagedBy must be 'karpenter' so that List() tag filter matches")
 }
@@ -567,7 +567,7 @@ func TestBuildInstanceTagsIncludesClusterID(t *testing.T) {
 	nodeClass := &v1alpha1.ECSNodeClass{}
 	nodeClass.Spec.ClusterID = "c-abc123"
 
-	tags := buildInstanceTags(nc, nodeClass)
+	tags := BuildInstanceTags(nc, nodeClass)
 
 	assert.Equal(t, "c-abc123", tags[v1alpha1.TagClusterID])
 	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy])
@@ -685,12 +685,12 @@ func TestInstanceTypeFallbackOnCapacityError(t *testing.T) {
 
 	// Verify we tried: g7.large in both zones, g7.xlarge in both zones, then g7.2xlarge in first zone
 	assert.Equal(t, 5, len(attempts), "expected 5 attempts total")
-	
+
 	// First instance type: both zones
 	assert.Equal(t, "ecs.g7.large", attempts[0].instanceType)
 	assert.Equal(t, "ecs.g7.xlarge", attempts[2].instanceType)
 	assert.Equal(t, "ecs.g7.2xlarge", attempts[4].instanceType)
-	
+
 	// Last attempt should succeed
 	assert.Equal(t, "vsw-1", attempts[4].vswitchID)
 }

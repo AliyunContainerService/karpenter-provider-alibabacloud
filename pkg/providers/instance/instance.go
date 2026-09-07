@@ -394,13 +394,15 @@ func applyMetadataOptions(req *ecs.RunInstancesRequest, opts *MetadataOptions) {
 }
 
 // Get retrieves an ECS instance by ID
-func (p *Provider) Get(ctx context.Context, instanceID string) (*Instance, error) {
+func (p *Provider) Get(ctx context.Context, instanceID string, skipCache bool) (*Instance, error) {
 	logger := log.FromContext(ctx)
 
-	// First check cache
-	if instance, exists := p.getCachedInstance(instanceID); exists {
-		logger.Info("Found instance in cache", "instanceID", instanceID)
-		return instance, nil
+	// First check cache (unless skipCache is true)
+	if !skipCache {
+		if instance, exists := p.getCachedInstance(instanceID); exists {
+			logger.Info("Found instance in cache", "instanceID", instanceID)
+			return instance, nil
+		}
 	}
 
 	// 使用批处理机制来减少API调用
@@ -799,7 +801,6 @@ func convertToTagResourcesRequestTags(tags map[string]string) []*ecs.TagResource
 	}
 	return result
 }
-
 
 // convertTags converts ECS tags to map
 func convertTags(ecsTagsResp *ecs.DescribeInstancesResponseBodyInstancesInstanceTags) map[string]string {

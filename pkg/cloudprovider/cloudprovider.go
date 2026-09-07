@@ -201,7 +201,7 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
 	}
 
 	// 8. Build tags for the instance
-	tags := buildInstanceTags(nodeClaim, nodeClass)
+	tags := BuildInstanceTags(nodeClaim, nodeClass)
 
 	// 9. Create instance using instance provider
 	instanceID, err := c.createInstanceWithRetry(ctx, nodeClaim, nodeClass, filteredTypes, images, vswitches, securityGroups, userData, tags)
@@ -210,7 +210,7 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
 	}
 
 	// 10. Get the created instance details
-	inst, err := c.instanceProvider.Get(ctx, instanceID)
+	inst, err := c.instanceProvider.Get(ctx, instanceID, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get created instance: %w", err)
 	}
@@ -267,7 +267,7 @@ func (c *CloudProvider) Get(ctx context.Context, providerID string) (*coreapis.N
 	}
 
 	// Get instance from provider with caching
-	inst, err := c.instanceProvider.Get(ctx, instanceID)
+	inst, err := c.instanceProvider.Get(ctx, instanceID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -646,7 +646,7 @@ func (c *CloudProvider) IsDrifted(ctx context.Context, nodeClaim *coreapis.NodeC
 		return "", fmt.Errorf("invalid providerID: %s", nodeClaim.Status.ProviderID)
 	}
 
-	inst, err := c.instanceProvider.Get(ctx, instanceID)
+	inst, err := c.instanceProvider.Get(ctx, instanceID, false)
 	if err != nil {
 		return "", fmt.Errorf("failed to get instance: %w", err)
 	}
@@ -726,7 +726,7 @@ func ecsArchToKubernetesArch(ecsArch string) string {
 	return ecsutil.KubeArchitecture(ecsArch)
 }
 
-func buildInstanceTags(nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNodeClass) map[string]string {
+func BuildInstanceTags(nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNodeClass) map[string]string {
 	tags := make(map[string]string)
 
 	// Layer 1: management tags — always present, required for List() tag filter

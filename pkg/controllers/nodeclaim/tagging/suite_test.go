@@ -27,6 +27,7 @@ import (
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/controllers/nodeclaim/tagging"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/instance"
 	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
+	"github.com/alibabacloud-go/tea/tea"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/mock"
@@ -100,6 +101,53 @@ var _ = AfterSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 })
 
+// mockDescribeInstancesWithTags sets up DescribeInstances mock to return an instance
+// with the given tags. Used for diff-based tagging tests.
+func mockDescribeInstancesWithTags(instanceID string, tags map[string]string) {
+	var ecsTags []*ecs.DescribeInstancesResponseBodyInstancesInstanceTagsTag
+	for k, v := range tags {
+		ecsTags = append(ecsTags, &ecs.DescribeInstancesResponseBodyInstancesInstanceTagsTag{
+			TagKey:   tea.String(k),
+			TagValue: tea.String(v),
+		})
+	}
+
+	mockECSClient.On("DescribeInstances", mock.Anything, mock.Anything).
+		Return(&ecs.DescribeInstancesResponse{
+			Body: &ecs.DescribeInstancesResponseBody{
+				TotalCount: tea.Int32(1),
+				PageNumber: tea.Int32(1),
+				PageSize:   tea.Int32(100),
+				Instances: &ecs.DescribeInstancesResponseBodyInstances{
+					Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{
+						{
+							InstanceId:         tea.String(instanceID),
+							RegionId:           tea.String("cn-hangzhou"),
+							ZoneId:             tea.String("cn-hangzhou-a"),
+							InstanceType:       tea.String("ecs.g6.large"),
+							ImageId:            tea.String("aliyun_3_x64_20G_alibase_20231221.vhd"),
+							Status:             tea.String("Running"),
+							CreationTime:       tea.String("2024-01-01T00:00:00Z"),
+							Cpu:                tea.Int32(2),
+							Memory:             tea.Int32(8192),
+							InstanceChargeType: tea.String("PostPaid"),
+							SpotStrategy:       tea.String("NoSpot"),
+							SecurityGroupIds: &ecs.DescribeInstancesResponseBodyInstancesInstanceSecurityGroupIds{
+								SecurityGroupId: []*string{tea.String("sg-test")},
+							},
+							VpcAttributes: &ecs.DescribeInstancesResponseBodyInstancesInstanceVpcAttributes{
+								VSwitchId: tea.String("vsw-test"),
+							},
+							Tags: &ecs.DescribeInstancesResponseBodyInstancesInstanceTags{
+								Tag: ecsTags,
+							},
+						},
+					},
+				},
+			},
+		}, nil).Maybe()
+}
+
 var _ = Describe("TaggingController", func() {
 	var nodeClaim *coreapis.NodeClaim
 	var nodeClass *v1alpha1.ECSNodeClass
@@ -116,6 +164,7 @@ var _ = Describe("TaggingController", func() {
 				Name: "test-nodeclass",
 			},
 			Spec: v1alpha1.ECSNodeClassSpec{
+				ClusterID: "test-cluster-123",
 				VSwitchSelectorTerms: []v1alpha1.VSwitchSelectorTerm{
 					{
 						ID: stringPtr("vsw-test-123"),
@@ -174,46 +223,43 @@ var _ = Describe("TaggingController", func() {
 
 	Context("Basic Tagging", func() {
 		It("should tag instance with Karpenter metadata when NodeClaim is created", func() {
-			// Create resources
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
-			// Update status separately as it's a subresource
 			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
 
+			// Mock DescribeInstances to return instance with no tags
+			mockDescribeInstancesWithTags("i-test123456", map[string]string{})
+
 			// Setup mock expectations
 			mockECSClient.On("TagResources", mock.Anything, mock.MatchedBy(func(req *ecs.TagResourcesRequest) bool {
-				// Verify instance ID
 				if len(req.ResourceId) != 1 || *req.ResourceId[0] != "i-test123456" {
 					return false
 				}
-				// Verify resource type
 				if req.ResourceType == nil || *req.ResourceType != "instance" {
 					return false
 				}
-				// Verify tags exist
 				if req.Tag == nil || len(req.Tag) == 0 {
 					return false
 				}
 				return true
 			})).Return(&ecs.TagResourcesResponse{}, nil)
 
-			// Reconcile
 			_, err := taggingController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
 			})
 			Expect(err).ToNot(HaveOccurred())
-
-			// Verify mock was called
 			mockECSClient.AssertExpectations(GinkgoT())
 		})
 
-		It("should include all required Karpenter tags", func() {
-			// Create resources
+		It("should include all required Karpenter tags including cluster-id", func() {
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
 			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
+
+			// Mock DescribeInstances to return instance with no tags
+			mockDescribeInstancesWithTags("i-test123456", map[string]string{})
 
 			var capturedTags map[string]string
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
@@ -224,7 +270,6 @@ var _ = Describe("TaggingController", func() {
 				}
 			}).Return(&ecs.TagResourcesResponse{}, nil)
 
-			// Reconcile
 			_, err := taggingController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
 			})
@@ -233,19 +278,17 @@ var _ = Describe("TaggingController", func() {
 			// Verify required tags
 			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagNodeClaim, "test-nodeclaim"))
 			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagNodePool, "default"))
-			// managed-by must equal the single authoritative value TagManagedByValue
-			// ("karpenter"). CloudProvider.List/GC filter instances by
-			// managed-by=karpenter, so the tagging controller MUST write the same
-			// value or the tag it adds would be invisible to GC. See labels.go.
 			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagManagedBy, v1alpha1.TagManagedByValue))
+			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagClusterID, "test-cluster-123"))
 		})
 
 		It("should include custom tags from NodeClass", func() {
-			// Create resources
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
 			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
+
+			mockDescribeInstancesWithTags("i-test123456", map[string]string{})
 
 			var capturedTags map[string]string
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
@@ -256,13 +299,11 @@ var _ = Describe("TaggingController", func() {
 				}
 			}).Return(&ecs.TagResourcesResponse{}, nil)
 
-			// Reconcile
 			_, err := taggingController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
 			})
 			Expect(err).ToNot(HaveOccurred())
 
-			// Verify custom tags from NodeClass
 			Expect(capturedTags).To(HaveKeyWithValue("Environment", "test"))
 			Expect(capturedTags).To(HaveKeyWithValue("Team", "platform"))
 		})
@@ -273,6 +314,8 @@ var _ = Describe("TaggingController", func() {
 			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
 
+			mockDescribeInstancesWithTags("i-test123456", map[string]string{})
+
 			var capturedTags map[string]string
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 				req := args.Get(1).(*ecs.TagResourcesRequest)
@@ -287,106 +330,67 @@ var _ = Describe("TaggingController", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 
-			Expect(capturedTags).ToNot(HaveKey("workload-type"))
-			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagNodePool, "default"))
-		})
-
-		It("should not include arbitrary labels from NodeClaim", func() {
-			// Create resources
-			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
-			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
-			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
-			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
-
-			var capturedTags map[string]string
-			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-				req := args.Get(1).(*ecs.TagResourcesRequest)
-				capturedTags = make(map[string]string)
-				for _, tag := range req.Tag {
-					capturedTags[*tag.Key] = *tag.Value
-				}
-			}).Return(&ecs.TagResourcesResponse{}, nil)
-
-			// Reconcile
-			_, err := taggingController.Reconcile(ctx, reconcile.Request{
-				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
-			})
-			Expect(err).ToNot(HaveOccurred())
-
-			// Only explicit Karpenter ownership tags should be derived from the NodeClaim.
 			Expect(capturedTags).ToNot(HaveKey("workload-type"))
 			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagNodePool, "default"))
 		})
 	})
 
-	Context("Tag Updates", func() {
-		It("should update tags when NodeClass tags change", func() {
-			// Create initial resources
+	Context("Annotation-Based Skip", func() {
+		It("should skip tagging when annotation is already set", func() {
+			nodeClaim.Annotations = map[string]string{
+				v1alpha1.AnnotationInstanceTagged: "true",
+			}
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
 			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
 
-			// First reconcile
-			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Return(&ecs.TagResourcesResponse{}, nil).Once()
+			// No mock expectations - TagResources and DescribeInstances should NOT be called
+
 			_, err := taggingController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
 			})
 			Expect(err).ToNot(HaveOccurred())
 
-			// Update NodeClass tags
-			updated := &v1alpha1.ECSNodeClass{}
-			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
-			updated.Spec.Tags = map[string]string{
-				"Environment": "production",
-				"Team":        "devops",
-				"Project":     "karpenter",
-			}
-			Expect(env.Client.Update(ctx, updated)).To(Succeed())
-
-			// Second reconcile with updated tags
-			var capturedTags map[string]string
-			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-				req := args.Get(1).(*ecs.TagResourcesRequest)
-				capturedTags = make(map[string]string)
-				for _, tag := range req.Tag {
-					capturedTags[*tag.Key] = *tag.Value
-				}
-			}).Return(&ecs.TagResourcesResponse{}, nil).Once()
-
-			_, err = taggingController.Reconcile(ctx, reconcile.Request{
-				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
-			})
-			Expect(err).ToNot(HaveOccurred())
-
-			// Verify updated tags
-			Expect(capturedTags).To(HaveKeyWithValue("Environment", "production"))
-			Expect(capturedTags).To(HaveKeyWithValue("Team", "devops"))
-			Expect(capturedTags).To(HaveKeyWithValue("Project", "karpenter"))
+			// Verify TagResources was not called
+			mockECSClient.AssertNotCalled(GinkgoT(), "TagResources", mock.Anything, mock.Anything)
 		})
 
-		It("should keep tags stable when arbitrary NodeClaim labels change", func() {
-			// Create initial resources
+		It("should set annotation after successful tagging", func() {
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
 			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
 
-			// First reconcile
-			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Return(&ecs.TagResourcesResponse{}, nil).Once()
+			mockDescribeInstancesWithTags("i-test123456", map[string]string{})
+			mockECSClient.On("TagResources", mock.Anything, mock.Anything).
+				Return(&ecs.TagResourcesResponse{}, nil)
+
 			_, err := taggingController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
 			})
 			Expect(err).ToNot(HaveOccurred())
 
-			// Update NodeClaim labels
+			// Verify annotation was set
 			updated := &coreapis.NodeClaim{}
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClaim), updated)).To(Succeed())
-			updated.Labels["new-label"] = "new-value"
-			updated.Labels["workload-type"] = "realtime"
-			Expect(env.Client.Update(ctx, updated)).To(Succeed())
+			Expect(updated.Annotations).To(HaveKeyWithValue(v1alpha1.AnnotationInstanceTagged, "true"))
+		})
+	})
 
-			// Second reconcile with updated labels
+	Context("Diff-Based Tagging", func() {
+		It("should only tag missing tags when some already exist", func() {
+			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
+			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
+			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
+			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
+
+			// Instance already has managed-by and nodeclaim tags
+			mockDescribeInstancesWithTags("i-test123456", map[string]string{
+				v1alpha1.TagManagedBy: v1alpha1.TagManagedByValue,
+				v1alpha1.TagNodeClaim: "test-nodeclaim",
+			})
+
 			var capturedTags map[string]string
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 				req := args.Get(1).(*ecs.TagResourcesRequest)
@@ -394,26 +398,107 @@ var _ = Describe("TaggingController", func() {
 				for _, tag := range req.Tag {
 					capturedTags[*tag.Key] = *tag.Value
 				}
-			}).Return(&ecs.TagResourcesResponse{}, nil).Once()
+			}).Return(&ecs.TagResourcesResponse{}, nil)
 
-			_, err = taggingController.Reconcile(ctx, reconcile.Request{
+			_, err := taggingController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
 			})
 			Expect(err).ToNot(HaveOccurred())
 
-			// Arbitrary NodeClaim labels are not mirrored into ECS tags.
-			Expect(capturedTags).ToNot(HaveKey("new-label"))
-			Expect(capturedTags).ToNot(HaveKey("workload-type"))
+			// Should NOT include already-present tags
+			Expect(capturedTags).ToNot(HaveKey(v1alpha1.TagManagedBy))
+			Expect(capturedTags).ToNot(HaveKey(v1alpha1.TagNodeClaim))
+			// Should include missing tags
 			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagNodePool, "default"))
+			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagClusterID, "test-cluster-123"))
+			Expect(capturedTags).To(HaveKeyWithValue("Environment", "test"))
+			Expect(capturedTags).To(HaveKeyWithValue("Team", "platform"))
+		})
+
+		It("should not call TagResources when all tags already exist", func() {
+			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
+			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
+			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
+			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
+
+			// Instance already has ALL tags
+			mockDescribeInstancesWithTags("i-test123456", map[string]string{
+				v1alpha1.TagManagedBy: v1alpha1.TagManagedByValue,
+				v1alpha1.TagNodeClaim: "test-nodeclaim",
+				v1alpha1.TagNodePool:  "default",
+				v1alpha1.TagClusterID: "test-cluster-123",
+				"Environment":         "test",
+				"Team":                "platform",
+			})
+
+			// TagResources should NOT be called
+			_, err := taggingController.Reconcile(ctx, reconcile.Request{
+				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			mockECSClient.AssertNotCalled(GinkgoT(), "TagResources", mock.Anything, mock.Anything)
+		})
+
+		It("should update tag when value differs", func() {
+			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
+			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
+			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
+			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
+
+			// Instance has old value for Team tag
+			mockDescribeInstancesWithTags("i-test123456", map[string]string{
+				v1alpha1.TagManagedBy: v1alpha1.TagManagedByValue,
+				v1alpha1.TagNodeClaim: "test-nodeclaim",
+				v1alpha1.TagNodePool:  "default",
+				v1alpha1.TagClusterID: "test-cluster-123",
+				"Environment":         "test",
+				"Team":                "old-team", // Different value
+			})
+
+			var capturedTags map[string]string
+			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				req := args.Get(1).(*ecs.TagResourcesRequest)
+				capturedTags = make(map[string]string)
+				for _, tag := range req.Tag {
+					capturedTags[*tag.Key] = *tag.Value
+				}
+			}).Return(&ecs.TagResourcesResponse{}, nil)
+
+			_, err := taggingController.Reconcile(ctx, reconcile.Request{
+				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			// Should include Team with new value
+			Expect(capturedTags).To(HaveKeyWithValue("Team", "platform"))
+			// Should NOT include unchanged tags
+			Expect(capturedTags).ToNot(HaveKey(v1alpha1.TagManagedBy))
+			Expect(capturedTags).ToNot(HaveKey("Environment"))
 		})
 	})
 
 	Context("Provider ID Handling", func() {
+		It("should skip when provider ID is empty", func() {
+			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
+			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
+			nodeClaim.Status.ProviderID = ""
+			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
+
+			_, err := taggingController.Reconcile(ctx, reconcile.Request{
+				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
+			})
+			Expect(err).ToNot(HaveOccurred())
+			mockECSClient.AssertNotCalled(GinkgoT(), "TagResources", mock.Anything, mock.Anything)
+		})
+
 		It("should extract instance ID from provider ID with region prefix", func() {
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
 			nodeClaim.Status.ProviderID = "cn-hangzhou.i-abc123xyz"
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
+
+			mockDescribeInstancesWithTags("i-abc123xyz", map[string]string{})
 
 			mockECSClient.On("TagResources", mock.Anything, mock.MatchedBy(func(req *ecs.TagResourcesRequest) bool {
 				return len(req.ResourceId) == 1 && *req.ResourceId[0] == "i-abc123xyz"
@@ -432,6 +517,8 @@ var _ = Describe("TaggingController", func() {
 			nodeClaim.Status.ProviderID = "alibabacloud://cn-beijing.i-xyz789"
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
 
+			mockDescribeInstancesWithTags("i-xyz789", map[string]string{})
+
 			mockECSClient.On("TagResources", mock.Anything, mock.MatchedBy(func(req *ecs.TagResourcesRequest) bool {
 				return len(req.ResourceId) == 1 && *req.ResourceId[0] == "i-xyz789"
 			})).Return(&ecs.TagResourcesResponse{}, nil)
@@ -443,24 +530,13 @@ var _ = Describe("TaggingController", func() {
 			mockECSClient.AssertExpectations(GinkgoT())
 		})
 
-		It("should fail when provider ID is empty", func() {
-			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
-			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
-			nodeClaim.Status.ProviderID = ""
-			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
-
-			_, err := taggingController.Reconcile(ctx, reconcile.Request{
-				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
-			})
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("failed to extract instance ID"))
-		})
-
 		It("should handle provider ID without dots", func() {
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
 			nodeClaim.Status.ProviderID = "i-standalone123"
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
+
+			mockDescribeInstancesWithTags("i-standalone123", map[string]string{})
 
 			mockECSClient.On("TagResources", mock.Anything, mock.MatchedBy(func(req *ecs.TagResourcesRequest) bool {
 				return len(req.ResourceId) == 1 && *req.ResourceId[0] == "i-standalone123"
@@ -475,35 +551,37 @@ var _ = Describe("TaggingController", func() {
 	})
 
 	Context("Error Handling", func() {
-		It("should return error when NodeClaim does not exist", func() {
+		It("should not error when NodeClaim does not exist", func() {
 			nonExistent := &coreapis.NodeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "non-existent",
 				},
 			}
 
-			// Should not error, just ignore not found
 			_, err := taggingController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nonExistent),
 			})
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("should return error when NodeClass does not exist", func() {
+		It("should not error when NodeClass does not exist", func() {
 			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
+			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
+			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
 
-			// Should not error, just ignore not found
 			_, err := taggingController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
 			})
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("should return error when ECS API fails", func() {
+		It("should return error when ECS TagResources fails", func() {
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
 			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
+
+			mockDescribeInstancesWithTags("i-test123456", map[string]string{})
 
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).
 				Return(nil, fmt.Errorf("SDK.ServerError ErrorCode: %s Message: %s", "InternalError", "Internal Server Error"))
@@ -515,13 +593,13 @@ var _ = Describe("TaggingController", func() {
 			Expect(err.Error()).To(ContainSubstring("failed to tag instance"))
 		})
 
-		It("should handle throttling errors gracefully", func() {
+		It("should return error when DescribeInstances fails", func() {
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
 			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
 			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
 
-			mockECSClient.On("TagResources", mock.Anything, mock.Anything).
+			mockECSClient.On("DescribeInstances", mock.Anything, mock.Anything).
 				Return(nil, fmt.Errorf("SDK.ServerError ErrorCode: %s Message: %s", "Throttling", "Request was denied due to request throttling"))
 
 			_, err := taggingController.Reconcile(ctx, reconcile.Request{
@@ -540,6 +618,8 @@ var _ = Describe("TaggingController", func() {
 			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
 
+			mockDescribeInstancesWithTags("i-test123456", map[string]string{})
+
 			var capturedTags map[string]string
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 				req := args.Get(1).(*ecs.TagResourcesRequest)
@@ -557,6 +637,7 @@ var _ = Describe("TaggingController", func() {
 			// Should still have Karpenter tags
 			Expect(capturedTags).To(HaveKey(v1alpha1.TagNodeClaim))
 			Expect(capturedTags).To(HaveKey(v1alpha1.TagManagedBy))
+			Expect(capturedTags).To(HaveKey(v1alpha1.TagClusterID))
 		})
 
 		It("should handle NodeClaim without labels", func() {
@@ -565,6 +646,8 @@ var _ = Describe("TaggingController", func() {
 			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
 			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
+
+			mockDescribeInstancesWithTags("i-test123456", map[string]string{})
 
 			var capturedTags map[string]string
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
@@ -580,7 +663,6 @@ var _ = Describe("TaggingController", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 
-			// Should still have Karpenter tags
 			Expect(capturedTags).To(HaveKey(v1alpha1.TagNodeClaim))
 			Expect(capturedTags).To(HaveKey(v1alpha1.TagManagedBy))
 		})
@@ -592,6 +674,8 @@ var _ = Describe("TaggingController", func() {
 			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
 
+			mockDescribeInstancesWithTags("i-test123456", map[string]string{})
+
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).
 				Return(&ecs.TagResourcesResponse{}, nil)
 
@@ -602,8 +686,34 @@ var _ = Describe("TaggingController", func() {
 			mockECSClient.AssertExpectations(GinkgoT())
 		})
 
-		It("should handle tag key conflicts between NodeClass and NodeClaim", func() {
-			// Both have "Team" tag with different values
+		It("should handle NodeClass without cluster-id", func() {
+			nodeClass.Spec.ClusterID = ""
+			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
+			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
+			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
+			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
+
+			mockDescribeInstancesWithTags("i-test123456", map[string]string{})
+
+			var capturedTags map[string]string
+			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				req := args.Get(1).(*ecs.TagResourcesRequest)
+				capturedTags = make(map[string]string)
+				for _, tag := range req.Tag {
+					capturedTags[*tag.Key] = *tag.Value
+				}
+			}).Return(&ecs.TagResourcesResponse{}, nil)
+
+			_, err := taggingController.Reconcile(ctx, reconcile.Request{
+				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			// Should NOT include cluster-id tag
+			Expect(capturedTags).ToNot(HaveKey(v1alpha1.TagClusterID))
+		})
+
+		It("should handle tag key conflicts — NodeClass tags win", func() {
 			nodeClass.Spec.Tags = map[string]string{
 				"Team": "platform",
 			}
@@ -617,6 +727,8 @@ var _ = Describe("TaggingController", func() {
 			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
 			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
 
+			mockDescribeInstancesWithTags("i-test123456", map[string]string{})
+
 			var capturedTags map[string]string
 			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 				req := args.Get(1).(*ecs.TagResourcesRequest)
@@ -631,18 +743,68 @@ var _ = Describe("TaggingController", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 
-			// NodeClass tags are the user-owned ECS tags; NodeClaim labels are not mirrored.
+			// NodeClass tags have highest priority
 			Expect(capturedTags).To(HaveKeyWithValue("Team", "platform"))
+		})
+	})
+
+	Context("Tagging with >20 tags (batching)", func() {
+		It("should handle more than 20 tags by splitting into batches", func() {
+			// Create NodeClass with 25 custom tags
+			customTags := make(map[string]string)
+			for i := 0; i < 25; i++ {
+				customTags[fmt.Sprintf("custom-tag-%d", i)] = fmt.Sprintf("value-%d", i)
+			}
+			nodeClass.Spec.Tags = customTags
+
+			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
+			Expect(env.Client.Create(ctx, nodeClaim)).To(Succeed())
+			nodeClaim.Status.ProviderID = "cn-hangzhou.i-test123456"
+			Expect(env.Client.Status().Update(ctx, nodeClaim)).To(Succeed())
+
+			mockDescribeInstancesWithTags("i-test123456", map[string]string{})
+
+			// Track all TagResources calls
+			var allCapturedTags []map[string]string
+			mockECSClient.On("TagResources", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				req := args.Get(1).(*ecs.TagResourcesRequest)
+				batchTags := make(map[string]string)
+				for _, tag := range req.Tag {
+					batchTags[*tag.Key] = *tag.Value
+				}
+				allCapturedTags = append(allCapturedTags, batchTags)
+			}).Return(&ecs.TagResourcesResponse{}, nil)
+
+			_, err := taggingController.Reconcile(ctx, reconcile.Request{
+				NamespacedName: client.ObjectKeyFromObject(nodeClaim),
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			// Should have 2 batches: 20 + 9 (4 karpenter tags + 25 custom = 29 total)
+			Expect(len(allCapturedTags)).To(Equal(2))
+			Expect(len(allCapturedTags[0])).To(BeNumerically("<=", 20))
+			Expect(len(allCapturedTags[1])).To(BeNumerically("<=", 20))
+
+			// Merge all batches and verify all tags present
+			merged := make(map[string]string)
+			for _, batch := range allCapturedTags {
+				for k, v := range batch {
+					merged[k] = v
+				}
+			}
+			// 4 karpenter tags + 25 custom = 29
+			Expect(len(merged)).To(Equal(29))
+			for i := 0; i < 25; i++ {
+				Expect(merged).To(HaveKeyWithValue(fmt.Sprintf("custom-tag-%d", i), fmt.Sprintf("value-%d", i)))
+			}
 		})
 	})
 
 	Context("Multiple NodeClaims", func() {
 		It("should tag different instances for different NodeClaims", func() {
-			// Create first NodeClaim
 			nodeClaim1 := nodeClaim.DeepCopy()
 			nodeClaim1.Name = "nodeclaim-1"
 
-			// Create second NodeClaim
 			nodeClaim2 := nodeClaim.DeepCopy()
 			nodeClaim2.Name = "nodeclaim-2"
 
@@ -655,7 +817,9 @@ var _ = Describe("TaggingController", func() {
 			nodeClaim2.Status.ProviderID = "cn-hangzhou.i-instance002"
 			Expect(env.Client.Status().Update(ctx, nodeClaim2)).To(Succeed())
 
-			// First reconcile
+			mockDescribeInstancesWithTags("i-instance001", map[string]string{})
+			mockDescribeInstancesWithTags("i-instance002", map[string]string{})
+
 			mockECSClient.On("TagResources", mock.Anything, mock.MatchedBy(func(req *ecs.TagResourcesRequest) bool {
 				return len(req.ResourceId) == 1 && *req.ResourceId[0] == "i-instance001"
 			})).Return(&ecs.TagResourcesResponse{}, nil).Once()
@@ -665,7 +829,6 @@ var _ = Describe("TaggingController", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 
-			// Second reconcile
 			mockECSClient.On("TagResources", mock.Anything, mock.MatchedBy(func(req *ecs.TagResourcesRequest) bool {
 				return len(req.ResourceId) == 1 && *req.ResourceId[0] == "i-instance002"
 			})).Return(&ecs.TagResourcesResponse{}, nil).Once()
@@ -724,6 +887,7 @@ func (m *MockECSClient) DescribeZones(ctx context.Context) (*ecs.DescribeZonesRe
 	}
 	return args.Get(0).(*ecs.DescribeZonesResponse), args.Error(1)
 }
+
 func (m *MockECSClient) DescribeAvailableResource(ctx context.Context, request *ecs.DescribeAvailableResourceRequest) (*ecs.DescribeAvailableResourceResponse, error) {
 	return nil, errors.New("not implemented")
 }

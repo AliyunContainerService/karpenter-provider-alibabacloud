@@ -495,7 +495,7 @@ func NewOperator(ctx context.Context, coreOp *coreoperator.Operator) (*Operator,
 	unavailableOfferingsCache := cache.NewUnavailableOfferingsCacheWithTTL(opts.UnavailableOfferingCacheTTL)
 
 	// Initialize cluster network config
-	networkConfig, err := cluster.InitializeClusterNetworkConfig(csClient, opts.ClusterName)
+	networkConfig, err := cluster.InitializeClusterNetworkConfig(csClient, opts.ClusterID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize cluster network config: %w", err)
 	}

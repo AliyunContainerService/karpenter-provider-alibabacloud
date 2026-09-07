@@ -72,9 +72,9 @@ func TestBuildDescribeImagesRequestAlwaysSetsShowExpired(t *testing.T) {
 	// ShowExpired must always be true to allow querying ContainerOS / LifseaOS
 	// images that are hidden by default. See GH issue #13.
 	tests := []struct {
-		name      string
-		imageIDs  []string
-		filters   map[string]string
+		name     string
+		imageIDs []string
+		filters  map[string]string
 	}{
 		{
 			name:     "no filters",

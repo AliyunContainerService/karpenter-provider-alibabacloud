@@ -42,6 +42,11 @@ const (
 	// AnnotationECSNodeClassHashVersion is the annotation key for hash version
 	AnnotationECSNodeClassHashVersion = Group + "/ecsnodeclass-hash-version"
 
+	// AnnotationInstanceTagged marks that the ECS instance has been successfully tagged.
+	// Once set to "true", the tagging controller will skip subsequent reconciles to avoid
+	// redundant API calls. Aligns with AWS Karpenter design.
+	AnnotationInstanceTagged = Group + "/instance-tagged"
+
 	// LabelNodeClass is the label key for node class name
 	LabelNodeClass = Group + "/nodeclass"
 

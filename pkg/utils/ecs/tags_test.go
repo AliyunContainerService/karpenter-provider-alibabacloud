@@ -23,11 +23,11 @@ import (
 
 func TestBatchTags(t *testing.T) {
 	tests := []struct {
-		name           string
-		input          map[string]string
-		expectedLen    int
-		expectedSizes  []int
-		checkContent   bool
+		name          string
+		input         map[string]string
+		expectedLen   int
+		expectedSizes []int
+		checkContent  bool
 	}{
 		{
 			name:          "empty map",
@@ -36,7 +36,7 @@ func TestBatchTags(t *testing.T) {
 			expectedSizes: nil,
 		},
 		{
-			name: "nil map",
+			name:          "nil map",
 			input:         nil,
 			expectedLen:   0,
 			expectedSizes: nil,

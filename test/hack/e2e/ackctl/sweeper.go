@@ -361,8 +361,8 @@ func deleteOwnedResources(ctx context.Context, cfg *Config, report SweepReport) 
 
 func disableInstanceDeletionProtection(client *ecs.Client, instanceID string) error {
 	_, err := client.ModifyInstanceAttribute(&ecs.ModifyInstanceAttributeRequest{
-		InstanceId:          tea.String(instanceID),
-		DeletionProtection:  tea.Bool(false),
+		InstanceId:         tea.String(instanceID),
+		DeletionProtection: tea.Bool(false),
 	})
 	return err
 }

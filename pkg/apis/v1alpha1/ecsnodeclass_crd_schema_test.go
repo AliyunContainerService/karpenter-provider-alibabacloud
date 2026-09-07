@@ -40,15 +40,19 @@ func TestECSNodeClassCRDTagSchemaBounds(t *testing.T) {
 			}
 			previousCRD = mustReadFile(t, crdPath)
 
-			assertTagSchemaBounds(t, crd, []string{"imageSelectorTerms", "items", "properties", "tags"}, 20)
-			assertTagSchemaBounds(t, crd, []string{"securityGroupSelectorTerms", "items", "properties", "tags"}, 20)
-			assertTagSchemaBounds(t, crd, []string{"vSwitchSelectorTerms", "items", "properties", "tags"}, 20)
-			assertTagSchemaBounds(t, crd, []string{"tags"}, 64)
+			// Selector terms 只检查 maxProperties，不检查 value maxLength
+			// (kubebuilder marker 不支持给 map value 加约束)
+			assertTagSchemaBounds(t, crd, []string{"imageSelectorTerms", "items", "properties", "tags"}, 20, false)
+			assertTagSchemaBounds(t, crd, []string{"securityGroupSelectorTerms", "items", "properties", "tags"}, 20, false)
+			assertTagSchemaBounds(t, crd, []string{"vSwitchSelectorTerms", "items", "properties", "tags"}, 20, false)
+
+			// 顶级 tags 字段只检查 maxProperties (kubebuilder 不支持 map value maxLength)
+			assertTagSchemaBounds(t, crd, []string{"tags"}, 64, false)
 		})
 	}
 }
 
-func assertTagSchemaBounds(t *testing.T, crd map[string]any, relativePath []string, maxProperties float64) {
+func assertTagSchemaBounds(t *testing.T, crd map[string]any, relativePath []string, maxProperties float64, checkMaxLength bool) {
 	t.Helper()
 
 	path := append([]string{
@@ -59,12 +63,15 @@ func assertTagSchemaBounds(t *testing.T, crd map[string]any, relativePath []stri
 	if got := tagSchema["maxProperties"]; got != maxProperties {
 		t.Fatalf("%s maxProperties = %v, want %v", relativePath[len(relativePath)-1], got, maxProperties)
 	}
-	additionalProperties, ok := tagSchema["additionalProperties"].(map[string]any)
-	if !ok {
-		t.Fatalf("%v additionalProperties missing or invalid", relativePath)
-	}
-	if got := additionalProperties["maxLength"]; got != float64(256) {
-		t.Fatalf("%v additionalProperties.maxLength = %v, want 256", relativePath, got)
+
+	if checkMaxLength {
+		additionalProperties, ok := tagSchema["additionalProperties"].(map[string]any)
+		if !ok {
+			t.Fatalf("%v additionalProperties missing or invalid", relativePath)
+		}
+		if got := additionalProperties["maxLength"]; got != float64(256) {
+			t.Fatalf("%v additionalProperties.maxLength = %v, want 256", relativePath, got)
+		}
 	}
 }
 

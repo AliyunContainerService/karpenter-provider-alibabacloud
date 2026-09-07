@@ -41,6 +41,9 @@ type Options struct {
 	// ClusterName is the name of the Kubernetes cluster
 	ClusterName string
 
+	// ClusterID is the ACK cluster ID (e.g., c9d5c9e900adc4a7481624c18a4067b84)
+	ClusterID string
+
 	// ClusterEndpoint is the endpoint of the Kubernetes API server
 	ClusterEndpoint string
 
@@ -117,6 +120,9 @@ func (o *Options) AddFlags(fs *coreoptions.FlagSet) {
 	if value := os.Getenv("ALIBABA_CLOUD_CLUSTER_NAME"); value != "" {
 		o.ClusterName = value
 	}
+	if value := os.Getenv("CLUSTER_ID"); value != "" {
+		o.ClusterID = value
+	}
 	if value := os.Getenv("ALIBABA_CLOUD_CLUSTER_ENDPOINT"); value != "" {
 		o.ClusterEndpoint = value
 	}
@@ -125,6 +131,7 @@ func (o *Options) AddFlags(fs *coreoptions.FlagSet) {
 	}
 
 	fs.StringVar(&o.ClusterName, "cluster-name", o.ClusterName, "The name of the Kubernetes cluster")
+	fs.StringVar(&o.ClusterID, "cluster-id", o.ClusterID, "The ACK cluster ID (e.g., c9d5c9e900adc4a7481624c18a4067b84)")
 	fs.StringVar(&o.ClusterEndpoint, "cluster-endpoint", o.ClusterEndpoint, "The endpoint of the Kubernetes API server")
 	fs.StringVar(&o.Region, "region", o.Region, "The Alibaba Cloud region")
 	fs.StringVar(&o.InterruptionQueue, "interruption-queue", o.InterruptionQueue, "The SLS queue name for spot interruption events")
@@ -179,6 +186,9 @@ func (o *Options) Parse(fs *coreoptions.FlagSet, args ...string) error {
 	// Required fields validation
 	if o.ClusterName == "" {
 		return fmt.Errorf("cluster-name is required")
+	}
+	if o.ClusterID == "" {
+		return fmt.Errorf("cluster-id is required")
 	}
 	if o.ClusterEndpoint == "" {
 		return fmt.Errorf("cluster-endpoint is required")
