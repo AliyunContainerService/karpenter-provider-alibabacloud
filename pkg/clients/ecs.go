@@ -275,7 +275,14 @@ func buildDescribeSecurityGroupsRequest(region string, id string, name string, t
 }
 
 func buildDescribeImagesRequest(region string, imageIDs []string, filters map[string]string) (*ecs.DescribeImagesRequest, error) {
-	request := &ecs.DescribeImagesRequest{RegionId: tea.String(region)}
+	// ShowExpired is always set to true because the ECS API hides certain system
+	// images (e.g. ContainerOS / LifseaOS) by default. Those images have
+	// Status=Available and are perfectly usable, but the API filters them out
+	// unless ShowExpired=true is explicitly passed. See GH issue #13.
+	request := &ecs.DescribeImagesRequest{
+		RegionId:    tea.String(region),
+		ShowExpired: tea.Bool(true),
+	}
 
 	if len(imageIDs) > 0 {
 		request.ImageId = tea.String(strings.Join(imageIDs, ","))

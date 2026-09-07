@@ -67,3 +67,49 @@ func TestBuildDescribeImagesRequestRejectsInvalidOwnerID(t *testing.T) {
 		t.Fatal("expected invalid owner ID error")
 	}
 }
+
+func TestBuildDescribeImagesRequestAlwaysSetsShowExpired(t *testing.T) {
+	// ShowExpired must always be true to allow querying ContainerOS / LifseaOS
+	// images that are hidden by default. See GH issue #13.
+	tests := []struct {
+		name      string
+		imageIDs  []string
+		filters   map[string]string
+	}{
+		{
+			name:     "no filters",
+			imageIDs: nil,
+			filters:  nil,
+		},
+		{
+			name:     "with image ID",
+			imageIDs: []string{"lifsea_3_x64_5G_alibase_20260519.qcow2"},
+			filters:  nil,
+		},
+		{
+			name:     "with ImageFamily",
+			imageIDs: nil,
+			filters:  map[string]string{"ImageFamily": "acs:lifsea_os_3_x64"},
+		},
+		{
+			name:     "with multiple filters",
+			imageIDs: []string{"m-xxx"},
+			filters:  map[string]string{"ImageOwnerAlias": "system", "ImageFamily": "acs:alibaba_cloud_linux_3_2104_lts_x64"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := buildDescribeImagesRequest("cn-hangzhou", tt.imageIDs, tt.filters)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if req.ShowExpired == nil {
+				t.Fatal("ShowExpired must be set")
+			}
+			if *req.ShowExpired != true {
+				t.Fatalf("ShowExpired must be true, got %v", *req.ShowExpired)
+			}
+		})
+	}
+}
