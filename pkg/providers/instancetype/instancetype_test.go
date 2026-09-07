@@ -664,6 +664,53 @@ func TestConvertECSInstanceTypeWithGPU(t *testing.T) {
 	}
 }
 
+// TestConvertECSInstanceTypeArchitecture verifies that convertECSInstanceType maps
+// the raw ECS DescribeInstanceTypes CpuArchitecture field onto the Kubernetes
+// kubernetes.io/arch label value. This is the authoritative architecture source
+// (DescribeInstances does NOT return CpuArchitecture), so it must be exercised
+// against the real ECS response struct rather than inferred. Covers ARM64, the
+// x86 aliases, casing variants, and the nil (missing) case.
+func TestConvertECSInstanceTypeArchitecture(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+	tests := []struct {
+		name         string
+		cpuArch      *string
+		expectedArch string
+	}{
+		{name: "X86", cpuArch: strPtr("X86"), expectedArch: v1alpha1.ArchitectureAmd64},
+		{name: "X86_64", cpuArch: strPtr("X86_64"), expectedArch: v1alpha1.ArchitectureAmd64},
+		{name: "ARM64 (Yitian 710, e.g. g8y)", cpuArch: strPtr("ARM64"), expectedArch: v1alpha1.ArchitectureArm64},
+		{name: "lowercase arm64", cpuArch: strPtr("arm64"), expectedArch: v1alpha1.ArchitectureArm64},
+		{name: "aarch64 alias", cpuArch: strPtr("aarch64"), expectedArch: v1alpha1.ArchitectureArm64},
+		{name: "mixed-case Arm64", cpuArch: strPtr("Arm64"), expectedArch: v1alpha1.ArchitectureArm64},
+		{name: "nil defaults to amd64", cpuArch: nil, expectedArch: v1alpha1.ArchitectureAmd64},
+		{name: "unknown defaults to amd64", cpuArch: strPtr("sw64"), expectedArch: v1alpha1.ArchitectureAmd64},
+	}
+
+	provider := NewProvider("cn-hangzhou", new(MockECSClient))
+	zones := map[string]ZoneInfo{"cn-hangzhou-h": {Available: true}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instanceTypeId := "ecs.g8y.large"
+			cpuCoreCount := int32(2)
+			memorySize := float32(8.0)
+			ecsInstanceType := &ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
+				InstanceTypeId:  &instanceTypeId,
+				CpuCoreCount:    &cpuCoreCount,
+				MemorySize:      &memorySize,
+				CpuArchitecture: tt.cpuArch,
+			}
+
+			result := provider.convertECSInstanceType(ecsInstanceType, zones)
+
+			assert.NotNil(t, result)
+			assert.Equal(t, tt.expectedArch, result.Architecture,
+				"CpuArchitecture=%v should map to %s", tt.cpuArch, tt.expectedArch)
+		})
+	}
+}
+
 // buildInventoryResponse constructs a DescribeAvailableResourceResponse with the
 // given per-zone instance-type stock entries. status should be one of the
 // stockStatus* constants.

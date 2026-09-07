@@ -918,3 +918,122 @@ func TestCreateMetadataOptions(t *testing.T) {
 		})
 	}
 }
+
+// TestListParsesCapacityTypeAndArchitecture verifies that List() correctly
+// derives Instance.CapacityType and Instance.Architecture from the raw
+// DescribeInstances response. These are ECS API field conversions and MUST be
+// covered by a real unit test (not inferred), per AGENT.md.
+//
+// The critical regression this guards: an Alibaba Cloud spot instance reports
+// InstanceChargeType=PostPaid and is distinguished only by SpotStrategy, so it
+// must be classified as "spot", not "on-demand".
+func TestListParsesCapacityTypeAndArchitecture(t *testing.T) {
+	tests := []struct {
+		name             string
+		instanceType     string
+		instanceCharge   string
+		spotStrategy     *string
+		wantCapacityType string
+		wantArchitecture string
+	}{
+		{
+			name:             "spot instance reports PostPaid but must be classified spot",
+			instanceType:     "ecs.g7.large",
+			instanceCharge:   "PostPaid",
+			spotStrategy:     stringPtr("SpotAsPriceGo"),
+			wantCapacityType: "spot",
+			wantArchitecture: "amd64",
+		},
+		{
+			name:             "spot with price limit is spot",
+			instanceType:     "ecs.g7.large",
+			instanceCharge:   "PostPaid",
+			spotStrategy:     stringPtr("SpotWithPriceLimit"),
+			wantCapacityType: "spot",
+			wantArchitecture: "amd64",
+		},
+		{
+			name:             "on-demand PostPaid with NoSpot",
+			instanceType:     "ecs.g6.large",
+			instanceCharge:   "PostPaid",
+			spotStrategy:     stringPtr("NoSpot"),
+			wantCapacityType: "on-demand",
+			wantArchitecture: "amd64",
+		},
+		{
+			name:             "on-demand PostPaid without spot strategy",
+			instanceType:     "ecs.g6.large",
+			instanceCharge:   "PostPaid",
+			spotStrategy:     nil,
+			wantCapacityType: "on-demand",
+			wantArchitecture: "amd64",
+		},
+		{
+			name:             "subscription PrePaid is pre-paid",
+			instanceType:     "ecs.g6.large",
+			instanceCharge:   "PrePaid",
+			spotStrategy:     nil,
+			wantCapacityType: "pre-paid",
+			wantArchitecture: "amd64",
+		},
+		{
+			name:             "ARM (Yitian g8y) instance type is arm64",
+			instanceType:     "ecs.g8y.large",
+			instanceCharge:   "PostPaid",
+			spotStrategy:     stringPtr("NoSpot"),
+			wantCapacityType: "on-demand",
+			wantArchitecture: "arm64",
+		},
+		{
+			name:             "GPU family (ecs.gn) is amd64, not arm64",
+			instanceType:     "ecs.gn7i-c8g1.2xlarge",
+			instanceCharge:   "PostPaid",
+			spotStrategy:     nil,
+			wantCapacityType: "on-demand",
+			wantArchitecture: "amd64",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := new(MockECSClient)
+			response := &ecs.DescribeInstancesResponse{
+				Body: &ecs.DescribeInstancesResponseBody{
+					TotalCount: int32Ptr(1),
+					PageNumber: int32Ptr(1),
+					PageSize:   int32Ptr(100),
+					Instances: &ecs.DescribeInstancesResponseBodyInstances{
+						Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{
+							{
+								InstanceId:         stringPtr("i-123"),
+								RegionId:           stringPtr("cn-hangzhou"),
+								ZoneId:             stringPtr("cn-hangzhou-h"),
+								InstanceType:       stringPtr(tt.instanceType),
+								ImageId:            stringPtr("img-123"),
+								Cpu:                int32Ptr(2),
+								Memory:             int32Ptr(8192),
+								Status:             stringPtr("Running"),
+								InstanceChargeType: stringPtr(tt.instanceCharge),
+								SpotStrategy:       tt.spotStrategy,
+								CreationTime:       stringPtr("2024-01-01T00:00:00Z"),
+								Tags: &ecs.DescribeInstancesResponseBodyInstancesInstanceTags{
+									Tag: []*ecs.DescribeInstancesResponseBodyInstancesInstanceTagsTag{},
+								},
+							},
+						},
+					},
+				},
+			}
+			mockClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(response, nil)
+
+			provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+			result, err := provider.List(context.Background(), map[string]string{"env": "test"})
+			assert.NoError(t, err)
+			assert.Len(t, result, 1)
+			assert.Equal(t, tt.wantCapacityType, result[0].CapacityType, "CapacityType mismatch")
+			assert.Equal(t, tt.wantArchitecture, result[0].Architecture, "Architecture mismatch")
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}

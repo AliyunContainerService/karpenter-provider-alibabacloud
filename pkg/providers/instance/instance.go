@@ -29,6 +29,7 @@ import (
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/batcher"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/errors"
+	ecsutil "github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/utils/ecs"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/utils/securitygroups"
 	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"github.com/alibabacloud-go/tea/tea"
@@ -443,20 +444,11 @@ func (p *Provider) Get(ctx context.Context, instanceID string) (*Instance, error
 	storage := resource.MustParse("0") // Storage is not directly available in DescribeInstances response
 	gpuMem := resource.MustParse("0")  // GPUMem is not directly available in DescribeInstances response
 
-	// Get architecture from instance type
-	architecture := "amd64"
-	if strings.HasPrefix(*inst.InstanceType, "ecs.gn") || strings.HasPrefix(*inst.InstanceType, "ecs.cu") {
-		architecture = "arm64"
-	}
+	// DescribeInstances does not return CpuArchitecture, so infer it from the
+	// instance-type family (centralized heuristic in pkg/utils/ecs).
+	architecture := ecsutil.ArchitectureFromInstanceType(derefString(inst.InstanceType))
 
-	var capacityType string
-	if *inst.InstanceChargeType == "PostPaid" {
-		capacityType = "on-demand"
-	} else if *inst.InstanceChargeType == "PrePaid" {
-		capacityType = "pre-paid"
-	} else if inst.SpotStrategy != nil && *inst.SpotStrategy != "" && *inst.SpotStrategy != "NoSpot" {
-		capacityType = "spot"
-	}
+	capacityType := ecsutil.CapacityTypeFromInstance(derefString(inst.InstanceChargeType), derefString(inst.SpotStrategy))
 
 	securityGroupIds := []string{}
 	if inst.SecurityGroupIds != nil && inst.SecurityGroupIds.SecurityGroupId != nil {
@@ -661,24 +653,13 @@ func (p *Provider) List(ctx context.Context, tags map[string]string) ([]*Instanc
 			gpu := resource.MustParse(fmt.Sprintf("%d", gpuAmount))
 			gpuMem := resource.MustParse("0") // GPUMem is not directly available in DescribeInstances response
 
-			// Get architecture from instance type
-			architecture := "amd64"
-			instType := derefString(inst.InstanceType)
-			if strings.HasPrefix(instType, "ecs.gn") || strings.HasPrefix(instType, "ecs.cu") {
-				architecture = "arm64"
-			}
+			// DescribeInstances does not return CpuArchitecture, so infer it from
+			// the instance-type family (centralized heuristic in pkg/utils/ecs).
+			architecture := ecsutil.ArchitectureFromInstanceType(derefString(inst.InstanceType))
 
-			// Determine capacity type
-			var capacityType string
-			chargeType := derefString(inst.InstanceChargeType)
-			spotStrategy := derefString(inst.SpotStrategy)
-			if chargeType == "PostPaid" {
-				capacityType = "on-demand"
-			} else if chargeType == "PrePaid" {
-				capacityType = "pre-paid"
-			} else if spotStrategy != "" && spotStrategy != "NoSpot" {
-				capacityType = "spot"
-			}
+			// Determine capacity type (spot instances report PostPaid, so this is
+			// centralized in pkg/utils/ecs to keep the spot-first ordering correct).
+			capacityType := ecsutil.CapacityTypeFromInstance(derefString(inst.InstanceChargeType), derefString(inst.SpotStrategy))
 
 			securityGroupIds := []string{}
 			if inst.SecurityGroupIds != nil && inst.SecurityGroupIds.SecurityGroupId != nil {

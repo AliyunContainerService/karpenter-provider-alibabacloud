@@ -27,23 +27,25 @@ import (
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
+	ecsutil "github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/utils/ecs"
 	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"github.com/alibabacloud-go/tea/tea"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// ECS API parameters for DescribeAvailableResource
+// ECS API parameters for DescribeAvailableResource. Values are sourced from the
+// single source of truth in pkg/utils/ecs so they cannot drift out of sync.
 const (
-	ecsChargeTypePostPaid    = "PostPaid"
-	ecsSpotStrategyNoSpot    = "NoSpot"
-	ecsSpotStrategyAsPriceGo = "SpotAsPriceGo"
+	ecsChargeTypePostPaid    = ecsutil.ChargeTypePostPaid
+	ecsSpotStrategyNoSpot    = ecsutil.SpotStrategyNoSpot
+	ecsSpotStrategyAsPriceGo = ecsutil.SpotStrategyAsPriceGo
 )
 
 // Karpenter capacity types stored in ZoneInfo (match karpenter.sh/capacity-type label values)
 const (
-	capacityTypeOnDemand = "on-demand"
-	capacityTypeSpot     = "spot"
+	capacityTypeOnDemand = v1alpha1.CapacityTypeOnDemand
+	capacityTypeSpot     = v1alpha1.CapacityTypeSpot
 )
 
 // ECS inventory stock status values from DescribeAvailableResource
@@ -227,15 +229,13 @@ func (p *Provider) convertECSInstanceType(ecsInstanceType *ecs.DescribeInstanceT
 	memory := resource.NewQuantity(memoryBytes, resource.BinarySI)
 	storage := resource.NewQuantity(0, resource.DecimalSI) // Storage is not directly available
 
-	// Get architecture and normalize to Kubernetes values (ECS returns "X86_64"/"ARM64")
-	architecture := "amd64"
+	// Get architecture and normalize to Kubernetes values. ECS DescribeInstanceTypes
+	// returns raw values such as "X86"/"X86_64"/"ARM64"; delegate to the single ECS
+	// conversion helper (pkg/utils/ecs) so casing and aliases ("arm64"/"aarch64"/...)
+	// are handled uniformly everywhere instead of an ad-hoc exact-match switch here.
+	architecture := v1alpha1.ArchitectureAmd64
 	if ecsInstanceType.CpuArchitecture != nil {
-		switch *ecsInstanceType.CpuArchitecture {
-		case "ARM64":
-			architecture = "arm64"
-		default:
-			architecture = "amd64"
-		}
+		architecture = ecsutil.KubeArchitecture(*ecsInstanceType.CpuArchitecture)
 	}
 
 	// Get GPU information if available with enhanced memory calculation
@@ -759,14 +759,7 @@ func gpuMemory(it *InstanceType) string {
 }
 
 func kubeArchitecture(arch string) string {
-	switch strings.ToLower(strings.TrimSpace(arch)) {
-	case "x86", "x86_64", "amd64":
-		return v1alpha1.ArchitectureAmd64
-	case "arm64", "aarch64":
-		return v1alpha1.ArchitectureArm64
-	default:
-		return arch
-	}
+	return ecsutil.KubeArchitecture(arch)
 }
 
 // matchesStringRequirement checks if a string value matches the requirement
