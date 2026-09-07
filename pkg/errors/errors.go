@@ -28,6 +28,12 @@ const (
 	ErrCodeZoneNotOnSale       = "Zone.NotOnSale"
 	ErrCodeInsufficientBalance = "InsufficientBalance"
 	ErrCodeVSwitchIPNotEnough  = "InvalidVSwitchId.IpNotEnough"
+	// ErrCodeResourceTypeNotSupported is returned when the requested instance type
+	// is not sellable in the target zone (e.g. an arm64 family that only exists in
+	// some zones of the region). This is zone-specific: the same instance type may
+	// be available in another zone, so it must trigger the vSwitch/zone fallback
+	// rather than failing the whole launch.
+	ErrCodeResourceTypeNotSupported = "InvalidResourceType.NotSupported"
 
 	// Quota errors (Not retryable)
 	ErrCodeQuotaExceedInstance = "QuotaExceed.Instance"
@@ -66,6 +72,7 @@ func IsInsufficientCapacityError(err error) bool {
 	errMsg := err.Error()
 	return strings.Contains(errMsg, ErrCodeNoStock) ||
 		strings.Contains(errMsg, ErrCodeZoneNotOnSale) ||
+		strings.Contains(errMsg, ErrCodeResourceTypeNotSupported) ||
 		strings.Contains(errMsg, ErrCodeVSwitchIPNotEnough)
 }
 
