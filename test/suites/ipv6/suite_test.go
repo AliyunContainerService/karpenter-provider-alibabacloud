@@ -215,7 +215,7 @@ func testInstanceTypes() []string {
 	if values := envList("TEST_INSTANCE_TYPES"); len(values) > 0 {
 		return values
 	}
-	return []string{"ecs.c9i.large", "ecs.c9i.xlarge"}
+	return []string{"ecs.g7.large", "ecs.g7.xlarge"}
 }
 
 func envList(key string) []string {
