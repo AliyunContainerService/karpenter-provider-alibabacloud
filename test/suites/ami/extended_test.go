@@ -17,6 +17,7 @@ limitations under the License.
 package ami
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -187,7 +188,9 @@ var _ = Describe("Image Resolution Contracts", func() {
 })
 
 func configureImageNodeClass(name string) {
-	nodeClass.Name = "ami-test-" + name
+	// Add parallel process ID to avoid resource name conflicts in parallel tests
+	procID := fmt.Sprintf("-p%d", GinkgoParallelProcess())
+	nodeClass.Name = "ami-test-" + name + procID
 	nodeClass.Spec.Tags = env.TestTags(name)
 	nodeClass.Spec.ImageSelectorTerms = []v1alpha1.ImageSelectorTerm{{ImageFamily: lo.ToPtr(environmentcs.DefaultImageFamily)}}
 	configureNodePool(name)
