@@ -295,9 +295,9 @@ var _ = Describe("StatusController", func() {
 		})
 
 		It("should rate limit selector resolution failures with explicit requeue", func() {
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(nil, fmt.Errorf("VPC API throttled"))
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("VPC API throttled"))
 
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
 						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{},
@@ -880,7 +880,7 @@ var _ = Describe("StatusController", func() {
 				},
 			}, nil)
 			availableIps := int64(100)
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, vswitchID, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, vswitchID, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
 						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{

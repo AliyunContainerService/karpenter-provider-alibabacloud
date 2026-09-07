@@ -54,6 +54,9 @@ const (
 	// CapacityTypeSpot represents spot capacity type
 	CapacityTypeSpot = "spot"
 
+	// CapacityTypePrePaid represents subscription (PrePaid) capacity type
+	CapacityTypePrePaid = "pre-paid"
+
 	// TagName is the tag key for instance name
 	TagName = "Name"
 
@@ -67,7 +70,11 @@ const (
 	TagManagedBy = Group + "/managed-by"
 
 	// TagManagedByValue is the value used to identify resources managed by Karpenter.
-	TagManagedByValue = "true"
+	// MUST stay "karpenter" to match opensource-main: instances created by the
+	// upstream provider are tagged karpenter.sh/managed-by=karpenter, and List()
+	// filters on this exact value. Changing it (e.g. to "true") is a breaking
+	// change that orphans existing nodes and can cause GC to miss/mis-handle them.
+	TagManagedByValue = "karpenter"
 
 	// TagCluster is the tag key for cluster name
 	TagCluster = "kubernetes.io/cluster"

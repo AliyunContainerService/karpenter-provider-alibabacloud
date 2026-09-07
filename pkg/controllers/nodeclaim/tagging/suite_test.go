@@ -233,7 +233,11 @@ var _ = Describe("TaggingController", func() {
 			// Verify required tags
 			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagNodeClaim, "test-nodeclaim"))
 			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagNodePool, "default"))
-			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagManagedBy, "true"))
+			// managed-by must equal the single authoritative value TagManagedByValue
+			// ("karpenter"). CloudProvider.List/GC filter instances by
+			// managed-by=karpenter, so the tagging controller MUST write the same
+			// value or the tag it adds would be invisible to GC. See labels.go.
+			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagManagedBy, v1alpha1.TagManagedByValue))
 		})
 
 		It("should include custom tags from NodeClass", func() {
