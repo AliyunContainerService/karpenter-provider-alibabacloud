@@ -1037,3 +1037,107 @@ func TestListParsesCapacityTypeAndArchitecture(t *testing.T) {
 		})
 	}
 }
+
+func TestTagInstanceBatching_EmptyTags(t *testing.T) {
+	mockClient := new(MockECSClient)
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	
+	// Empty tags should not call API
+	err := provider.TagInstance(context.Background(), "i-123", map[string]string{})
+	assert.NoError(t, err)
+	mockClient.AssertNotCalled(t, "TagResources", mock.Anything, mock.Anything)
+}
+
+func TestTagInstanceBatching_UnderLimit(t *testing.T) {
+	mockClient := new(MockECSClient)
+	
+	// 10 tags should result in 1 API call
+	tags := make(map[string]string)
+	for i := 0; i < 10; i++ {
+		tags[fmt.Sprintf("key%02d", i)] = fmt.Sprintf("val%02d", i)
+	}
+	
+	mockClient.On("TagResources", mock.Anything, mock.Anything).Return(&ecs.TagResourcesResponse{}, nil)
+	
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	err := provider.TagInstance(context.Background(), "i-123", tags)
+	
+	assert.NoError(t, err)
+	mockClient.AssertNumberOfCalls(t, "TagResources", 1)
+}
+
+func TestTagInstanceBatching_ExactlyLimit(t *testing.T) {
+	mockClient := new(MockECSClient)
+	
+	// Exactly 20 tags should result in 1 API call
+	tags := make(map[string]string)
+	for i := 0; i < 20; i++ {
+		tags[fmt.Sprintf("key%02d", i)] = fmt.Sprintf("val%02d", i)
+	}
+	
+	mockClient.On("TagResources", mock.Anything, mock.Anything).Return(&ecs.TagResourcesResponse{}, nil)
+	
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	err := provider.TagInstance(context.Background(), "i-123", tags)
+	
+	assert.NoError(t, err)
+	mockClient.AssertNumberOfCalls(t, "TagResources", 1)
+}
+
+func TestTagInstanceBatching_OverLimit(t *testing.T) {
+	mockClient := new(MockECSClient)
+	
+	// 30 tags should result in 2 API calls
+	tags := make(map[string]string)
+	for i := 0; i < 30; i++ {
+		tags[fmt.Sprintf("key%02d", i)] = fmt.Sprintf("val%02d", i)
+	}
+	
+	mockClient.On("TagResources", mock.Anything, mock.Anything).Return(&ecs.TagResourcesResponse{}, nil)
+	
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	err := provider.TagInstance(context.Background(), "i-123", tags)
+	
+	assert.NoError(t, err)
+	mockClient.AssertNumberOfCalls(t, "TagResources", 2)
+}
+
+func TestTagInstanceBatching_MultipleBatches(t *testing.T) {
+	mockClient := new(MockECSClient)
+	
+	// 50 tags should result in 3 API calls
+	tags := make(map[string]string)
+	for i := 0; i < 50; i++ {
+		tags[fmt.Sprintf("key%02d", i)] = fmt.Sprintf("val%02d", i)
+	}
+	
+	mockClient.On("TagResources", mock.Anything, mock.Anything).Return(&ecs.TagResourcesResponse{}, nil)
+	
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	err := provider.TagInstance(context.Background(), "i-123", tags)
+	
+	assert.NoError(t, err)
+	mockClient.AssertNumberOfCalls(t, "TagResources", 3)
+}
+
+func TestTagInstanceBatching_ErrorOnSecondBatch(t *testing.T) {
+	mockClient := new(MockECSClient)
+	
+	// 30 tags should result in 2 API calls, but second call fails
+	tags := make(map[string]string)
+	for i := 0; i < 30; i++ {
+		tags[fmt.Sprintf("key%02d", i)] = fmt.Sprintf("val%02d", i)
+	}
+	
+	// First call succeeds
+	mockClient.On("TagResources", mock.Anything, mock.Anything).Return(&ecs.TagResourcesResponse{}, nil).Once()
+	// Second call fails
+	mockClient.On("TagResources", mock.Anything, mock.Anything).Return(nil, errors.New("NumberExceed.Tags")).Once()
+	
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	err := provider.TagInstance(context.Background(), "i-123", tags)
+	
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "batch 2/2")
+	mockClient.AssertNumberOfCalls(t, "TagResources", 2)
+}

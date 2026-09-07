@@ -298,16 +298,27 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 		request.UserData = tea.String(base64.StdEncoding.EncodeToString([]byte(opts.UserData)))
 	}
 
-	// Set tags
+	// Set tags — ECS RunInstances accepts at most MaxTagsPerRequest (20) tags.
+	// Split into batches: the first batch goes into RunInstances, any remaining
+	// batches are applied after creation via TagResources. See GH issue #14.
+	var deferredTagBatches []map[string]string
 	if len(opts.Tags) > 0 {
-		var tags []*ecs.RunInstancesRequestTag
-		for key, value := range opts.Tags {
-			tags = append(tags, &ecs.RunInstancesRequestTag{
-				Key:   tea.String(key),
-				Value: tea.String(value),
-			})
+		batches := ecsutil.BatchTags(opts.Tags)
+		// First batch goes into RunInstances request
+		if len(batches) > 0 {
+			var tags []*ecs.RunInstancesRequestTag
+			for key, value := range batches[0] {
+				tags = append(tags, &ecs.RunInstancesRequestTag{
+					Key:   tea.String(key),
+					Value: tea.String(value),
+				})
+			}
+			request.Tag = tags
 		}
-		request.Tag = tags
+		// Remaining batches will be applied after instance creation
+		if len(batches) > 1 {
+			deferredTagBatches = batches[1:]
+		}
 	}
 
 	// Handle instance store policy if specified
@@ -350,6 +361,15 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 	}
 	instanceID := *response.Body.InstanceIdSets.InstanceIdSet[0]
 	logger.Info("created instance", "instanceID", instanceID)
+
+	// Apply any remaining tag batches that exceeded RunInstances' 20-tag limit
+	for i, batch := range deferredTagBatches {
+		if err := p.TagInstance(ctx, instanceID, batch); err != nil {
+			logger.Error(err, "failed to apply deferred tag batch",
+				"instanceID", instanceID, "batch", i+2, "totalDeferred", len(deferredTagBatches))
+			// Log but don't fail creation — the instance exists; tagging controller will reconcile
+		}
+	}
 
 	return instanceID, nil
 }
@@ -722,37 +742,64 @@ func (p *Provider) List(ctx context.Context, tags map[string]string) ([]*Instanc
 	return allInstances, nil
 }
 
-// TagInstance tags an ECS instance with the given tags
+// TagInstance tags an ECS instance with the given tags.
+// If the number of tags exceeds MaxTagsPerRequest (20), the tags are automatically
+// split into multiple API requests to comply with Alibaba Cloud ECS API limits.
 func (p *Provider) TagInstance(ctx context.Context, instanceID string, tags map[string]string) error {
-	logger := log.FromContext(ctx)
-
-	// Create tag resources request
-	request := &ecs.TagResourcesRequest{
-		RegionId:     tea.String(p.region),
-		ResourceType: tea.String("instance"),
-		ResourceId:   []*string{tea.String(instanceID)},
+	if len(tags) == 0 {
+		return nil
 	}
 
-	// Convert tags to ECS format
-	var ecsTags []*ecs.TagResourcesRequestTag
+	logger := log.FromContext(ctx)
+
+	// Split tags into batches of MaxTagsPerRequest to comply with ECS API limits
+	batches := ecsutil.BatchTags(tags)
+
+	logger.V(1).Info("tagging instance", "instanceID", instanceID, "totalTags", len(tags), "batches", len(batches))
+
+	// Apply each batch
+	for i, batch := range batches {
+		request := &ecs.TagResourcesRequest{
+			RegionId:     tea.String(p.region),
+			ResourceType: tea.String("instance"),
+			ResourceId:   []*string{tea.String(instanceID)},
+			Tag:          convertToTagResourcesRequestTags(batch),
+		}
+
+		if _, err := p.ecsClient.TagResources(ctx, request); err != nil {
+			logger.Error(err, "failed to tag instance",
+				"instanceID", instanceID,
+				"batch", i+1,
+				"totalBatches", len(batches),
+				"tagsInBatch", batch,
+			)
+			return fmt.Errorf("failed to tag instance %s (batch %d/%d): %w", instanceID, i+1, len(batches), err)
+		}
+
+		logger.V(1).Info("tagged instance batch",
+			"instanceID", instanceID,
+			"batch", i+1,
+			"totalBatches", len(batches),
+			"tagsInBatch", len(batch),
+		)
+	}
+
+	logger.Info("tagged instance", "instanceID", instanceID, "totalTags", len(tags))
+	return nil
+}
+
+// convertToTagResourcesRequestTags converts a tag map to TagResourcesRequestTag slice
+func convertToTagResourcesRequestTags(tags map[string]string) []*ecs.TagResourcesRequestTag {
+	result := make([]*ecs.TagResourcesRequestTag, 0, len(tags))
 	for key, value := range tags {
-		ecsTags = append(ecsTags, &ecs.TagResourcesRequestTag{
+		result = append(result, &ecs.TagResourcesRequestTag{
 			Key:   tea.String(key),
 			Value: tea.String(value),
 		})
 	}
-	request.Tag = ecsTags
-
-	// Execute request
-	_, err := p.ecsClient.TagResources(ctx, request)
-	if err != nil {
-		logger.Error(err, "failed to tag instance", "instanceID", instanceID, "tags", tags)
-		return fmt.Errorf("failed to tag instance %s: %w", instanceID, err)
-	}
-
-	logger.Info("tagged instance", "instanceID", instanceID, "tags", tags)
-	return nil
+	return result
 }
+
 
 // convertTags converts ECS tags to map
 func convertTags(ecsTagsResp *ecs.DescribeInstancesResponseBodyInstancesInstanceTags) map[string]string {
