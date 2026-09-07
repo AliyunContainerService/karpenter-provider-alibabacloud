@@ -181,4 +181,61 @@ var _ = Describe("Architecture", Label("arch"), func() {
 		it := node.Labels[corev1.LabelInstanceTypeStable]
 		Expect(it).To(HavePrefix("ecs.gn"), "expected a GPU family instance-type, got %q", it)
 	})
+
+	// Test C: NodePool required amd64 overrides Pod preferred arm64.
+	// This pins the fix for GitHub issue #4: a Pod with
+	// preferredDuringSchedulingIgnoredDuringExecution affinity for arm64
+	// must not prevent provisioning when the NodePool requires amd64.
+	// Under PreferencePolicyRespect (default), Karpenter core first treats
+	// the preferred term as hard, fails, then relaxes it and retries — the
+	// NodePool's required amd64 constraint wins. With PreferencePolicyIgnore,
+	// the preferred term is dropped outright. Either way, the node must
+	// come up as amd64.
+	It("should provision an amd64 node when NodePool requires amd64 even if Pod prefers arm64", Label("preferred-arch-override"), func() {
+		configureArchPool(v1alpha1.ArchitectureAmd64, []string{
+			"ecs.g7.large", "ecs.g7.xlarge",
+			"ecs.c7.large", "ecs.c7.xlarge",
+			"ecs.g6.large", "ecs.g6.xlarge",
+		})
+
+		pod := coretest.Pod(coretest.PodOptions{
+			Image: "registry-cn-hangzhou.ack.aliyuncs.com/acs/pause:3.9",
+			ResourceRequirements: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("100m"),
+					corev1.ResourceMemory: resource.MustParse("128Mi"),
+				},
+			},
+			NodeSelector: map[string]string{
+				karpv1.NodePoolLabelKey: nodePool.Name,
+			},
+			NodePreferences: []corev1.NodeSelectorRequirement{
+				{
+					Key:      corev1.LabelArchStable,
+					Operator: corev1.NodeSelectorOpIn,
+					Values:   []string{v1alpha1.ArchitectureArm64},
+				},
+			},
+		})
+
+		By("creating NodeClass with required amd64 and a Pod with preferred arm64 affinity")
+		env.ExpectCreated(nodeClass, nodePool, pod)
+
+		By("waiting for the pod to become healthy on the new node")
+		env.EventuallyExpectHealthy(pod)
+
+		node := env.EventuallyExpectCreatedNodeCount("==", 1)[0]
+
+		By("verifying kubernetes.io/arch == amd64 (NodePool required, preferred arm64 ignored)")
+		Expect(node.Labels).To(HaveKeyWithValue(corev1.LabelArchStable, v1alpha1.ArchitectureAmd64),
+			"node arch must be amd64 per NodePool requirement, got %q", node.Labels[corev1.LabelArchStable])
+
+		By("verifying the instance-type is an x86_64 family")
+		it := node.Labels[corev1.LabelInstanceTypeStable]
+		Expect(it).To(SatisfyAny(
+			HavePrefix("ecs.g7"), HavePrefix("ecs.c7"),
+			HavePrefix("ecs.g6"), HavePrefix("ecs.c6"),
+		), "expected an x86_64 family instance-type, got %q", it)
+	})
+
 })
