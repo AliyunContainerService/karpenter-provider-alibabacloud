@@ -47,3 +47,9 @@ Thumbs.db
 
 # Superpowers docs
 docs/superpowers/
+
+# Agent instructions
+AGENT.md
+
+# Integration test output
+test-output/
