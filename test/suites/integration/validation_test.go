@@ -36,7 +36,7 @@ var _ = Describe("ECSNodeClass Validation", func() {
 		nodeClass := validValidationNodeClass()
 		nodeClass.Spec.ImageSelectorTerms = []v1alpha1.ImageSelectorTerm{{ID: ptr("must-start-with-m")}}
 
-		Expect(nodeClass.Validate()).To(MatchError(ContainSubstring("not a valid image ID")))
+		Expect(nodeClass.Validate()).To(MatchError(ContainSubstring("is not a valid image ID")))
 	})
 
 	It("should succeed when tags do not contain restricted keys", Label("validation"), func() {
@@ -73,7 +73,7 @@ var _ = Describe("ECSNodeClass Validation", func() {
 			Tags: map[string]string{"karpenter.sh/discovery": "test"},
 		}}
 
-		Expect(nodeClass.Validate()).To(MatchError(ContainSubstring("cannot be combined")))
+		Expect(nodeClass.Validate()).To(MatchError(ContainSubstring("is mutually exclusive with")))
 	})
 
 	It("should fail when vSwitchSelectorTerms has id and other filters", Label("validation", "vswitch"), func() {
@@ -83,7 +83,7 @@ var _ = Describe("ECSNodeClass Validation", func() {
 			ZoneID: ptr("cn-test-a"),
 		}}
 
-		Expect(nodeClass.Validate()).To(MatchError(ContainSubstring("cannot be combined")))
+		Expect(nodeClass.Validate()).To(MatchError(ContainSubstring("is mutually exclusive with")))
 	})
 
 	It("should fail when imageSelectorTerms has id and other filters", Label("validation"), func() {
@@ -93,7 +93,7 @@ var _ = Describe("ECSNodeClass Validation", func() {
 			Tags: map[string]string{"karpenter.sh/discovery": "test"},
 		}}
 
-		Expect(nodeClass.Validate()).To(MatchError(ContainSubstring("cannot be combined")))
+		Expect(nodeClass.Validate()).To(MatchError(ContainSubstring("is mutually exclusive with")))
 	})
 
 	It("should validate block device and data disk configuration", Label("validation", "block-device", "data-disk"), func() {
@@ -113,7 +113,7 @@ var _ = Describe("ECSNodeClass Validation", func() {
 
 		nodeClass = validValidationNodeClass()
 		nodeClass.Spec.CapacityReservationSelectorTerms = []v1alpha1.CapacityReservationSelectorTerm{{ID: ptr("cr-12345"), Tags: map[string]string{"env": "test"}}}
-		Expect(nodeClass.Validate()).To(MatchError(ContainSubstring("cannot be combined")))
+		Expect(nodeClass.Validate()).To(MatchError(ContainSubstring("is mutually exclusive with")))
 	})
 
 	It("should error if imageGCHighThresholdPercent is less than imageGCLowThresholdPercent", Label("validation", "kubelet"), func() {

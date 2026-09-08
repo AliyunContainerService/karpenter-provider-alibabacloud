@@ -24,7 +24,7 @@ import (
 
 var ramRoleNameRegex = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 var imageOwnerIDRegex = regexp.MustCompile(`^[1-9][0-9]{5,19}$`)
-var imageIDRegex = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+var imageIDRegex = regexp.MustCompile(`^m-[A-Za-z0-9._:-]{1,126}$`)
 
 // Validate validates the ECSNodeClass spec
 func (nc *ECSNodeClass) Validate() error {
