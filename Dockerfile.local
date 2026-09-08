@@ -1,0 +1,5 @@
+FROM registry-cn-hangzhou.ack.aliyuncs.com/dev/debian:11-base
+COPY bin/controller /controller
+USER 65532:65532
+EXPOSE 8080 9443
+ENTRYPOINT ["/controller"]
