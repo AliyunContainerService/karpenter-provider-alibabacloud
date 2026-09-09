@@ -433,6 +433,25 @@ func TestECSNodeClassValidateSelectorSemantics(t *testing.T) {
 			expectError: "imageSelectorTerms[0].id is mutually exclusive",
 		},
 		{
+			name: "accepts system VHD image ID",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.ImageSelectorTerms = []ImageSelectorTerm{{ID: ptrForUnit("aliyun_3_x64_20G_container_optimized_alibase_20260828.vhd")}}
+			},
+		},
+		{
+			name: "accepts system QCOW2 image ID",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.ImageSelectorTerms = []ImageSelectorTerm{{ID: ptrForUnit("lifsea_3_x64_5G_alibase_20260519.qcow2")}}
+			},
+		},
+		{
+			name: "rejects arbitrary image ID",
+			mut: func(nodeClass *ECSNodeClass) {
+				nodeClass.Spec.ImageSelectorTerms = []ImageSelectorTerm{{ID: ptrForUnit("not-an-image")}}
+			},
+			expectError: "imageSelectorTerms[0].id is not a valid image ID",
+		},
+		{
 			name: "rejects invalid image owner alias",
 			mut: func(nodeClass *ECSNodeClass) {
 				nodeClass.Spec.ImageSelectorTerms = []ImageSelectorTerm{{ImageOwnerAlias: ptrForUnit("public")}}

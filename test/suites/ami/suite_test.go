@@ -17,7 +17,6 @@ limitations under the License.
 package ami
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -69,22 +68,9 @@ var _ = Describe("Image Selection", func() {
 		imageID := strings.TrimSpace(os.Getenv("TEST_IMAGE_ID"))
 		Expect(imageID).ToNot(BeEmpty(), "TEST_IMAGE_ID must be discovered during ACK setup for the image-id suite")
 
-		// Resolve VHD name to actual ECS image ID (m-xxx format)
-		// TEST_IMAGE_ID may be a VHD filename, but ImageSelectorTerm.ID requires m-xxx format
-		var ecsImageID string
-		if strings.HasPrefix(imageID, "m-") {
-			ecsImageID = imageID
-		} else {
-			images, err := env.ECSAPI.DescribeImages(context.Background(), nil, map[string]string{"ImageName": imageID})
-			Expect(err).ToNot(HaveOccurred())
-			Expect(images).ToNot(BeEmpty(), "No ECS image found for VHD name: %s", imageID)
-			ecsImageID = lo.FromPtr(images[0].ImageId)
-			Expect(ecsImageID).ToNot(BeEmpty())
-		}
-
 		nodeClass.Name = fmt.Sprintf("ami-test-image-id-p%d", GinkgoParallelProcess())
 		configureNodePool("image-id")
-		nodeClass.Spec.ImageSelectorTerms = []v1alpha1.ImageSelectorTerm{{ID: lo.ToPtr(ecsImageID)}}
+		nodeClass.Spec.ImageSelectorTerms = []v1alpha1.ImageSelectorTerm{{ID: lo.ToPtr(imageID)}}
 		nodeClass.Spec.Tags = env.TestTags("image-id")
 
 		pod := imageTestPod()
@@ -94,7 +80,7 @@ var _ = Describe("Image Selection", func() {
 
 		Eventually(func(g Gomega) {
 			nodeClaim := env.ExpectExists(nodeClaims[0]).(*v1.NodeClaim)
-			g.Expect(nodeClaim.Status.ImageID).To(Equal(ecsImageID))
+			g.Expect(nodeClaim.Status.ImageID).To(Equal(imageID))
 		}).WithTimeout(2 * time.Minute).Should(Succeed())
 	})
 
