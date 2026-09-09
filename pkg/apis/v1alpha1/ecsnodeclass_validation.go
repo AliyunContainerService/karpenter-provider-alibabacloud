@@ -262,11 +262,12 @@ func (nc *ECSNodeClass) validateSystemDisk() error {
 		return nil
 	}
 	disk := nc.Spec.SystemDisk
-	if !isValidDiskCategory(disk.Category) {
-		return fmt.Errorf("systemDisk.category must be one of: cloud_efficiency, cloud_ssd, cloud_essd")
+	size := defaultSystemDiskSize
+	if disk.Size != nil {
+		size = *disk.Size
 	}
-	if disk.Size != nil && (*disk.Size < 20 || *disk.Size > 500) {
-		return fmt.Errorf("systemDisk.size must be between 20 and 500 GB")
+	if err := validateDiskCategoryAndSize("systemDisk", disk.Category, size); err != nil {
+		return err
 	}
 	if disk.PerformanceLevel != nil && !isValidPerformanceLevel(*disk.PerformanceLevel) {
 		return fmt.Errorf("systemDisk.performanceLevel must be one of: PL0, PL1, PL2, PL3")
@@ -279,11 +280,8 @@ func (nc *ECSNodeClass) validateDataDisks() error {
 		return fmt.Errorf("maximum 16 data disks allowed, got %d", len(nc.Spec.DataDisks))
 	}
 	for i, disk := range nc.Spec.DataDisks {
-		if !isValidDiskCategory(disk.Category) {
-			return fmt.Errorf("dataDisks[%d].category must be one of: cloud_efficiency, cloud_ssd, cloud_essd", i)
-		}
-		if disk.Size < 20 || disk.Size > 32768 {
-			return fmt.Errorf("dataDisks[%d].size must be between 20 and 32768 GB", i)
+		if err := validateDiskCategoryAndSize(fmt.Sprintf("dataDisks[%d]", i), disk.Category, disk.Size); err != nil {
+			return err
 		}
 		if disk.PerformanceLevel != nil && !isValidPerformanceLevel(*disk.PerformanceLevel) {
 			return fmt.Errorf("dataDisks[%d].performanceLevel must be one of: PL0, PL1, PL2, PL3", i)
@@ -338,15 +336,6 @@ func isValidResourceID(id, prefix string) bool {
 
 func isValidImageOwnerAlias(owner string) bool {
 	return owner == "system" || owner == "self" || owner == "others" || owner == "marketplace"
-}
-
-func isValidDiskCategory(category string) bool {
-	validCategories := map[string]bool{
-		"cloud_efficiency": true,
-		"cloud_ssd":        true,
-		"cloud_essd":       true,
-	}
-	return validCategories[category]
 }
 
 func isValidPerformanceLevel(level string) bool {

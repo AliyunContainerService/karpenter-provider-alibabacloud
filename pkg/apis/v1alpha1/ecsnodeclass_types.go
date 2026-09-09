@@ -233,19 +233,32 @@ type CapacityReservationSelectorTerm struct {
 // SystemDiskSpec defines the system disk configuration
 // +kubebuilder:object:generate=true
 // +kubebuilder:object:root=false
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_essd_xc1'",message="cloud_essd_xc1 is not supported"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_essd' || (self.size >= 1 && self.size <= 65536)",message="cloud_essd size must be between 1 and 65536 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_essd_entry' || (self.size >= 10 && self.size <= 32768)",message="cloud_essd_entry size must be between 10 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_efficiency' || (self.size >= 20 && self.size <= 32768)",message="cloud_efficiency size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_pperf' || (self.size >= 20 && self.size <= 32768)",message="cloud_pperf size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_sperf' || (self.size >= 20 && self.size <= 32768)",message="cloud_sperf size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_ssd' || (self.size >= 20 && self.size <= 32768)",message="cloud_ssd size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_auto' || (self.size >= 1 && self.size <= 65536)",message="cloud_auto size must be between 1 and 65536 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'ephemeral_ssd' || (self.size >= 5 && self.size <= 800)",message="ephemeral_ssd size must be between 5 and 800 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud' || (self.size >= 5 && self.size <= 2000)",message="cloud size must be between 5 and 2000 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_essd_xc0' || (self.size >= 40 && self.size <= 2048)",message="cloud_essd_xc0 size must be between 40 and 2048 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'elastic_ephemeral_disk_premium' || (self.size >= 64 && self.size <= 8192)",message="elastic_ephemeral_disk_premium size must be between 64 and 8192 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'elastic_ephemeral_disk_standard' || (self.size >= 64 && self.size <= 8192)",message="elastic_ephemeral_disk_standard size must be between 64 and 8192 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.performanceLevel) || self.category == 'cloud_essd'",message="performanceLevel is only supported for cloud_essd disks"
 type SystemDiskSpec struct {
-	// Category is the disk type (cloud_efficiency, cloud_ssd, cloud_essd)
+	// Category is the disk type
 	// +kubebuilder:default="cloud_essd"
+	// +kubebuilder:validation:Enum=cloud_essd;cloud_essd_entry;cloud_efficiency;cloud_pperf;cloud_sperf;cloud_ssd;cloud_auto;ephemeral_ssd;cloud;cloud_essd_xc0;cloud_essd_xc1;elastic_ephemeral_disk_premium;elastic_ephemeral_disk_standard
 	Category string `json:"category,omitempty"`
 
 	// Size is the disk size in GB
 	// +kubebuilder:default=40
-	// +kubebuilder:validation:Minimum=20
-	// +kubebuilder:validation:Maximum=500
 	Size *int32 `json:"size,omitempty"`
 
 	// PerformanceLevel is the ESSD performance level (PL0, PL1, PL2, PL3)
-	// +kubebuilder:default="PL0"
+	// +kubebuilder:validation:Enum=PL0;PL1;PL2;PL3
 	// +optional
 	PerformanceLevel *string `json:"performanceLevel,omitempty"`
 
@@ -261,8 +274,23 @@ type SystemDiskSpec struct {
 // DataDiskSpec defines the data disk configuration
 // +kubebuilder:object:generate=true
 // +kubebuilder:object:root=false
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_essd_xc1'",message="cloud_essd_xc1 is not supported"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_essd' || (self.size >= 1 && self.size <= 65536)",message="cloud_essd size must be between 1 and 65536 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_essd_entry' || (self.size >= 10 && self.size <= 32768)",message="cloud_essd_entry size must be between 10 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_efficiency' || (self.size >= 20 && self.size <= 32768)",message="cloud_efficiency size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_pperf' || (self.size >= 20 && self.size <= 32768)",message="cloud_pperf size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_sperf' || (self.size >= 20 && self.size <= 32768)",message="cloud_sperf size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_ssd' || (self.size >= 20 && self.size <= 32768)",message="cloud_ssd size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_auto' || (self.size >= 1 && self.size <= 65536)",message="cloud_auto size must be between 1 and 65536 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'ephemeral_ssd' || (self.size >= 5 && self.size <= 800)",message="ephemeral_ssd size must be between 5 and 800 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud' || (self.size >= 5 && self.size <= 2000)",message="cloud size must be between 5 and 2000 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_essd_xc0' || (self.size >= 40 && self.size <= 2048)",message="cloud_essd_xc0 size must be between 40 and 2048 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'elastic_ephemeral_disk_premium' || (self.size >= 64 && self.size <= 8192)",message="elastic_ephemeral_disk_premium size must be between 64 and 8192 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'elastic_ephemeral_disk_standard' || (self.size >= 64 && self.size <= 8192)",message="elastic_ephemeral_disk_standard size must be between 64 and 8192 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.performanceLevel) || self.category == 'cloud_essd'",message="performanceLevel is only supported for cloud_essd disks"
 type DataDiskSpec struct {
 	// Category is the disk type
+	// +kubebuilder:validation:Enum=cloud_essd;cloud_essd_entry;cloud_efficiency;cloud_pperf;cloud_sperf;cloud_ssd;cloud_auto;ephemeral_ssd;cloud;cloud_essd_xc0;cloud_essd_xc1;elastic_ephemeral_disk_premium;elastic_ephemeral_disk_standard
 	Category string `json:"category"`
 
 	// Size is the disk size in GB
@@ -273,6 +301,7 @@ type DataDiskSpec struct {
 	Device *string `json:"device,omitempty"`
 
 	// PerformanceLevel is the ESSD performance level
+	// +kubebuilder:validation:Enum=PL0;PL1;PL2;PL3
 	// +optional
 	PerformanceLevel *string `json:"performanceLevel,omitempty"`
 

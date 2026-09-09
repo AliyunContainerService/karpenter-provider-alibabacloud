@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -490,38 +491,44 @@ func TestECSNodeClassValidateSelectorSemantics(t *testing.T) {
 
 func TestECSNodeClassValidateDiskOptions(t *testing.T) {
 	tests := []struct {
-		name string
-		mut  func(*ECSNodeClass)
+		name        string
+		mut         func(*ECSNodeClass)
+		expectError string
 	}{
 		{
 			name: "rejects non ESSD system disk performance level",
 			mut: func(nodeClass *ECSNodeClass) {
 				nodeClass.Spec.SystemDisk = &SystemDiskSpec{Category: "cloud_ssd", Size: ptrForUnit(int32(40)), PerformanceLevel: ptrForUnit("PL1")}
 			},
+			expectError: "systemDisk.performanceLevel is only supported for cloud_essd disks",
 		},
 		{
 			name: "rejects system disk kms without encryption",
 			mut: func(nodeClass *ECSNodeClass) {
 				nodeClass.Spec.SystemDisk = &SystemDiskSpec{Category: "cloud_essd", Size: ptrForUnit(int32(40)), KMSKeyID: ptrForUnit("kms-1")}
 			},
+			expectError: "systemDisk.kmsKeyID requires encrypted=true",
 		},
 		{
 			name: "rejects non ESSD data disk performance level",
 			mut: func(nodeClass *ECSNodeClass) {
 				nodeClass.Spec.DataDisks = []DataDiskSpec{{Category: "cloud_ssd", Size: 40, PerformanceLevel: ptrForUnit("PL1")}}
 			},
+			expectError: "dataDisks[0].performanceLevel is only supported for cloud_essd disks",
 		},
 		{
 			name: "rejects data disk kms without encryption",
 			mut: func(nodeClass *ECSNodeClass) {
 				nodeClass.Spec.DataDisks = []DataDiskSpec{{Category: "cloud_essd", Size: 40, KMSKeyID: ptrForUnit("kms-1")}}
 			},
+			expectError: "dataDisks[0].kmsKeyID requires encrypted=true",
 		},
 		{
 			name: "rejects invalid instance store policy",
 			mut: func(nodeClass *ECSNodeClass) {
 				nodeClass.Spec.InstanceStorePolicy = ptrForUnit("None")
 			},
+			expectError: "instanceStorePolicy must be unset or RAID0",
 		},
 	}
 
@@ -530,11 +537,77 @@ func TestECSNodeClassValidateDiskOptions(t *testing.T) {
 			nodeClass := validValidationNodeClassForUnit()
 			tt.mut(nodeClass)
 
-			if err := nodeClass.Validate(); err == nil {
-				t.Fatal("expected validation error")
-			}
+			require.ErrorContains(t, nodeClass.Validate(), tt.expectError)
 		})
 	}
+}
+
+func TestECSNodeClassValidateDiskCategorySizeLimits(t *testing.T) {
+	categories := []struct {
+		name string
+		min  int32
+		max  int32
+	}{
+		{name: "cloud_essd", min: 1, max: 65536},
+		{name: "cloud_essd_entry", min: 10, max: 32768},
+		{name: "cloud_efficiency", min: 20, max: 32768},
+		{name: "cloud_pperf", min: 20, max: 32768},
+		{name: "cloud_sperf", min: 20, max: 32768},
+		{name: "cloud_ssd", min: 20, max: 32768},
+		{name: "cloud_auto", min: 1, max: 65536},
+		{name: "ephemeral_ssd", min: 5, max: 800},
+		{name: "cloud", min: 5, max: 2000},
+		{name: "cloud_essd_xc0", min: 40, max: 2048},
+		{name: "elastic_ephemeral_disk_premium", min: 64, max: 8192},
+		{name: "elastic_ephemeral_disk_standard", min: 64, max: 8192},
+	}
+
+	for _, category := range categories {
+		for _, boundary := range []struct {
+			name  string
+			size  int32
+			valid bool
+		}{
+			{name: "below minimum", size: category.min - 1},
+			{name: "minimum", size: category.min, valid: true},
+			{name: "maximum", size: category.max, valid: true},
+			{name: "above maximum", size: category.max + 1},
+		} {
+			t.Run(category.name+"/system/"+boundary.name, func(t *testing.T) {
+				nodeClass := validValidationNodeClassForUnit()
+				nodeClass.Spec.SystemDisk = &SystemDiskSpec{Category: category.name, Size: ptrForUnit(boundary.size)}
+				assertDiskBoundaryValidation(t, nodeClass.Validate(), boundary.valid, "systemDisk", category.name, category.min, category.max)
+			})
+			t.Run(category.name+"/data/"+boundary.name, func(t *testing.T) {
+				nodeClass := validValidationNodeClassForUnit()
+				nodeClass.Spec.DataDisks = []DataDiskSpec{{Category: category.name, Size: boundary.size}}
+				assertDiskBoundaryValidation(t, nodeClass.Validate(), boundary.valid, "dataDisks[0]", category.name, category.min, category.max)
+			})
+		}
+	}
+}
+
+func TestECSNodeClassValidateDiskCategoryAvailability(t *testing.T) {
+	for _, category := range []string{"unknown", "cloud_essd_xc1"} {
+		t.Run(category, func(t *testing.T) {
+			nodeClass := validValidationNodeClassForUnit()
+			nodeClass.Spec.SystemDisk = &SystemDiskSpec{Category: category, Size: ptrForUnit(int32(40))}
+			require.Error(t, nodeClass.Validate())
+
+			nodeClass = validValidationNodeClassForUnit()
+			nodeClass.Spec.DataDisks = []DataDiskSpec{{Category: category, Size: 40}}
+			require.Error(t, nodeClass.Validate())
+		})
+	}
+}
+
+func assertDiskBoundaryValidation(t *testing.T, err error, valid bool, path, category string, minSize, maxSize int32) {
+	t.Helper()
+	if valid {
+		require.NoError(t, err)
+		return
+	}
+	require.ErrorContains(t, err, fmt.Sprintf("%s.size must be between %d and %d GB for category %s", path, minSize, maxSize, category))
 }
 
 func TestECSNodeClassDefaultMetadataOptions(t *testing.T) {
