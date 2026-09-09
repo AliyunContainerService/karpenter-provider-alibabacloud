@@ -1048,6 +1048,7 @@ func (c *CloudProvider) convertInstanceToNodeClaim(ctx context.Context, inst *in
 	nodeClaim.Status.ProviderID = fmt.Sprintf("%s.%s", inst.Region, inst.InstanceID)
 	nodeClaim.Status.Capacity = capacity
 	nodeClaim.Status.Allocatable = allocatable
+	nodeClaim.Status.ImageID = inst.ImageID
 
 	labels[corev1.LabelTopologyZone] = inst.Zone
 	labels[v1alpha1.LabelCapacityType] = inst.CapacityType
