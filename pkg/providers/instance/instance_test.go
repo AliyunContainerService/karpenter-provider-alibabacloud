@@ -18,6 +18,7 @@ package instance
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"testing"
@@ -183,6 +184,30 @@ func TestCreate(t *testing.T) {
 				}
 				m.On("RunInstances", mock.Anything, mock.MatchedBy(func(request *ecs.RunInstancesRequest) bool {
 					return request.RamRoleName != nil && *request.RamRoleName == "KarpenterNodeRole"
+				})).Return(response, nil)
+			},
+		},
+		{
+			name: "encodes user data exactly once",
+			opts: CreateOptions{
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: []string{"sg-123"},
+				UserData:         "#!/bin/bash\necho bootstrap\necho custom",
+			},
+			mockSetup: func(m *MockECSClient) {
+				instanceID := "i-123456"
+				response := &ecs.RunInstancesResponse{
+					Body: &ecs.RunInstancesResponseBody{
+						InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
+							InstanceIdSet: []*string{&instanceID},
+						},
+					},
+				}
+				expected := base64.StdEncoding.EncodeToString([]byte("#!/bin/bash\necho bootstrap\necho custom"))
+				m.On("RunInstances", mock.Anything, mock.MatchedBy(func(request *ecs.RunInstancesRequest) bool {
+					return request.UserData != nil && *request.UserData == expected
 				})).Return(response, nil)
 			},
 		},
