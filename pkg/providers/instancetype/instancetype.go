@@ -634,13 +634,13 @@ func (p *Provider) matchesRequirement(it *InstanceType, req InstanceTypeRequirem
 	switch req.Key {
 	case v1alpha1.LabelInstanceType:
 		return p.matchesStringRequirement(it.Name, req.Operator, req.Values)
-	case v1alpha1.LabelInstanceFamily:
+	case v1alpha1.LabelInstanceFamily, v1alpha1.LabelInstanceFamilyCanonical:
 		return p.matchesStringRequirement(instanceFamily(it.Name), req.Operator, req.Values)
 	case v1alpha1.LabelInstanceCategory:
 		return p.matchesStringRequirement(instanceCategory(it.Name), req.Operator, req.Values)
 	case v1alpha1.LabelInstanceGeneration:
 		return p.matchesStringRequirement(instanceGeneration(it.Name), req.Operator, req.Values)
-	case v1alpha1.LabelInstanceSize:
+	case v1alpha1.LabelInstanceSize, v1alpha1.LabelInstanceSizeCanonical:
 		return p.matchesStringRequirement(instanceSize(it.Name), req.Operator, req.Values)
 	case v1alpha1.LabelInstanceCPU:
 		return p.matchesStringRequirement(quantityValue(it.CPU), req.Operator, req.Values)
@@ -716,6 +716,47 @@ func instanceGeneration(name string) string {
 	return b.String()
 }
 
+func InstanceTypeLabels(name string) map[string]string {
+	labels := map[string]string{}
+	for _, attribute := range []struct {
+		keys  []string
+		value string
+	}{
+		{keys: []string{v1alpha1.LabelInstanceFamily, v1alpha1.LabelInstanceFamilyCanonical}, value: instanceFamily(name)},
+		{keys: []string{v1alpha1.LabelInstanceCategory}, value: instanceCategory(name)},
+		{keys: []string{v1alpha1.LabelInstanceGeneration}, value: instanceGeneration(name)},
+		{keys: []string{v1alpha1.LabelInstanceSize, v1alpha1.LabelInstanceSizeCanonical}, value: instanceSize(name)},
+	} {
+		if attribute.value == "" {
+			continue
+		}
+		for _, key := range attribute.keys {
+			labels[key] = attribute.value
+		}
+	}
+	return labels
+}
+
+func ResolvedLabels(it *InstanceType) map[string]string {
+	if it == nil {
+		return map[string]string{}
+	}
+	labels := InstanceTypeLabels(it.Name)
+	for key, value := range map[string]string{
+		v1alpha1.LabelInstanceCPU:             quantityValue(it.CPU),
+		v1alpha1.LabelInstanceMemory:          quantityMiB(it.Memory),
+		v1alpha1.LabelInstanceGPUName:         gpuModel(it),
+		v1alpha1.LabelInstanceGPUManufacturer: gpuManufacturer(it),
+		v1alpha1.LabelInstanceGPUCount:        gpuCount(it),
+		v1alpha1.LabelInstanceGPUMemory:       gpuMemory(it),
+	} {
+		if value != "" {
+			labels[key] = value
+		}
+	}
+	return labels
+}
+
 func quantityValue(q *resource.Quantity) string {
 	if q == nil {
 		return ""
@@ -752,7 +793,7 @@ func gpuCount(it *InstanceType) string {
 }
 
 func gpuMemory(it *InstanceType) string {
-	if it == nil || it.GPU == nil || it.GPU.Memory == nil {
+	if it == nil || it.GPU == nil || it.GPU.Memory == nil || it.GPU.Memory.Sign() <= 0 {
 		return ""
 	}
 	return fmt.Sprint(it.GPU.Memory.Value())

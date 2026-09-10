@@ -54,3 +54,5 @@ AGENT.md
 # Integration test output
 test-output/
 build/
+
+.qoder

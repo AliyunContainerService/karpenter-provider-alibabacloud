@@ -136,11 +136,11 @@ spec:
                   x-kubernetes-validations:
                   - message: cloud_essd_xc1 is not supported
                     rule: self.category != 'cloud_essd_xc1'
-                  - message: cloud_essd size must be between 1 and 65536 GB
-                    rule: self.category != 'cloud_essd' || (self.size >= 1 && self.size
-                      <= 65536)
-                  - message: cloud_essd_entry size must be between 10 and 32768 GB
-                    rule: self.category != 'cloud_essd_entry' || (self.size >= 10
+                  - message: cloud_essd size must be between 20 and 32768 GB
+                    rule: self.category != 'cloud_essd' || (self.size >= 20 && self.size
+                      <= 32768)
+                  - message: cloud_essd_entry size must be between 20 and 32768 GB
+                    rule: self.category != 'cloud_essd_entry' || (self.size >= 20
                       && self.size <= 32768)
                   - message: cloud_efficiency size must be between 20 and 32768 GB
                     rule: self.category != 'cloud_efficiency' || (self.size >= 20
@@ -154,9 +154,9 @@ spec:
                   - message: cloud_ssd size must be between 20 and 32768 GB
                     rule: self.category != 'cloud_ssd' || (self.size >= 20 && self.size
                       <= 32768)
-                  - message: cloud_auto size must be between 1 and 65536 GB
-                    rule: self.category != 'cloud_auto' || (self.size >= 1 && self.size
-                      <= 65536)
+                  - message: cloud_auto size must be between 40 and 32768 GB
+                    rule: self.category != 'cloud_auto' || (self.size >= 40 && self.size
+                      <= 32768)
                   - message: ephemeral_ssd size must be between 5 and 800 GB
                     rule: self.category != 'ephemeral_ssd' || (self.size >= 5 && self.size
                       <= 800)
@@ -396,12 +396,12 @@ spec:
                 x-kubernetes-validations:
                 - message: cloud_essd_xc1 is not supported
                   rule: self.category != 'cloud_essd_xc1'
-                - message: cloud_essd size must be between 1 and 65536 GB
+                - message: cloud_essd size must be between 20 and 32768 GB
                   rule: '!has(self.size) || self.category != ''cloud_essd'' || (self.size
-                    >= 1 && self.size <= 65536)'
-                - message: cloud_essd_entry size must be between 10 and 32768 GB
+                    >= 20 && self.size <= 32768)'
+                - message: cloud_essd_entry size must be between 20 and 32768 GB
                   rule: '!has(self.size) || self.category != ''cloud_essd_entry''
-                    || (self.size >= 10 && self.size <= 32768)'
+                    || (self.size >= 20 && self.size <= 32768)'
                 - message: cloud_efficiency size must be between 20 and 32768 GB
                   rule: '!has(self.size) || self.category != ''cloud_efficiency''
                     || (self.size >= 20 && self.size <= 32768)'
@@ -414,9 +414,9 @@ spec:
                 - message: cloud_ssd size must be between 20 and 32768 GB
                   rule: '!has(self.size) || self.category != ''cloud_ssd'' || (self.size
                     >= 20 && self.size <= 32768)'
-                - message: cloud_auto size must be between 1 and 65536 GB
+                - message: cloud_auto size must be between 40 and 32768 GB
                   rule: '!has(self.size) || self.category != ''cloud_auto'' || (self.size
-                    >= 1 && self.size <= 65536)'
+                    >= 40 && self.size <= 32768)'
                 - message: ephemeral_ssd size must be between 5 and 800 GB
                   rule: '!has(self.size) || self.category != ''ephemeral_ssd'' ||
                     (self.size >= 5 && self.size <= 800)'

@@ -550,16 +550,10 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 		// Create core InstanceType with fully-populated Requirements.
 		// Requirements are required for Karpenter's scheduling logic (arch, OS, zone, capacity-type filtering).
 		coreIT := &cloudprovider.InstanceType{
-			Name:      it.Name,
-			Capacity:  capacity,
-			Offerings: offerings,
-			Requirements: scheduling.NewRequirements(
-				scheduling.NewRequirement(corev1.LabelInstanceTypeStable, corev1.NodeSelectorOpIn, it.Name),
-				scheduling.NewRequirement(corev1.LabelArchStable, corev1.NodeSelectorOpIn, ecsArchToKubernetesArch(it.Architecture)),
-				scheduling.NewRequirement(corev1.LabelOSStable, corev1.NodeSelectorOpIn, string(corev1.Linux)),
-				scheduling.NewRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, offeringZones...),
-				scheduling.NewRequirement(coreapis.CapacityTypeLabelKey, corev1.NodeSelectorOpIn, offeringCapTypes...),
-			),
+			Name:         it.Name,
+			Capacity:     capacity,
+			Offerings:    offerings,
+			Requirements: buildInstanceTypeRequirements(it, options.FromContext(ctx).Region, offeringZones, offeringCapTypes),
 			Overhead: &cloudprovider.InstanceTypeOverhead{
 				EvictionThreshold: evictionThreshold,
 				KubeReserved:      kubeReserved,
@@ -583,6 +577,21 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 	logger.V(1).Info("Returning instance types", "count", len(coreInstanceTypes))
 
 	return coreInstanceTypes, nil
+}
+
+func buildInstanceTypeRequirements(it *instancetype.InstanceType, region string, zones, capacityTypes []string) scheduling.Requirements {
+	requirements := scheduling.NewRequirements(
+		scheduling.NewRequirement(corev1.LabelInstanceTypeStable, corev1.NodeSelectorOpIn, it.Name),
+		scheduling.NewRequirement(corev1.LabelArchStable, corev1.NodeSelectorOpIn, ecsArchToKubernetesArch(it.Architecture)),
+		scheduling.NewRequirement(corev1.LabelOSStable, corev1.NodeSelectorOpIn, string(corev1.Linux)),
+		scheduling.NewRequirement(corev1.LabelTopologyRegion, corev1.NodeSelectorOpIn, region),
+		scheduling.NewRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, zones...),
+		scheduling.NewRequirement(coreapis.CapacityTypeLabelKey, corev1.NodeSelectorOpIn, capacityTypes...),
+	)
+	for key, value := range instancetype.ResolvedLabels(it) {
+		requirements.Add(scheduling.NewRequirement(key, corev1.NodeSelectorOpIn, value))
+	}
+	return requirements
 }
 
 // RepairPolicies returns the repair policies for Alibaba Cloud nodes
@@ -769,17 +778,53 @@ func resolveArchitecture(inst *instance.Instance, it *instancetype.InstanceType)
 // that K8s rejects (colons, slashes, @). Only values we control are trusted.
 func instanceLabelsFromInstance(inst *instance.Instance, it *instancetype.InstanceType) map[string]string {
 	labels := map[string]string{
+		corev1.LabelTopologyRegion:     inst.Region,
 		corev1.LabelTopologyZone:       inst.Zone,
 		v1alpha1.LabelCapacityType:     inst.CapacityType,
 		corev1.LabelArchStable:         resolveArchitecture(inst, it),
 		corev1.LabelOSStable:           "linux",
 		corev1.LabelInstanceTypeStable: inst.InstanceType,
 	}
+	// Authoritative attributes come from the matched InstanceType (DescribeInstanceTypes),
+	// the same source buildInstanceTypeRequirements uses, so planning requirements and
+	// returned labels stay consistent.
+	for key, value := range instancetype.ResolvedLabels(it) {
+		labels[key] = value
+	}
+	// Fallback for instances whose type is no longer offered: DescribeInstances carries
+	// CPU, memory, GPU spec and GPU amount. GPU memory is not returned by DescribeInstances,
+	// so it is never fabricated here. Authoritative values above always win.
+	for key, value := range map[string]string{
+		v1alpha1.LabelInstanceCPU:      quantityLabelValue(inst.CPU),
+		v1alpha1.LabelInstanceMemory:   quantityLabelValueMiB(inst.Memory),
+		v1alpha1.LabelInstanceGPUName:  v1alpha1.NormalizeLabelValue(inst.GPUSpec),
+		v1alpha1.LabelInstanceGPUCount: quantityLabelValue(inst.GPU),
+	} {
+		if value != "" {
+			if _, ok := labels[key]; !ok {
+				labels[key] = value
+			}
+		}
+	}
 	// Restore NodePool label from the tag we wrote in buildInstanceTags (value is always valid)
 	if v, ok := inst.Tags[v1alpha1.TagNodePool]; ok {
 		labels[coreapis.NodePoolLabelKey] = v
 	}
 	return labels
+}
+
+func quantityLabelValue(q resource.Quantity) string {
+	if q.Sign() <= 0 {
+		return ""
+	}
+	return fmt.Sprint(q.Value())
+}
+
+func quantityLabelValueMiB(q resource.Quantity) string {
+	if q.Sign() <= 0 {
+		return ""
+	}
+	return fmt.Sprint(q.Value() / (1024 * 1024))
 }
 
 // capacityTypeFromRequirements returns "spot" when the NodeClaim requirements include
@@ -1029,7 +1074,6 @@ func validateRAMRoleForCreate(nodeClass *v1alpha1.ECSNodeClass) (string, error) 
 }
 
 func (c *CloudProvider) convertInstanceToNodeClaim(ctx context.Context, inst *instance.Instance, original *coreapis.NodeClaim, instanceTypes []*instancetype.InstanceType, clusterID string) *coreapis.NodeClaim {
-	labels := make(map[string]string)
 	// Find instance type info
 	var capacity corev1.ResourceList
 	var allocatable corev1.ResourceList
@@ -1049,17 +1093,7 @@ func (c *CloudProvider) convertInstanceToNodeClaim(ctx context.Context, inst *in
 	nodeClaim.Status.Capacity = capacity
 	nodeClaim.Status.Allocatable = allocatable
 	nodeClaim.Status.ImageID = inst.ImageID
-
-	labels[corev1.LabelTopologyZone] = inst.Zone
-	labels[v1alpha1.LabelCapacityType] = inst.CapacityType
-	labels[v1alpha1.LabelInstanceType] = inst.InstanceType
-	labels[corev1.LabelArchStable] = resolveArchitecture(inst, matchedIT)
-	labels[corev1.LabelOSStable] = "linux"
-	labels[corev1.LabelInstanceTypeStable] = inst.InstanceType
-	if v, ok := inst.Tags[v1alpha1.TagNodePool]; ok {
-		labels[coreapis.NodePoolLabelKey] = v
-	}
-	nodeClaim.Labels = labels
+	nodeClaim.Labels = instanceLabelsFromInstance(inst, matchedIT)
 	return nodeClaim
 }
 

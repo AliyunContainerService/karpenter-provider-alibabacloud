@@ -327,6 +327,131 @@ func TestGet(t *testing.T) {
 	}
 }
 
+func TestInstanceTypeLabels(t *testing.T) {
+	tests := []struct {
+		name         string
+		instanceType string
+		expected     map[string]string
+	}{
+		{
+			name:         "standard instance type",
+			instanceType: "ecs.g7.xlarge",
+			expected: map[string]string{
+				v1alpha1.LabelInstanceFamily:          "g7",
+				v1alpha1.LabelInstanceFamilyCanonical: "g7",
+				v1alpha1.LabelInstanceCategory:        "g",
+				v1alpha1.LabelInstanceGeneration:      "7",
+				v1alpha1.LabelInstanceSize:            "xlarge",
+				v1alpha1.LabelInstanceSizeCanonical:   "xlarge",
+			},
+		},
+		{
+			name:         "gpu instance type",
+			instanceType: "ecs.gn7i-c8g1.2xlarge",
+			expected: map[string]string{
+				v1alpha1.LabelInstanceFamily:          "gn7i-c8g1",
+				v1alpha1.LabelInstanceFamilyCanonical: "gn7i-c8g1",
+				v1alpha1.LabelInstanceCategory:        "gn",
+				v1alpha1.LabelInstanceGeneration:      "7",
+				v1alpha1.LabelInstanceSize:            "2xlarge",
+				v1alpha1.LabelInstanceSizeCanonical:   "2xlarge",
+			},
+		},
+		{
+			name:         "empty instance type",
+			instanceType: "ecs.",
+			expected:     map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, InstanceTypeLabels(tt.instanceType))
+		})
+	}
+}
+
+func TestResolvedLabels(t *testing.T) {
+	cpu := resource.NewQuantity(4, resource.DecimalSI)
+	mem := resource.NewQuantity(16*1024*1024*1024, resource.BinarySI)
+	gpuCount := resource.NewQuantity(1, resource.DecimalSI)
+	gpuMem := resource.NewQuantity(14, resource.DecimalSI)
+	unknownGPUMem := resource.NewQuantity(0, resource.DecimalSI)
+
+	tests := []struct {
+		name     string
+		it       *InstanceType
+		expected map[string]string
+	}{
+		{
+			name: "standard instance type",
+			it:   &InstanceType{Name: "ecs.g7.xlarge", CPU: cpu, Memory: mem},
+			expected: map[string]string{
+				v1alpha1.LabelInstanceFamily:          "g7",
+				v1alpha1.LabelInstanceFamilyCanonical: "g7",
+				v1alpha1.LabelInstanceCategory:        "g",
+				v1alpha1.LabelInstanceGeneration:      "7",
+				v1alpha1.LabelInstanceSize:            "xlarge",
+				v1alpha1.LabelInstanceSizeCanonical:   "xlarge",
+				v1alpha1.LabelInstanceCPU:             "4",
+				v1alpha1.LabelInstanceMemory:          "16384",
+			},
+		},
+		{
+			name: "gpu instance type",
+			it: &InstanceType{
+				Name:   "ecs.gn7i-c8g1.2xlarge",
+				CPU:    cpu,
+				Memory: mem,
+				GPU:    &GPU{Count: gpuCount, Model: "Tesla T4", Memory: gpuMem},
+			},
+			expected: map[string]string{
+				v1alpha1.LabelInstanceFamily:          "gn7i-c8g1",
+				v1alpha1.LabelInstanceFamilyCanonical: "gn7i-c8g1",
+				v1alpha1.LabelInstanceCategory:        "gn",
+				v1alpha1.LabelInstanceGeneration:      "7",
+				v1alpha1.LabelInstanceSize:            "2xlarge",
+				v1alpha1.LabelInstanceSizeCanonical:   "2xlarge",
+				v1alpha1.LabelInstanceCPU:             "4",
+				v1alpha1.LabelInstanceMemory:          "16384",
+				v1alpha1.LabelInstanceGPUName:         "tesla-t4",
+				v1alpha1.LabelInstanceGPUManufacturer: "nvidia",
+				v1alpha1.LabelInstanceGPUCount:        "1",
+				v1alpha1.LabelInstanceGPUMemory:       "14",
+			},
+		},
+		{
+			name: "unknown gpu memory is omitted",
+			it: &InstanceType{
+				Name: "ecs.gn7i-c8g1.2xlarge",
+				GPU:  &GPU{Count: gpuCount, Model: "Tesla T4", Memory: unknownGPUMem},
+			},
+			expected: map[string]string{
+				v1alpha1.LabelInstanceFamily:          "gn7i-c8g1",
+				v1alpha1.LabelInstanceFamilyCanonical: "gn7i-c8g1",
+				v1alpha1.LabelInstanceCategory:        "gn",
+				v1alpha1.LabelInstanceGeneration:      "7",
+				v1alpha1.LabelInstanceSize:            "2xlarge",
+				v1alpha1.LabelInstanceSizeCanonical:   "2xlarge",
+				v1alpha1.LabelInstanceGPUName:         "tesla-t4",
+				v1alpha1.LabelInstanceGPUManufacturer: "nvidia",
+				v1alpha1.LabelInstanceGPUCount:        "1",
+			},
+		},
+		{
+			name:     "nil instance type",
+			it:       nil,
+			expected: map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, ResolvedLabels(tt.it))
+		})
+	}
+}
+
 func TestFilter(t *testing.T) {
 	instanceTypes := []*InstanceType{
 		{
@@ -383,6 +508,50 @@ func TestFilter(t *testing.T) {
 					Key:      v1alpha1.LabelInstanceCategory,
 					Operator: InstanceTypeOperatorIn,
 					Values:   []string{"g"},
+				},
+			},
+			expectedLen: 1,
+		},
+		{
+			name: "filter by legacy instance family",
+			requirements: []InstanceTypeRequirement{
+				{
+					Key:      v1alpha1.LabelInstanceFamily,
+					Operator: InstanceTypeOperatorIn,
+					Values:   []string{"g6"},
+				},
+			},
+			expectedLen: 1,
+		},
+		{
+			name: "filter by canonical instance family",
+			requirements: []InstanceTypeRequirement{
+				{
+					Key:      v1alpha1.LabelInstanceFamilyCanonical,
+					Operator: InstanceTypeOperatorIn,
+					Values:   []string{"g6"},
+				},
+			},
+			expectedLen: 1,
+		},
+		{
+			name: "filter by legacy instance size",
+			requirements: []InstanceTypeRequirement{
+				{
+					Key:      v1alpha1.LabelInstanceSize,
+					Operator: InstanceTypeOperatorIn,
+					Values:   []string{"xlarge"},
+				},
+			},
+			expectedLen: 1,
+		},
+		{
+			name: "filter by canonical instance size",
+			requirements: []InstanceTypeRequirement{
+				{
+					Key:      v1alpha1.LabelInstanceSizeCanonical,
+					Operator: InstanceTypeOperatorIn,
+					Values:   []string{"xlarge"},
 				},
 			},
 			expectedLen: 1,

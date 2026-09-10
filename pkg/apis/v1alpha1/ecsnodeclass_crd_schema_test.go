@@ -106,13 +106,13 @@ func TestECSNodeClassCRDDiskSchema(t *testing.T) {
 					joinedRules := strings.Join(rules, "\n")
 					for _, expected := range []string{
 						"self.category != 'cloud_essd_xc1'",
-						"self.category != 'cloud_essd' || (self.size >= 1 && self.size <= 65536)",
-						"self.category != 'cloud_essd_entry' || (self.size >= 10 && self.size <= 32768)",
+						"self.category != 'cloud_essd' || (self.size >= 20 && self.size <= 32768)",
+						"self.category != 'cloud_essd_entry' || (self.size >= 20 && self.size <= 32768)",
 						"self.category != 'cloud_efficiency' || (self.size >= 20 && self.size <= 32768)",
 						"self.category != 'cloud_pperf' || (self.size >= 20 && self.size <= 32768)",
 						"self.category != 'cloud_sperf' || (self.size >= 20 && self.size <= 32768)",
 						"self.category != 'cloud_ssd' || (self.size >= 20 && self.size <= 32768)",
-						"self.category != 'cloud_auto' || (self.size >= 1 && self.size <= 65536)",
+						"self.category != 'cloud_auto' || (self.size >= 40 && self.size <= 32768)",
 						"self.category != 'ephemeral_ssd' || (self.size >= 5 && self.size <= 800)",
 						"self.category != 'cloud' || (self.size >= 5 && self.size <= 2000)",
 						"self.category != 'cloud_essd_xc0' || (self.size >= 40 && self.size <= 2048)",

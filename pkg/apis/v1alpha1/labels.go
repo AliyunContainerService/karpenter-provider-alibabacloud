@@ -93,8 +93,11 @@ const (
 	// TagKubeletMaxPods records the ECSNodeClass kubelet maxPods setting on launched instances.
 	TagKubeletMaxPods = Group + "/kubelet-max-pods"
 
-	// LabelInstanceFamily is the label key for instance family
+	// LabelInstanceFamily is the legacy label key for instance family
 	LabelInstanceFamily = "node.kubernetes.io/instance-family"
+
+	// LabelInstanceFamilyCanonical is the provider-owned label key for instance family
+	LabelInstanceFamilyCanonical = LabelDomain + "/instance-family"
 
 	// LabelInstanceCategory is the label key for instance category
 	LabelInstanceCategory = LabelDomain + "/instance-category"
@@ -102,8 +105,11 @@ const (
 	// LabelInstanceGeneration is the label key for instance generation
 	LabelInstanceGeneration = LabelDomain + "/instance-generation"
 
-	// LabelInstanceSize is the label key for instance size
+	// LabelInstanceSize is the legacy label key for instance size
 	LabelInstanceSize = "node.kubernetes.io/instance-size"
+
+	// LabelInstanceSizeCanonical is the provider-owned label key for instance size
+	LabelInstanceSizeCanonical = LabelDomain + "/instance-size"
 
 	// LabelInstanceCPU is the label key for vCPU count
 	LabelInstanceCPU = LabelDomain + "/instance-cpu"
@@ -168,9 +174,11 @@ func WellKnownLabels() []string {
 	return []string{
 		LabelInstanceType,
 		LabelInstanceFamily,
+		LabelInstanceFamilyCanonical,
 		LabelInstanceCategory,
 		LabelInstanceGeneration,
 		LabelInstanceSize,
+		LabelInstanceSizeCanonical,
 		LabelInstanceCPU,
 		LabelInstanceMemory,
 		LabelInstanceGPUName,

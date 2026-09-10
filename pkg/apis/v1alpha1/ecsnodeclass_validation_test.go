@@ -548,13 +548,13 @@ func TestECSNodeClassValidateDiskCategorySizeLimits(t *testing.T) {
 		min  int32
 		max  int32
 	}{
-		{name: "cloud_essd", min: 1, max: 65536},
-		{name: "cloud_essd_entry", min: 10, max: 32768},
+		{name: "cloud_essd", min: 20, max: 32768},
+		{name: "cloud_essd_entry", min: 20, max: 32768},
 		{name: "cloud_efficiency", min: 20, max: 32768},
 		{name: "cloud_pperf", min: 20, max: 32768},
 		{name: "cloud_sperf", min: 20, max: 32768},
 		{name: "cloud_ssd", min: 20, max: 32768},
-		{name: "cloud_auto", min: 1, max: 65536},
+		{name: "cloud_auto", min: 40, max: 32768},
 		{name: "ephemeral_ssd", min: 5, max: 800},
 		{name: "cloud", min: 5, max: 2000},
 		{name: "cloud_essd_xc0", min: 40, max: 2048},

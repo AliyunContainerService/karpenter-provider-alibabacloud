@@ -17,13 +17,13 @@ type diskCategoryConstraint struct {
 }
 
 var diskCategoryConstraints = map[string]diskCategoryConstraint{
-	"cloud_essd":                      {minSize: 1, maxSize: 65536, available: true},
-	"cloud_essd_entry":                {minSize: 10, maxSize: 32768, available: true},
+	"cloud_essd":                      {minSize: 20, maxSize: 32768, available: true},
+	"cloud_essd_entry":                {minSize: 20, maxSize: 32768, available: true},
 	"cloud_efficiency":                {minSize: 20, maxSize: 32768, available: true},
 	"cloud_pperf":                     {minSize: 20, maxSize: 32768, available: true},
 	"cloud_sperf":                     {minSize: 20, maxSize: 32768, available: true},
 	"cloud_ssd":                       {minSize: 20, maxSize: 32768, available: true},
-	"cloud_auto":                      {minSize: 1, maxSize: 65536, available: true},
+	"cloud_auto":                      {minSize: 40, maxSize: 32768, available: true},
 	"ephemeral_ssd":                   {minSize: 5, maxSize: 800, available: true},
 	"cloud":                           {minSize: 5, maxSize: 2000, available: true},
 	"cloud_essd_xc0":                  {minSize: 40, maxSize: 2048, available: true},

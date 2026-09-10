@@ -27,7 +27,9 @@ import (
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/instancetype"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	coreapis "sigs.k8s.io/karpenter/pkg/apis/v1"
+	"sigs.k8s.io/karpenter/pkg/scheduling"
 )
 
 func TestZonesFromRequirements(t *testing.T) {
@@ -389,8 +391,42 @@ func TestBuildInstanceTagsNilUserTags(t *testing.T) {
 	assert.Equal(t, "karpenter", tags[v1alpha1.TagManagedBy])
 }
 
+func TestBuildInstanceTypeRequirements(t *testing.T) {
+	instanceType := &instancetype.InstanceType{
+		Name:         "ecs.g7.xlarge",
+		Architecture: "X86_64",
+		CPU:          resource.NewQuantity(4, resource.DecimalSI),
+		Memory:       resource.NewQuantity(16*1024*1024*1024, resource.BinarySI),
+	}
+	requirements := buildInstanceTypeRequirements(instanceType, "cn-shanghai", []string{"cn-shanghai-n"}, []string{v1alpha1.CapacityTypeOnDemand})
+
+	region := requirements.Get(corev1.LabelTopologyRegion).NodeSelectorRequirement()
+	assert.Equal(t, corev1.NodeSelectorOpIn, region.Operator)
+	assert.Equal(t, []string{"cn-shanghai"}, region.Values)
+
+	for key, value := range map[string]string{
+		v1alpha1.LabelInstanceCPU:    "4",
+		v1alpha1.LabelInstanceMemory: "16384",
+	} {
+		if assert.True(t, requirements.Has(key), "missing requirement %s", key) {
+			requirement := requirements.Get(key).NodeSelectorRequirement()
+			assert.Equal(t, corev1.NodeSelectorOpIn, requirement.Operator)
+			assert.Equal(t, []string{value}, requirement.Values)
+		}
+	}
+
+	for key, value := range instancetype.InstanceTypeLabels(instanceType.Name) {
+		if assert.True(t, requirements.Has(key), "missing requirement %s", key) {
+			requirement := requirements.Get(key).NodeSelectorRequirement()
+			assert.Equal(t, corev1.NodeSelectorOpIn, requirement.Operator)
+			assert.Equal(t, []string{value}, requirement.Values)
+		}
+	}
+}
+
 func TestInstanceLabelsFromInstance(t *testing.T) {
 	inst := &instance.Instance{
+		Region:       "cn-shanghai",
 		Zone:         "cn-shanghai-n",
 		InstanceType: "ecs.g7.xlarge",
 		Architecture: "X86_64",
@@ -407,12 +443,19 @@ func TestInstanceLabelsFromInstance(t *testing.T) {
 	it := &instancetype.InstanceType{Name: "ecs.g7.xlarge", Architecture: "X86_64"}
 	labels := instanceLabelsFromInstance(inst, it)
 
+	assert.Equal(t, "cn-shanghai", labels[corev1.LabelTopologyRegion])
 	assert.Equal(t, "cn-shanghai-n", labels[corev1.LabelTopologyZone])
 	assert.Equal(t, "ecs.g7.xlarge", labels[v1alpha1.LabelInstanceType])
 	assert.Equal(t, "on-demand", labels[v1alpha1.LabelCapacityType])
 	assert.Equal(t, "amd64", labels[corev1.LabelArchStable])
 	assert.Equal(t, "linux", labels[corev1.LabelOSStable])
 	assert.Equal(t, "ecs.g7.xlarge", labels[corev1.LabelInstanceTypeStable])
+	assert.Equal(t, "g7", labels[v1alpha1.LabelInstanceFamily])
+	assert.Equal(t, "g7", labels[v1alpha1.LabelInstanceFamilyCanonical])
+	assert.Equal(t, "g", labels[v1alpha1.LabelInstanceCategory])
+	assert.Equal(t, "7", labels[v1alpha1.LabelInstanceGeneration])
+	assert.Equal(t, "xlarge", labels[v1alpha1.LabelInstanceSize])
+	assert.Equal(t, "xlarge", labels[v1alpha1.LabelInstanceSizeCanonical])
 	assert.Equal(t, "my-pool", labels[coreapis.NodePoolLabelKey])
 	// raw ECS tag with colon/@ must not appear
 	_, hasOwner := labels["ecs.aliyuncs.com/owner"]
@@ -489,6 +532,107 @@ func TestConvertInstanceToNodeClaimArchLabels(t *testing.T) {
 			assert.Equal(t, tt.wantK8sArch, nc.Labels[corev1.LabelArchStable], "LabelArchStable")
 			assert.Equal(t, "linux", nc.Labels[corev1.LabelOSStable], "LabelOSStable")
 			assert.Equal(t, tt.instanceType, nc.Labels[corev1.LabelInstanceTypeStable], "LabelInstanceTypeStable")
+		})
+	}
+}
+
+func TestConvertInstanceToNodeClaimResolvedLabels(t *testing.T) {
+	cp := &CloudProvider{}
+	inst := &instance.Instance{
+		InstanceID:   "i-test",
+		Region:       "cn-shanghai",
+		Zone:         "cn-shanghai-n",
+		InstanceType: "ecs.g7.xlarge",
+		CapacityType: v1alpha1.CapacityTypeOnDemand,
+		Tags:         map[string]string{v1alpha1.TagNodePool: "my-pool"},
+	}
+	instanceTypes := []*instancetype.InstanceType{{
+		Name:   "ecs.g7.xlarge",
+		CPU:    resource.NewQuantity(4, resource.DecimalSI),
+		Memory: resource.NewQuantity(16*1024*1024*1024, resource.BinarySI),
+	}}
+
+	nodeClaim := cp.convertInstanceToNodeClaim(context.Background(), inst, &coreapis.NodeClaim{}, instanceTypes, "c-test")
+	for key, value := range map[string]string{
+		corev1.LabelTopologyRegion:            "cn-shanghai",
+		v1alpha1.LabelInstanceFamily:          "g7",
+		v1alpha1.LabelInstanceFamilyCanonical: "g7",
+		v1alpha1.LabelInstanceCategory:        "g",
+		v1alpha1.LabelInstanceGeneration:      "7",
+		v1alpha1.LabelInstanceSize:            "xlarge",
+		v1alpha1.LabelInstanceSizeCanonical:   "xlarge",
+		v1alpha1.LabelInstanceCPU:             "4",
+		v1alpha1.LabelInstanceMemory:          "16384",
+	} {
+		assert.Equal(t, value, nodeClaim.Labels[key], key)
+	}
+	assert.Equal(t, "my-pool", nodeClaim.Labels[coreapis.NodePoolLabelKey])
+}
+
+// TestInstanceLabelsSatisfyLaunchedUnregisteredSelectors is a regression test for the
+// duplicate-NodeClaim incident: a launched-but-unregistered NodeClaim is scheduled as an
+// ExistingNode strictly from its metadata labels. The returned labels must satisfy the
+// e2e zone selector (nodepool/zone/region/capacity-type) and the GPU selector
+// (nodepool/gpu-count) without any AllowUndefinedWellKnownLabels leniency.
+func TestInstanceLabelsSatisfyLaunchedUnregisteredSelectors(t *testing.T) {
+	cpu := resource.NewQuantity(8, resource.DecimalSI)
+	mem := resource.NewQuantity(30*1024*1024*1024, resource.BinarySI)
+	gpuCount := resource.NewQuantity(1, resource.DecimalSI)
+	gpuMem := resource.NewQuantity(14, resource.DecimalSI)
+
+	tests := []struct {
+		name string
+		inst *instance.Instance
+		it   *instancetype.InstanceType
+		pod  scheduling.Requirements
+	}{
+		{
+			name: "zone selector",
+			inst: &instance.Instance{
+				Region:       "cn-hangzhou",
+				Zone:         "cn-hangzhou-j",
+				InstanceType: "ecs.g7.xlarge",
+				CapacityType: v1alpha1.CapacityTypeOnDemand,
+				Tags:         map[string]string{v1alpha1.TagNodePool: "scheduling-test-pool-zone"},
+			},
+			it: &instancetype.InstanceType{Name: "ecs.g7.xlarge", Architecture: "X86_64", CPU: cpu, Memory: mem},
+			pod: scheduling.NewNodeSelectorRequirements(
+				corev1.NodeSelectorRequirement{Key: coreapis.NodePoolLabelKey, Operator: corev1.NodeSelectorOpIn, Values: []string{"scheduling-test-pool-zone"}},
+				corev1.NodeSelectorRequirement{Key: corev1.LabelTopologyZone, Operator: corev1.NodeSelectorOpIn, Values: []string{"cn-hangzhou-j"}},
+				corev1.NodeSelectorRequirement{Key: corev1.LabelTopologyRegion, Operator: corev1.NodeSelectorOpIn, Values: []string{"cn-hangzhou"}},
+				corev1.NodeSelectorRequirement{Key: v1alpha1.LabelCapacityType, Operator: corev1.NodeSelectorOpIn, Values: []string{v1alpha1.CapacityTypeOnDemand}},
+			),
+		},
+		{
+			name: "gpu selector",
+			inst: &instance.Instance{
+				Region:       "cn-hangzhou",
+				Zone:         "cn-hangzhou-j",
+				InstanceType: "ecs.gn7i-c8g1.2xlarge",
+				CapacityType: v1alpha1.CapacityTypeOnDemand,
+				Tags:         map[string]string{v1alpha1.TagNodePool: "scheduling-test-pool-gpu"},
+			},
+			it: &instancetype.InstanceType{
+				Name:         "ecs.gn7i-c8g1.2xlarge",
+				Architecture: "X86_64",
+				CPU:          cpu,
+				Memory:       mem,
+				GPU:          &instancetype.GPU{Count: gpuCount, Model: "Tesla T4", Memory: gpuMem},
+			},
+			pod: scheduling.NewNodeSelectorRequirements(
+				corev1.NodeSelectorRequirement{Key: coreapis.NodePoolLabelKey, Operator: corev1.NodeSelectorOpIn, Values: []string{"scheduling-test-pool-gpu"}},
+				corev1.NodeSelectorRequirement{Key: v1alpha1.LabelInstanceGPUCount, Operator: corev1.NodeSelectorOpIn, Values: []string{"1"}},
+			),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			labels := instanceLabelsFromInstance(tt.inst, tt.it)
+			// Mirrors existingnode.go: strict Compatible() against the pod selector,
+			// with no AllowUndefinedWellKnownLabels option.
+			assert.Nil(t, scheduling.NewLabelRequirements(labels).Compatible(tt.pod),
+				"launched-but-unregistered NodeClaim labels must satisfy the selector: %v", labels)
 		})
 	}
 }
