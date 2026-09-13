@@ -425,7 +425,17 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 		return nil, cloudprovider.NewCreateError(fmt.Errorf("resolving nodeclass readiness, nodeclass is in Ready=Unknown: %s", nodeClassReady.Message), "NodeClassReadinessUnknown", "NodeClass is in Ready=Unknown")
 	}
 
-	// 3. Get all instance types
+
+	// 3. DEFENSIVE CHECK: Verify VSwitches are populated
+	// This catches the race condition where NodeClass is marked Ready but status has not been fully populated.
+	// Without this check, we proceed with empty availableZones, resulting in 0 offerings for all instance types.
+	if len(nodeClass.Status.VSwitches) == 0 {
+		logger.Error(nil, "NodeClass is marked Ready but has no VSwitches - status not fully populated",
+			"nodeClass", nodeClass.Name,
+			"nodePool", nodePool.Name)
+		return nil, cloudprovider.NewNodeClassNotReadyError(fmt.Errorf("nodeclass %s has no vswitches - status not ready", nodeClass.Name))
+	}
+	// 4. Get all instance types
 	instanceTypes, err := c.instanceTypeProvider.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list instance types: %w", err)

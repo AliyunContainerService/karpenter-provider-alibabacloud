@@ -375,3 +375,46 @@ func TestClearCache(t *testing.T) {
 func stringPtr(s string) *string {
 	return &s
 }
+
+func TestResolveDoesNotCacheEmptyResults(t *testing.T) {
+	mockClient := new(MockVPCClient)
+
+	vswID := "vsw-real"
+	zoneID := "cn-hangzhou-h"
+
+	// First call returns empty, second call returns actual VSwitches.
+	// Use .Once() to chain sequential return values for the same call signature.
+	mockClient.On("DescribeVSwitches", mock.Anything, "vsw-empty", mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+		Body: &vpc.DescribeVSwitchesResponseBody{
+			VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+				VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{},
+			},
+		},
+	}, nil).Once()
+
+	mockClient.On("DescribeVSwitches", mock.Anything, "vsw-empty", mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+		Body: &vpc.DescribeVSwitchesResponseBody{
+			VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+				VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{
+					{VSwitchId: &vswID, ZoneId: &zoneID},
+				},
+			},
+		},
+	}, nil)
+
+	provider := NewProvider("cn-hangzhou", mockClient)
+
+	// First resolve - should return empty
+	result1, err := provider.Resolve(context.Background(), []v1alpha1.VSwitchSelectorTerm{{ID: stringPtr("vsw-empty")}})
+	assert.NoError(t, err)
+	assert.Empty(t, result1, "First call should return empty")
+
+	// Second resolve - should NOT use cached empty result, should call API again
+	result2, err := provider.Resolve(context.Background(), []v1alpha1.VSwitchSelectorTerm{{ID: stringPtr("vsw-empty")}})
+	assert.NoError(t, err)
+	assert.NotEmpty(t, result2, "Second call should not use cached empty result")
+	assert.Equal(t, 1, len(result2), "Should return actual VSwitch")
+
+	// Verify API was called twice (not cached)
+	mockClient.AssertNumberOfCalls(t, "DescribeVSwitches", 2)
+}

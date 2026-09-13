@@ -134,8 +134,13 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.VSwitchSelector
 	// Remove duplicates
 	vswitches = removeDuplicateVSwitches(vswitches)
 
-	// Cache the result
-	p.setCachedValue(cacheKey, vswitches)
+	// Only cache non-empty results. Caching empty results would block future reconciliations
+	// when the API temporarily returns no VSwitches (e.g., transient error, eventual consistency).
+	// The status controller would get stuck for the full cache TTL (2 hours) with empty VSwitches,
+	// causing GetInstanceTypes to produce 0 offerings and blocking node provisioning.
+	if len(vswitches) > 0 {
+		p.setCachedValue(cacheKey, vswitches)
+	}
 
 	return vswitches, nil
 }

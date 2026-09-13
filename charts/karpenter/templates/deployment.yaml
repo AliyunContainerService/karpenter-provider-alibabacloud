@@ -37,7 +37,8 @@ spec:
         image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag }}"
         imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
         args:
-          - --cluster-name={{ .Values.settings.clusterID }}
+          - --cluster-name={{ .Values.settings.clusterName | default .Values.settings.clusterID }}
+          - --cluster-id={{ .Values.settings.clusterID }}
           - --cluster-endpoint={{ .Values.settings.clusterEndpoint }}
           - --region={{ .Values.settings.region }}
           {{- if .Values.settings.interruptionQueue }}
