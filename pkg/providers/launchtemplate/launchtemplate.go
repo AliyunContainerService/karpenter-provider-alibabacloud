@@ -23,6 +23,7 @@ import (
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
+	ecsutil "github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/utils/ecs"
 	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"github.com/alibabacloud-go/tea/tea"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -103,9 +104,11 @@ func (p *Provider) Create(ctx context.Context, nodeClass *v1alpha1.ECSNodeClass,
 		request.UserData = tea.String(userData)
 	}
 
-	// Set instance charge type (spot or on-demand)
-	if nodeClass.Spec.SpotStrategy != nil {
-		request.SpotStrategy = tea.String(string(*nodeClass.Spec.SpotStrategy))
+	// Set spot strategy on the launch template only when the user requested a
+	// valid spot strategy. Capacity type is ultimately enforced at RunInstances
+	// time (see instance.Create); validation is centralized in pkg/utils/ecs.
+	if nodeClass.Spec.SpotStrategy != nil && ecsutil.IsValidSpotStrategy(*nodeClass.Spec.SpotStrategy) {
+		request.SpotStrategy = tea.String(*nodeClass.Spec.SpotStrategy)
 	}
 
 	// Set system disk configuration if specified

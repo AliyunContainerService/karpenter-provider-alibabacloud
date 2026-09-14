@@ -177,6 +177,57 @@ var _ = Describe("Persistent Volumes", func() {
 		Expect(node.Labels).To(HaveKeyWithValue(corev1.LabelTopologyZone, zones[0]))
 	})
 
+	It("should run a pod with a pre-bound persistent volume using Alibaba CSI topology key", Label("csi-topology"), func() {
+		zones := envList("TEST_ZONES")
+		if len(zones) == 0 {
+			Skip("storage CSI topology test requires TEST_ZONES from ackctl setup")
+		}
+		configureNodeClassAndPool("csi-topology")
+		pvc := coretest.PersistentVolumeClaim(coretest.PersistentVolumeClaimOptions{
+			VolumeName:       "storage-test-csi-topology-volume",
+			StorageClassName: lo.ToPtr("non-existent-storage-class"),
+		})
+		pv := &corev1.PersistentVolume{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: pvc.Spec.VolumeName,
+			},
+			Spec: corev1.PersistentVolumeSpec{
+				PersistentVolumeSource: corev1.PersistentVolumeSource{
+					CSI: &corev1.CSIPersistentVolumeSource{
+						Driver:       "diskplugin.csi.alibabacloud.com",
+						VolumeHandle: "test-csi-volume-handle",
+					},
+				},
+				StorageClassName: "non-existent-storage-class",
+				AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				Capacity:         corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("100Gi")},
+				NodeAffinity: &corev1.VolumeNodeAffinity{
+					Required: &corev1.NodeSelector{
+						NodeSelectorTerms: []corev1.NodeSelectorTerm{
+							{
+								MatchExpressions: []corev1.NodeSelectorRequirement{
+									{
+										Key:      v1alpha1.LabelDiskCSITopologyZone,
+										Operator: corev1.NodeSelectorOpIn,
+										Values:   []string{zones[0]},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		pod := storageTestPod("csi-topology", coretest.PodOptions{
+			PersistentVolumeClaims: []string{pvc.Name},
+		})
+
+		env.ExpectCreated(nodeClass, nodePool, pv, pvc, pod)
+		env.EventuallyExpectHealthy(pod)
+		node := env.EventuallyExpectCreatedNodeCount("==", 1)[0]
+		Expect(node.Labels).To(HaveKeyWithValue(corev1.LabelTopologyZone, zones[0]))
+	})
+
 	It("should run a pod with a generic ephemeral volume", Label("generic-ephemeral"), func() {
 		configureNodeClassAndPool("generic-ephemeral")
 		storageClassName := dynamicStorageClassName() + "-ephemeral"
@@ -384,7 +435,7 @@ func testInstanceTypes() []string {
 	if values := envList("TEST_INSTANCE_TYPES"); len(values) > 0 {
 		return values
 	}
-	return []string{"ecs.c9i.large", "ecs.c9i.xlarge"}
+	return []string{"ecs.g7.large", "ecs.g7.xlarge"}
 }
 
 func dynamicStorageClassName() string {

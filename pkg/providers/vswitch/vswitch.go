@@ -19,6 +19,7 @@ package vswitch
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -34,6 +35,12 @@ type Provider struct {
 	cache     map[string]*CacheEntry
 	cacheMu   sync.RWMutex
 	cacheTTL  time.Duration
+}
+
+type VSwitchQuery struct {
+	ID     string
+	Tags   map[string]string
+	ZoneID string
 }
 
 // CacheEntry represents a cached result with expiration
@@ -115,73 +122,87 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.VSwitchSelector
 
 	var vswitches []v1alpha1.VSwitch
 
-	// Process each selector term
-	for _, term := range terms {
-		if term.ID != nil {
-			vsws, err := p.getByID(ctx, *term.ID)
-			if err != nil {
-				return nil, fmt.Errorf("get vswitch %s: %w", *term.ID, err)
-			}
-			// Direct ID reference
-			vswitches = append(vswitches, *vsws)
-		} else if term.Tags != nil {
-			// Tag-based selection
-			vsws, err := p.getByTags(ctx, term.Tags)
-			if err != nil {
-				return nil, fmt.Errorf("get vswitches by tags %v: %w", term.Tags, err)
-			}
-			vswitches = append(vswitches, vsws...)
+	for i, term := range terms {
+		query := vSwitchQueryFromTerm(term)
+		vsws, err := p.getByQuery(ctx, query)
+		if err != nil {
+			return nil, fmt.Errorf("resolve vSwitchSelectorTerms[%d]: %w", i, err)
 		}
+		vswitches = append(vswitches, vsws...)
 	}
 
 	// Remove duplicates
 	vswitches = removeDuplicateVSwitches(vswitches)
 
-	// Cache the result
-	p.setCachedValue(cacheKey, vswitches)
+	// Only cache non-empty results. Caching empty results would block future reconciliations
+	// when the API temporarily returns no VSwitches (e.g., transient error, eventual consistency).
+	// The status controller would get stuck for the full cache TTL (2 hours) with empty VSwitches,
+	// causing GetInstanceTypes to produce 0 offerings and blocking node provisioning.
+	if len(vswitches) > 0 {
+		p.setCachedValue(cacheKey, vswitches)
+	}
 
+	return vswitches, nil
+}
+
+func vSwitchQueryFromTerm(term v1alpha1.VSwitchSelectorTerm) VSwitchQuery {
+	query := VSwitchQuery{Tags: term.Tags}
+	if term.ID != nil {
+		query.ID = *term.ID
+	}
+	if term.ZoneID != nil {
+		query.ZoneID = *term.ZoneID
+	}
+	return query
+}
+
+func (p *Provider) getByQuery(ctx context.Context, query VSwitchQuery) ([]v1alpha1.VSwitch, error) {
+	response, err := p.vpcClient.DescribeVSwitches(ctx, query.ID, query.Tags, query.ZoneID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe VSwitches: %w", err)
+	}
+	if response == nil || response.Body == nil || response.Body.VSwitches == nil || len(response.Body.VSwitches.VSwitch) == 0 {
+		return []v1alpha1.VSwitch{}, nil
+	}
+
+	var vswitches []v1alpha1.VSwitch
+	for _, vsw := range response.Body.VSwitches.VSwitch {
+		if vsw == nil || vsw.VSwitchId == nil {
+			continue
+		}
+		zoneID := ""
+		if vsw.ZoneId != nil {
+			zoneID = *vsw.ZoneId
+		}
+		availableIPCount := 0
+		if vsw.AvailableIpAddressCount != nil {
+			availableIPCount = int(*vsw.AvailableIpAddressCount)
+		}
+		vswitches = append(vswitches, v1alpha1.VSwitch{
+			ID:                      *vsw.VSwitchId,
+			Zone:                    zoneID,
+			ZoneID:                  zoneID,
+			AvailableIPAddressCount: availableIPCount,
+		})
+	}
 	return vswitches, nil
 }
 
 func (p *Provider) getByID(ctx context.Context, id string) (*v1alpha1.VSwitch, error) {
 
-	// Execute request
-	response, err := p.vpcClient.DescribeVSwitches(ctx, id, nil)
-	if err != nil || response == nil || len(response.Body.VSwitches.VSwitch) == 0 {
-		return nil, fmt.Errorf("failed to describe VSwitches: %w", err)
+	vswitches, err := p.getByQuery(ctx, VSwitchQuery{ID: id})
+	if err != nil {
+		return nil, err
 	}
-	return &v1alpha1.VSwitch{
-		ID:                      *response.Body.VSwitches.VSwitch[0].VSwitchId,
-		Zone:                    *response.Body.VSwitches.VSwitch[0].ZoneId,
-		ZoneID:                  *response.Body.VSwitches.VSwitch[0].ZoneId,
-		AvailableIPAddressCount: int(*response.Body.VSwitches.VSwitch[0].AvailableIpAddressCount),
-	}, nil
+	if len(vswitches) == 0 {
+		return nil, fmt.Errorf("VSwitch %s not found", id)
+	}
+	return &vswitches[0], nil
 }
 
 // getByTags gets VSwitches by tags
 func (p *Provider) getByTags(ctx context.Context, tags map[string]string) ([]v1alpha1.VSwitch, error) {
-	// Execute request
-	response, err := p.vpcClient.DescribeVSwitches(ctx, "", tags)
-	if err != nil || response == nil || len(response.Body.VSwitches.VSwitch) == 0 {
-		return nil, fmt.Errorf("failed to describe VSwitches: %w", err)
-	}
-
-	// Convert to our VSwitch type
-	var vswitches []v1alpha1.VSwitch
-	for _, vsw := range response.Body.VSwitches.VSwitch {
-		var availIPCount int
-		if vsw.AvailableIpAddressCount != nil {
-			availIPCount = int(*vsw.AvailableIpAddressCount)
-		}
-		vswitches = append(vswitches, v1alpha1.VSwitch{
-			ID:                      *vsw.VSwitchId,
-			Zone:                    *vsw.ZoneId,
-			ZoneID:                  *vsw.ZoneId,
-			AvailableIPAddressCount: availIPCount,
-		})
-	}
-
-	return vswitches, nil
+	return p.getByQuery(ctx, VSwitchQuery{Tags: tags})
 }
 
 // removeDuplicateVSwitches removes duplicate VSwitches from a slice
@@ -190,11 +211,14 @@ func removeDuplicateVSwitches(vsws []v1alpha1.VSwitch) []v1alpha1.VSwitch {
 	var result []v1alpha1.VSwitch
 
 	for _, vsw := range vsws {
-		if !seen[vsw.ID] {
+		if vsw.ID != "" && !seen[vsw.ID] {
 			seen[vsw.ID] = true
 			result = append(result, vsw)
 		}
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].ID < result[j].ID
+	})
 
 	return result
 }

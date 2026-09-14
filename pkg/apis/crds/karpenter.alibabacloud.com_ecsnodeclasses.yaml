@@ -85,6 +85,20 @@ spec:
                   properties:
                     category:
                       description: Category is the disk type
+                      enum:
+                      - cloud_essd
+                      - cloud_essd_entry
+                      - cloud_efficiency
+                      - cloud_pperf
+                      - cloud_sperf
+                      - cloud_ssd
+                      - cloud_auto
+                      - ephemeral_ssd
+                      - cloud
+                      - cloud_essd_xc0
+                      - cloud_essd_xc1
+                      - elastic_ephemeral_disk_premium
+                      - elastic_ephemeral_disk_standard
                       type: string
                     deleteWithInstance:
                       default: true
@@ -97,8 +111,16 @@ spec:
                     encrypted:
                       description: Encrypted specifies whether the disk is encrypted
                       type: boolean
+                    kmsKeyID:
+                      description: KMSKeyID is the KMS key ID for encryption
+                      type: string
                     performanceLevel:
                       description: PerformanceLevel is the ESSD performance level
+                      enum:
+                      - PL0
+                      - PL1
+                      - PL2
+                      - PL3
                       type: string
                     size:
                       description: Size is the disk size in GB
@@ -111,6 +133,49 @@ spec:
                   - category
                   - size
                   type: object
+                  x-kubernetes-validations:
+                  - message: cloud_essd_xc1 is not supported
+                    rule: self.category != 'cloud_essd_xc1'
+                  - message: cloud_essd size must be between 20 and 32768 GB
+                    rule: self.category != 'cloud_essd' || (self.size >= 20 && self.size
+                      <= 32768)
+                  - message: cloud_essd_entry size must be between 20 and 32768 GB
+                    rule: self.category != 'cloud_essd_entry' || (self.size >= 20
+                      && self.size <= 32768)
+                  - message: cloud_efficiency size must be between 20 and 32768 GB
+                    rule: self.category != 'cloud_efficiency' || (self.size >= 20
+                      && self.size <= 32768)
+                  - message: cloud_pperf size must be between 20 and 32768 GB
+                    rule: self.category != 'cloud_pperf' || (self.size >= 20 && self.size
+                      <= 32768)
+                  - message: cloud_sperf size must be between 20 and 32768 GB
+                    rule: self.category != 'cloud_sperf' || (self.size >= 20 && self.size
+                      <= 32768)
+                  - message: cloud_ssd size must be between 20 and 32768 GB
+                    rule: self.category != 'cloud_ssd' || (self.size >= 20 && self.size
+                      <= 32768)
+                  - message: cloud_auto size must be between 40 and 32768 GB
+                    rule: self.category != 'cloud_auto' || (self.size >= 40 && self.size
+                      <= 32768)
+                  - message: ephemeral_ssd size must be between 5 and 800 GB
+                    rule: self.category != 'ephemeral_ssd' || (self.size >= 5 && self.size
+                      <= 800)
+                  - message: cloud size must be between 5 and 2000 GB
+                    rule: self.category != 'cloud' || (self.size >= 5 && self.size
+                      <= 2000)
+                  - message: cloud_essd_xc0 size must be between 40 and 2048 GB
+                    rule: self.category != 'cloud_essd_xc0' || (self.size >= 40 &&
+                      self.size <= 2048)
+                  - message: elastic_ephemeral_disk_premium size must be between 64
+                      and 8192 GB
+                    rule: self.category != 'elastic_ephemeral_disk_premium' || (self.size
+                      >= 64 && self.size <= 8192)
+                  - message: elastic_ephemeral_disk_standard size must be between
+                      64 and 8192 GB
+                    rule: self.category != 'elastic_ephemeral_disk_standard' || (self.size
+                      >= 64 && self.size <= 8192)
+                  - message: performanceLevel is only supported for cloud_essd disks
+                    rule: '!has(self.performanceLevel) || self.category == ''cloud_essd'''
                 type: array
               imageSelectorTerms:
                 description: ImageSelectorTerms is a list of image selector requirements
@@ -137,10 +202,16 @@ spec:
                       additionalProperties:
                         type: string
                       description: Tags is a map of tags to match
+                      maxProperties: 20
                       type: object
                   type: object
+                maxItems: 30
                 minItems: 1
                 type: array
+              instanceStorePolicy:
+                description: InstanceStorePolicy specifies local instance store handling.
+                  P0 only validates the enum.
+                type: string
               kubelet:
                 description: Kubelet defines Kubelet configuration overrides
                 properties:
@@ -266,8 +337,10 @@ spec:
                       additionalProperties:
                         type: string
                       description: Tags is a map of tags to match
+                      maxProperties: 20
                       type: object
                   type: object
+                maxItems: 30
                 minItems: 1
                 type: array
               spotPriceLimit:
@@ -283,8 +356,21 @@ spec:
                 properties:
                   category:
                     default: cloud_essd
-                    description: Category is the disk type (cloud_efficiency, cloud_ssd,
-                      cloud_essd)
+                    description: Category is the disk type
+                    enum:
+                    - cloud_essd
+                    - cloud_essd_entry
+                    - cloud_efficiency
+                    - cloud_pperf
+                    - cloud_sperf
+                    - cloud_ssd
+                    - cloud_auto
+                    - ephemeral_ssd
+                    - cloud
+                    - cloud_essd_xc0
+                    - cloud_essd_xc1
+                    - elastic_ephemeral_disk_premium
+                    - elastic_ephemeral_disk_standard
                     type: string
                   encrypted:
                     description: Encrypted specifies whether the disk is encrypted
@@ -293,22 +379,68 @@ spec:
                     description: KMSKeyID is the KMS key ID for encryption
                     type: string
                   performanceLevel:
-                    default: PL0
                     description: PerformanceLevel is the ESSD performance level (PL0,
                       PL1, PL2, PL3)
+                    enum:
+                    - PL0
+                    - PL1
+                    - PL2
+                    - PL3
                     type: string
                   size:
                     default: 40
                     description: Size is the disk size in GB
                     format: int32
-                    maximum: 500
-                    minimum: 20
                     type: integer
                 type: object
+                x-kubernetes-validations:
+                - message: cloud_essd_xc1 is not supported
+                  rule: self.category != 'cloud_essd_xc1'
+                - message: cloud_essd size must be between 20 and 32768 GB
+                  rule: '!has(self.size) || self.category != ''cloud_essd'' || (self.size
+                    >= 20 && self.size <= 32768)'
+                - message: cloud_essd_entry size must be between 20 and 32768 GB
+                  rule: '!has(self.size) || self.category != ''cloud_essd_entry''
+                    || (self.size >= 20 && self.size <= 32768)'
+                - message: cloud_efficiency size must be between 20 and 32768 GB
+                  rule: '!has(self.size) || self.category != ''cloud_efficiency''
+                    || (self.size >= 20 && self.size <= 32768)'
+                - message: cloud_pperf size must be between 20 and 32768 GB
+                  rule: '!has(self.size) || self.category != ''cloud_pperf'' || (self.size
+                    >= 20 && self.size <= 32768)'
+                - message: cloud_sperf size must be between 20 and 32768 GB
+                  rule: '!has(self.size) || self.category != ''cloud_sperf'' || (self.size
+                    >= 20 && self.size <= 32768)'
+                - message: cloud_ssd size must be between 20 and 32768 GB
+                  rule: '!has(self.size) || self.category != ''cloud_ssd'' || (self.size
+                    >= 20 && self.size <= 32768)'
+                - message: cloud_auto size must be between 40 and 32768 GB
+                  rule: '!has(self.size) || self.category != ''cloud_auto'' || (self.size
+                    >= 40 && self.size <= 32768)'
+                - message: ephemeral_ssd size must be between 5 and 800 GB
+                  rule: '!has(self.size) || self.category != ''ephemeral_ssd'' ||
+                    (self.size >= 5 && self.size <= 800)'
+                - message: cloud size must be between 5 and 2000 GB
+                  rule: '!has(self.size) || self.category != ''cloud'' || (self.size
+                    >= 5 && self.size <= 2000)'
+                - message: cloud_essd_xc0 size must be between 40 and 2048 GB
+                  rule: '!has(self.size) || self.category != ''cloud_essd_xc0'' ||
+                    (self.size >= 40 && self.size <= 2048)'
+                - message: elastic_ephemeral_disk_premium size must be between 64
+                    and 8192 GB
+                  rule: '!has(self.size) || self.category != ''elastic_ephemeral_disk_premium''
+                    || (self.size >= 64 && self.size <= 8192)'
+                - message: elastic_ephemeral_disk_standard size must be between 64
+                    and 8192 GB
+                  rule: '!has(self.size) || self.category != ''elastic_ephemeral_disk_standard''
+                    || (self.size >= 64 && self.size <= 8192)'
+                - message: performanceLevel is only supported for cloud_essd disks
+                  rule: '!has(self.performanceLevel) || self.category == ''cloud_essd'''
               tags:
                 additionalProperties:
                   type: string
                 description: Tags are instance tags
+                maxProperties: 64
                 type: object
               userData:
                 description: UserData specifies custom user data script
@@ -325,11 +457,13 @@ spec:
                       additionalProperties:
                         type: string
                       description: Tags is a map of tags to match
+                      maxProperties: 20
                       type: object
                     zoneID:
                       description: ZoneID is the zone ID
                       type: string
                   type: object
+                maxItems: 30
                 minItems: 1
                 type: array
             type: object

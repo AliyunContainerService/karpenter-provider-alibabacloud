@@ -42,6 +42,11 @@ const (
 	// AnnotationECSNodeClassHashVersion is the annotation key for hash version
 	AnnotationECSNodeClassHashVersion = Group + "/ecsnodeclass-hash-version"
 
+	// AnnotationInstanceTagged marks that the ECS instance has been successfully tagged.
+	// Once set to "true", the tagging controller will skip subsequent reconciles to avoid
+	// redundant API calls. Aligns with AWS Karpenter design.
+	AnnotationInstanceTagged = Group + "/instance-tagged"
+
 	// LabelNodeClass is the label key for node class name
 	LabelNodeClass = Group + "/nodeclass"
 
@@ -53,6 +58,9 @@ const (
 
 	// CapacityTypeSpot represents spot capacity type
 	CapacityTypeSpot = "spot"
+
+	// CapacityTypePrePaid represents subscription (PrePaid) capacity type
+	CapacityTypePrePaid = "pre-paid"
 
 	// TagName is the tag key for instance name
 	TagName = "Name"
@@ -67,7 +75,11 @@ const (
 	TagManagedBy = Group + "/managed-by"
 
 	// TagManagedByValue is the value used to identify resources managed by Karpenter.
-	TagManagedByValue = "true"
+	// MUST stay "karpenter" to match opensource-main: instances created by the
+	// upstream provider are tagged karpenter.sh/managed-by=karpenter, and List()
+	// filters on this exact value. Changing it (e.g. to "true") is a breaking
+	// change that orphans existing nodes and can cause GC to miss/mis-handle them.
+	TagManagedByValue = "karpenter"
 
 	// TagCluster is the tag key for cluster name
 	TagCluster = "kubernetes.io/cluster"
@@ -81,8 +93,11 @@ const (
 	// TagKubeletMaxPods records the ECSNodeClass kubelet maxPods setting on launched instances.
 	TagKubeletMaxPods = Group + "/kubelet-max-pods"
 
-	// LabelInstanceFamily is the label key for instance family
+	// LabelInstanceFamily is the legacy label key for instance family
 	LabelInstanceFamily = "node.kubernetes.io/instance-family"
+
+	// LabelInstanceFamilyCanonical is the provider-owned label key for instance family
+	LabelInstanceFamilyCanonical = LabelDomain + "/instance-family"
 
 	// LabelInstanceCategory is the label key for instance category
 	LabelInstanceCategory = LabelDomain + "/instance-category"
@@ -90,8 +105,11 @@ const (
 	// LabelInstanceGeneration is the label key for instance generation
 	LabelInstanceGeneration = LabelDomain + "/instance-generation"
 
-	// LabelInstanceSize is the label key for instance size
+	// LabelInstanceSize is the legacy label key for instance size
 	LabelInstanceSize = "node.kubernetes.io/instance-size"
+
+	// LabelInstanceSizeCanonical is the provider-owned label key for instance size
+	LabelInstanceSizeCanonical = LabelDomain + "/instance-size"
 
 	// LabelInstanceCPU is the label key for vCPU count
 	LabelInstanceCPU = LabelDomain + "/instance-cpu"
@@ -156,9 +174,11 @@ func WellKnownLabels() []string {
 	return []string{
 		LabelInstanceType,
 		LabelInstanceFamily,
+		LabelInstanceFamilyCanonical,
 		LabelInstanceCategory,
 		LabelInstanceGeneration,
 		LabelInstanceSize,
+		LabelInstanceSizeCanonical,
 		LabelInstanceCPU,
 		LabelInstanceMemory,
 		LabelInstanceGPUName,

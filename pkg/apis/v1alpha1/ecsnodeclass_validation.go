@@ -19,7 +19,12 @@ package v1alpha1
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
+
+var ramRoleNameRegex = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+var imageOwnerIDRegex = regexp.MustCompile(`^[1-9][0-9]{5,19}$`)
+var imageIDRegex = regexp.MustCompile(`^(?:m-[A-Za-z0-9._:-]{1,126}|[A-Za-z0-9][A-Za-z0-9._:-]{0,126}\.(?:vhd|qcow2))$`)
 
 // Validate validates the ECSNodeClass spec
 func (nc *ECSNodeClass) Validate() error {
@@ -41,10 +46,16 @@ func (nc *ECSNodeClass) Validate() error {
 	if err := nc.validateImageSelectors(); err != nil {
 		return err
 	}
+	if err := nc.validateRole(); err != nil {
+		return err
+	}
 	if err := nc.validateSystemDisk(); err != nil {
 		return err
 	}
 	if err := nc.validateDataDisks(); err != nil {
+		return err
+	}
+	if _, err := NormalizeDisks(nc.Spec); err != nil {
 		return err
 	}
 	if err := nc.validateSpotConfig(); err != nil {
@@ -105,16 +116,42 @@ func (nc *ECSNodeClass) validateTags() error {
 	return nil
 }
 
+func (nc *ECSNodeClass) validateRole() error {
+	if nc.Spec.Role == nil {
+		return nil
+	}
+	role := *nc.Spec.Role
+	if role != strings.TrimSpace(role) {
+		return fmt.Errorf("role must not contain leading or trailing whitespace")
+	}
+	if len(role) < 1 || len(role) > 64 {
+		return fmt.Errorf("role must be between 1 and 64 characters")
+	}
+	if strings.HasPrefix(role, "acs:ram::") && strings.Contains(role, ":role/") {
+		return fmt.Errorf("role must be a RAM role name, not an ARN")
+	}
+	if !ramRoleNameRegex.MatchString(role) {
+		return fmt.Errorf("role must match ^[A-Za-z0-9._-]{1,64}$")
+	}
+	return nil
+}
+
 func (nc *ECSNodeClass) validateVSwitchSelectors() error {
 	if len(nc.Spec.VSwitchSelectorTerms) == 0 {
 		return fmt.Errorf("vSwitchSelectorTerms is required")
+	}
+	if len(nc.Spec.VSwitchSelectorTerms) > 30 {
+		return fmt.Errorf("vSwitchSelectorTerms may contain at most 30 terms, got %d", len(nc.Spec.VSwitchSelectorTerms))
 	}
 	for i, term := range nc.Spec.VSwitchSelectorTerms {
 		if term.ID == nil && len(term.Tags) == 0 && term.ZoneID == nil {
 			return fmt.Errorf("vSwitchSelectorTerms[%d] must specify at least one of: id, tags, or zoneID", i)
 		}
 		if term.ID != nil && (len(term.Tags) > 0 || term.ZoneID != nil) {
-			return fmt.Errorf("vSwitchSelectorTerms[%d].id cannot be combined with tags or zoneID", i)
+			return fmt.Errorf("vSwitchSelectorTerms[%d].id is mutually exclusive with tags and zoneID", i)
+		}
+		if err := validateSelectorTags(fmt.Sprintf("vSwitchSelectorTerms[%d].tags", i), term.Tags, true); err != nil {
+			return err
 		}
 		if term.ID != nil && !isValidResourceID(*term.ID, "vsw") {
 			return fmt.Errorf("vSwitchSelectorTerms[%d].id is not a valid VSwitch ID", i)
@@ -127,15 +164,21 @@ func (nc *ECSNodeClass) validateSecurityGroupSelectors() error {
 	if len(nc.Spec.SecurityGroupSelectorTerms) == 0 {
 		return fmt.Errorf("securityGroupSelectorTerms is required")
 	}
-	if len(nc.Spec.SecurityGroupSelectorTerms) > 5 {
-		return fmt.Errorf("maximum 5 security groups allowed, got %d", len(nc.Spec.SecurityGroupSelectorTerms))
+	if len(nc.Spec.SecurityGroupSelectorTerms) > 30 {
+		return fmt.Errorf("securityGroupSelectorTerms may contain at most 30 terms, got %d", len(nc.Spec.SecurityGroupSelectorTerms))
 	}
 	for i, term := range nc.Spec.SecurityGroupSelectorTerms {
 		if term.ID == nil && term.Name == nil && len(term.Tags) == 0 {
 			return fmt.Errorf("securityGroupSelectorTerms[%d] must specify at least one of: id, name, or tags", i)
 		}
 		if term.ID != nil && (term.Name != nil || len(term.Tags) > 0) {
-			return fmt.Errorf("securityGroupSelectorTerms[%d].id cannot be combined with name or tags", i)
+			return fmt.Errorf("securityGroupSelectorTerms[%d].id is mutually exclusive with name and tags", i)
+		}
+		if term.Name != nil && (term.ID != nil || len(term.Tags) > 0) {
+			return fmt.Errorf("securityGroupSelectorTerms[%d].name is mutually exclusive with id and tags", i)
+		}
+		if err := validateSelectorTags(fmt.Sprintf("securityGroupSelectorTerms[%d].tags", i), term.Tags, false); err != nil {
+			return err
 		}
 		if term.ID != nil && !isValidResourceID(*term.ID, "sg") {
 			return fmt.Errorf("securityGroupSelectorTerms[%d].id is not a valid security group ID", i)
@@ -148,9 +191,15 @@ func (nc *ECSNodeClass) validateImageSelectors() error {
 	if len(nc.Spec.ImageSelectorTerms) == 0 {
 		return fmt.Errorf("imageSelectorTerms is required")
 	}
+	if len(nc.Spec.ImageSelectorTerms) > 30 {
+		return fmt.Errorf("imageSelectorTerms may contain at most 30 terms, got %d", len(nc.Spec.ImageSelectorTerms))
+	}
 	for i, term := range nc.Spec.ImageSelectorTerms {
 		count := 0
 		if term.ID != nil {
+			count++
+		}
+		if term.ImageFamily != nil {
 			count++
 		}
 		if term.ImageOwnerAlias != nil {
@@ -166,16 +215,43 @@ func (nc *ECSNodeClass) validateImageSelectors() error {
 			count++
 		}
 		if count == 0 {
-			return fmt.Errorf("imageSelectorTerms[%d] must specify at least one of: id, alias, name, family, or tags", i)
+			if term.ImageOwnerID != nil {
+				return fmt.Errorf("imageSelectorTerms[%d].imageOwnerID cannot be the only selector", i)
+			}
+			return fmt.Errorf("imageSelectorTerms[%d] must specify at least one of: id, imageFamily, imageOwnerAlias, name, or tags", i)
 		}
-		if term.ID != nil && count > 1 {
-			return fmt.Errorf("imageSelectorTerms[%d].id cannot be combined with other filters", i)
+		if term.ID != nil && (term.ImageFamily != nil || term.ImageOwnerAlias != nil || term.Name != nil || term.ImageOwnerID != nil || len(term.Tags) > 0) {
+			return fmt.Errorf("imageSelectorTerms[%d].id is mutually exclusive with imageFamily, imageOwnerAlias, imageOwnerID, name, and tags", i)
 		}
-		if term.ID != nil && !isValidResourceID(*term.ID, "m") {
+		if err := validateSelectorTags(fmt.Sprintf("imageSelectorTerms[%d].tags", i), term.Tags, true); err != nil {
+			return err
+		}
+		if term.ID != nil && !imageIDRegex.MatchString(*term.ID) {
 			return fmt.Errorf("imageSelectorTerms[%d].id is not a valid image ID", i)
 		}
 		if term.ImageOwnerAlias != nil && !isValidImageOwnerAlias(*term.ImageOwnerAlias) {
 			return fmt.Errorf("imageSelectorTerms[%d].imageOwnerAlias must be one of: system, self, others, marketplace", i)
+		}
+		if term.ImageOwnerID != nil && !imageOwnerIDRegex.MatchString(*term.ImageOwnerID) {
+			return fmt.Errorf("imageSelectorTerms[%d].imageOwnerID must match ^[1-9][0-9]{5,19}$", i)
+		}
+	}
+	return nil
+}
+
+func validateSelectorTags(field string, tags map[string]string, limit bool) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	if limit && len(tags) > 20 {
+		return fmt.Errorf("%s may contain at most 20 entries, got %d", field, len(tags))
+	}
+	for key, value := range tags {
+		if key == "" {
+			return fmt.Errorf("%s key must be non-empty", field)
+		}
+		if value == "" {
+			return fmt.Errorf("%s[%q] value must be non-empty", field, key)
 		}
 	}
 	return nil
@@ -186,11 +262,12 @@ func (nc *ECSNodeClass) validateSystemDisk() error {
 		return nil
 	}
 	disk := nc.Spec.SystemDisk
-	if !isValidDiskCategory(disk.Category) {
-		return fmt.Errorf("systemDisk.category must be one of: cloud_efficiency, cloud_ssd, cloud_essd")
+	size := defaultSystemDiskSize
+	if disk.Size != nil {
+		size = *disk.Size
 	}
-	if disk.Size != nil && (*disk.Size < 20 || *disk.Size > 500) {
-		return fmt.Errorf("systemDisk.size must be between 20 and 500 GB")
+	if err := validateDiskCategoryAndSize("systemDisk", disk.Category, size); err != nil {
+		return err
 	}
 	if disk.PerformanceLevel != nil && !isValidPerformanceLevel(*disk.PerformanceLevel) {
 		return fmt.Errorf("systemDisk.performanceLevel must be one of: PL0, PL1, PL2, PL3")
@@ -203,11 +280,8 @@ func (nc *ECSNodeClass) validateDataDisks() error {
 		return fmt.Errorf("maximum 16 data disks allowed, got %d", len(nc.Spec.DataDisks))
 	}
 	for i, disk := range nc.Spec.DataDisks {
-		if !isValidDiskCategory(disk.Category) {
-			return fmt.Errorf("dataDisks[%d].category must be one of: cloud_efficiency, cloud_ssd, cloud_essd", i)
-		}
-		if disk.Size < 20 || disk.Size > 32768 {
-			return fmt.Errorf("dataDisks[%d].size must be between 20 and 32768 GB", i)
+		if err := validateDiskCategoryAndSize(fmt.Sprintf("dataDisks[%d]", i), disk.Category, disk.Size); err != nil {
+			return err
 		}
 		if disk.PerformanceLevel != nil && !isValidPerformanceLevel(*disk.PerformanceLevel) {
 			return fmt.Errorf("dataDisks[%d].performanceLevel must be one of: PL0, PL1, PL2, PL3", i)
@@ -264,15 +338,6 @@ func isValidImageOwnerAlias(owner string) bool {
 	return owner == "system" || owner == "self" || owner == "others" || owner == "marketplace"
 }
 
-func isValidDiskCategory(category string) bool {
-	validCategories := map[string]bool{
-		"cloud_efficiency": true,
-		"cloud_ssd":        true,
-		"cloud_essd":       true,
-	}
-	return validCategories[category]
-}
-
 func isValidPerformanceLevel(level string) bool {
 	validLevels := map[string]bool{
 		"PL0": true,
@@ -320,6 +385,12 @@ func (nc *ECSNodeClass) validateMetadataOptions() error {
 	validTokens := map[string]bool{"optional": true, "required": true}
 	if !validTokens[nc.Spec.MetadataOptions.HttpTokens] {
 		return fmt.Errorf("metadataOptions.httpTokens must be one of: optional, required")
+	}
+	if nc.Spec.MetadataOptions.HttpEndpoint != nil {
+		validEndpoints := map[string]bool{"enabled": true, "disabled": true}
+		if !validEndpoints[*nc.Spec.MetadataOptions.HttpEndpoint] {
+			return fmt.Errorf("metadataOptions.httpEndpoint must be one of: enabled, disabled")
+		}
 	}
 	if nc.Spec.MetadataOptions.HttpPutResponseHopLimit != nil {
 		if *nc.Spec.MetadataOptions.HttpPutResponseHopLimit < 1 || *nc.Spec.MetadataOptions.HttpPutResponseHopLimit > 64 {

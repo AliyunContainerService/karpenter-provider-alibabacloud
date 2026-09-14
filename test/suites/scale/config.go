@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	defaultScaleInstanceTypes = []string{"ecs.c9i.large", "ecs.c9i.xlarge"}
+	defaultScaleInstanceTypes = []string{"ecs.g7.large", "ecs.g7.xlarge"}
 )
 
 func testInstanceTypes() []string {

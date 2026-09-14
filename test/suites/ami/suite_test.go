@@ -17,6 +17,7 @@ limitations under the License.
 package ami
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -67,7 +68,7 @@ var _ = Describe("Image Selection", func() {
 		imageID := strings.TrimSpace(os.Getenv("TEST_IMAGE_ID"))
 		Expect(imageID).ToNot(BeEmpty(), "TEST_IMAGE_ID must be discovered during ACK setup for the image-id suite")
 
-		nodeClass.Name = "ami-test-image-id"
+		nodeClass.Name = fmt.Sprintf("ami-test-image-id-p%d", GinkgoParallelProcess())
 		configureNodePool("image-id")
 		nodeClass.Spec.ImageSelectorTerms = []v1alpha1.ImageSelectorTerm{{ID: lo.ToPtr(imageID)}}
 		nodeClass.Spec.Tags = env.TestTags("image-id")
@@ -89,7 +90,7 @@ var _ = Describe("Image Selection", func() {
 			imageFamily = environmentcs.DefaultImageFamily
 		}
 
-		nodeClass.Name = "ami-test-image-family"
+		nodeClass.Name = fmt.Sprintf("ami-test-image-family-p%d", GinkgoParallelProcess())
 		configureNodePool("image-family")
 		nodeClass.Spec.ImageSelectorTerms = []v1alpha1.ImageSelectorTerm{{ImageFamily: lo.ToPtr(imageFamily)}}
 		nodeClass.Spec.Tags = env.TestTags("image-family")
@@ -107,7 +108,9 @@ var _ = Describe("Image Selection", func() {
 })
 
 func configureNodePool(name string) {
-	nodePool.Name = "ami-test-pool-" + name
+	// Add parallel process ID to avoid resource name conflicts in parallel tests
+	procID := fmt.Sprintf("-p%d", GinkgoParallelProcess())
+	nodePool.Name = "ami-test-pool-" + name + procID
 	nodePool.Spec.Template.Spec.NodeClassRef = &v1.NodeClassReference{
 		Group: "karpenter.alibabacloud.com",
 		Kind:  "ECSNodeClass",
@@ -150,7 +153,7 @@ func testInstanceTypes() []string {
 	if values := envList("TEST_INSTANCE_TYPES"); len(values) > 0 {
 		return values
 	}
-	return []string{"ecs.c9i.large", "ecs.c9i.xlarge"}
+	return []string{"ecs.g7.large", "ecs.g7.xlarge"}
 }
 
 func envList(key string) []string {

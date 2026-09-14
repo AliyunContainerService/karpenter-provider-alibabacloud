@@ -513,7 +513,7 @@ func (env *Environment) DefaultNodePool(nodeClass *v1alpha1.ECSNodeClass) *karpv
 							NodeSelectorRequirement: corev1.NodeSelectorRequirement{
 								Key:      corev1.LabelInstanceTypeStable,
 								Operator: corev1.NodeSelectorOpIn,
-								Values:   []string{"ecs.c9i.large", "ecs.c9i.xlarge"},
+								Values:   []string{"ecs.g7.xlarge"},
 							},
 						},
 					},

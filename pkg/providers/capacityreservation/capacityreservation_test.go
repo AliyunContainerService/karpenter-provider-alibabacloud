@@ -86,7 +86,7 @@ func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, f
 	panic("implement me")
 }
 
-func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
+func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, id string, name string, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
 	//TODO implement me
 	panic("implement me")
 }

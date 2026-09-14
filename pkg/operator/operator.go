@@ -78,6 +78,7 @@ type Operator struct {
 	Region               string
 	ClusterName          string
 	InterruptionQueue    string
+	Options              *options.Options
 	ClusterNetworkConfig *cluster.NetworkConfig
 
 	// Alibaba Cloud SDK clients
@@ -491,10 +492,10 @@ func NewOperator(ctx context.Context, coreOp *coreoperator.Operator) (*Operator,
 		return nil, fmt.Errorf("failed to initialize CS client: %w", err)
 	}
 	// Initialize cache
-	unavailableOfferingsCache := cache.NewUnavailableOfferingsCache()
+	unavailableOfferingsCache := cache.NewUnavailableOfferingsCacheWithTTL(opts.UnavailableOfferingCacheTTL)
 
 	// Initialize cluster network config
-	networkConfig, err := cluster.InitializeClusterNetworkConfig(csClient, opts.ClusterName)
+	networkConfig, err := cluster.InitializeClusterNetworkConfig(csClient, opts.ClusterID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize cluster network config: %w", err)
 	}
@@ -517,6 +518,7 @@ func NewOperator(ctx context.Context, coreOp *coreoperator.Operator) (*Operator,
 		Region:                      opts.Region,
 		ClusterName:                 opts.ClusterName,
 		InterruptionQueue:           opts.InterruptionQueue,
+		Options:                     opts,
 		ECSClient:                   ecsClient,
 		VPCClient:                   vpcClient,
 		RAMClient:                   ramClient,

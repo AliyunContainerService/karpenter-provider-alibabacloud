@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	corev1 "k8s.io/api/core/v1"
+	coreapis "sigs.k8s.io/karpenter/pkg/apis/v1"
 )
 
 // MockCSClient is a mock implementation of CSClient
@@ -65,14 +66,38 @@ func TestGenerateUserData(t *testing.T) {
 		mockSetup   func(*MockCSClient)
 		expectError bool
 		contains    []string
+		ordered     []string
+		suffix      string
+		expected    string
 	}{
 		{
-			name: "custom user data",
+			name: "custom user data runs after ACK bootstrap",
 			opts: BootstrapOptions{
 				ClusterType:    ACKClusterType,
+				ClusterID:      "c-test123",
 				CustomUserData: &customData,
 			},
-			contains: []string{"#!/bin/bash", "echo custom"},
+			mockSetup: func(m *MockCSClient) {
+				script := "curl -sSL http://aliacs-k8s.oss.aliyuncs.com/public/pkg/run/attach/1.12.6-aliyunedge.1/attach.sh | bash"
+				m.On("DescribeClusterAttachScripts", mock.Anything, "c-test123", mock.Anything).Return(script, nil)
+				m.On("DescribeClusterDetail", mock.Anything, "c-test123").Maybe().Return(&cs.DescribeClusterDetailResponse{}, fmt.Errorf("skip patch"))
+			},
+			contains: []string{"#!/bin/bash", "set -ex", "attach.sh", "--taints", "echo custom"},
+			ordered:  []string{"attach.sh", "--taints", "#!/bin/bash\necho custom"},
+			suffix:   "--taints " + convertTaints2String([]corev1.Taint{coreapis.UnregisteredNoExecuteTaint}) + "\n" + customData,
+		},
+		{
+			name: "custom user data remains executable when ACK bootstrap is empty",
+			opts: BootstrapOptions{
+				ClusterType:    ACKClusterType,
+				ClusterID:      "c-test123",
+				CustomUserData: &customData,
+			},
+			mockSetup: func(m *MockCSClient) {
+				m.On("DescribeClusterAttachScripts", mock.Anything, "c-test123", mock.Anything).Return("", nil)
+				m.On("DescribeClusterDetail", mock.Anything, "c-test123").Maybe().Return(&cs.DescribeClusterDetailResponse{}, fmt.Errorf("skip patch"))
+			},
+			expected: customData,
 		},
 		{
 			name: "ACK cluster type",
@@ -136,6 +161,18 @@ func TestGenerateUserData(t *testing.T) {
 				assert.NoError(t, err)
 				for _, substr := range tt.contains {
 					assert.Contains(t, result, substr)
+				}
+				previousIndex := -1
+				for _, substr := range tt.ordered {
+					index := strings.Index(result, substr)
+					assert.Greater(t, index, previousIndex)
+					previousIndex = index
+				}
+				if tt.suffix != "" {
+					assert.True(t, strings.HasSuffix(result, tt.suffix))
+				}
+				if tt.expected != "" {
+					assert.Equal(t, tt.expected, result)
 				}
 			}
 

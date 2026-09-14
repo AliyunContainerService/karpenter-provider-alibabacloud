@@ -87,3 +87,29 @@ func TestInitializeClusterNetworkConfigSingleStack(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, nc.DualStack, "DualStack must be false when IpStack=ipv4")
 }
+
+// TestInitializeClusterNetworkConfigDualStackDualEnum verifies that the other
+// IPv6 enum value ("dual") is also recognised as dual-stack. ACK reports IPv6 as
+// either "ipv6" or "dual" depending on cluster mode; both must enable dual-stack.
+func TestInitializeClusterNetworkConfigDualStackDualEnum(t *testing.T) {
+	m := &mockCSClient{}
+
+	addonResp := &cs.GetClusterAddonInstanceResponse{
+		Body: &cs.GetClusterAddonInstanceResponseBody{
+			Name: tea.String("terway-eniip"),
+		},
+	}
+	m.On("GetClusterAddonInstance", mock.Anything, "c-test", "terway-eniip").Return(addonResp, nil)
+
+	detailResp := &cs.DescribeClusterDetailResponse{
+		Body: &cs.DescribeClusterDetailResponseBody{
+			IpStack:      tea.String("dual"),
+			NodeCidrMask: tea.String("24"),
+		},
+	}
+	m.On("DescribeClusterDetail", mock.Anything, "c-test").Return(detailResp, nil)
+
+	nc, err := InitializeClusterNetworkConfig(m, "c-test")
+	assert.NoError(t, err)
+	assert.True(t, nc.DualStack, "DualStack must be true when IpStack=dual")
+}

@@ -45,5 +45,14 @@ Thumbs.db
 # Claude Code
 .claude/
 
-# Superpowers docs
-docs/superpowers/
+# Docs
+docs/
+
+# Agent instructions
+AGENT.md
+
+# Integration test output
+test-output/
+build/
+
+.qoder

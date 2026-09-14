@@ -41,6 +41,8 @@ import (
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/pricing"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/securitygroup"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/vswitch"
+	ecsutil "github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/utils/ecs"
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/utils/securitygroups"
 	"github.com/awslabs/operatorpkg/status"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
@@ -199,7 +201,7 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
 	}
 
 	// 8. Build tags for the instance
-	tags := buildInstanceTags(nodeClaim, nodeClass)
+	tags := BuildInstanceTags(nodeClaim, nodeClass)
 
 	// 9. Create instance using instance provider
 	instanceID, err := c.createInstanceWithRetry(ctx, nodeClaim, nodeClass, filteredTypes, images, vswitches, securityGroups, userData, tags)
@@ -208,7 +210,7 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
 	}
 
 	// 10. Get the created instance details
-	inst, err := c.instanceProvider.Get(ctx, instanceID)
+	inst, err := c.instanceProvider.Get(ctx, instanceID, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get created instance: %w", err)
 	}
@@ -265,7 +267,7 @@ func (c *CloudProvider) Get(ctx context.Context, providerID string) (*coreapis.N
 	}
 
 	// Get instance from provider with caching
-	inst, err := c.instanceProvider.Get(ctx, instanceID)
+	inst, err := c.instanceProvider.Get(ctx, instanceID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -279,9 +281,11 @@ func (c *CloudProvider) Get(ctx context.Context, providerID string) (*coreapis.N
 	// Find matching instance type for capacity information
 	var capacity corev1.ResourceList
 	var allocatable corev1.ResourceList
+	var matchedIT *instancetype.InstanceType
 	for _, it := range instanceTypes {
 		if it.Name == inst.InstanceType {
 			var err error
+			matchedIT = it
 			clusterID := inst.Tags[v1alpha1.TagClusterID]
 			capacity, allocatable, err = c.calculateCapacityAndAllocatable(ctx, it, clusterID)
 			if err != nil {
@@ -297,7 +301,7 @@ func (c *CloudProvider) Get(ctx context.Context, providerID string) (*coreapis.N
 	// Create NodeClaim from instance
 	nodeClaim := &coreapis.NodeClaim{}
 	nodeClaim.Name = inst.InstanceID
-	nodeClaim.Labels = instanceLabelsFromInstance(inst)
+	nodeClaim.Labels = instanceLabelsFromInstance(inst, matchedIT)
 	nodeClaim.CreationTimestamp = metav1.Time{Time: launchTime}
 
 	// Set Status
@@ -313,7 +317,7 @@ func (c *CloudProvider) Get(ctx context.Context, providerID string) (*coreapis.N
 func (c *CloudProvider) List(ctx context.Context) ([]*coreapis.NodeClaim, error) {
 	// List all Karpenter-managed instances
 	tags := map[string]string{
-		v1alpha1.TagManagedBy: "karpenter",
+		v1alpha1.TagManagedBy: v1alpha1.TagManagedByValue,
 	}
 
 	instances, err := c.instanceProvider.List(ctx, tags)
@@ -339,10 +343,11 @@ func (c *CloudProvider) List(ctx context.Context) ([]*coreapis.NodeClaim, error)
 		// Find instance type capacity
 		var capacity corev1.ResourceList
 		var allocatable corev1.ResourceList
-		if it, ok := instanceTypeMap[inst.InstanceType]; ok {
+		matchedIT := instanceTypeMap[inst.InstanceType]
+		if matchedIT != nil {
 			// Ignore error here, just skip if calculation fails
 			clusterID := inst.Tags[v1alpha1.TagClusterID]
-			capacity, allocatable, _ = c.calculateCapacityAndAllocatable(ctx, it, clusterID)
+			capacity, allocatable, _ = c.calculateCapacityAndAllocatable(ctx, matchedIT, clusterID)
 		}
 
 		// Parse launch time
@@ -351,7 +356,7 @@ func (c *CloudProvider) List(ctx context.Context) ([]*coreapis.NodeClaim, error)
 		// Create NodeClaim
 		nodeClaim := &coreapis.NodeClaim{}
 		nodeClaim.Name = inst.InstanceID
-		nodeClaim.Labels = instanceLabelsFromInstance(inst)
+		nodeClaim.Labels = instanceLabelsFromInstance(inst, matchedIT)
 		nodeClaim.CreationTimestamp = metav1.Time{Time: launchTime}
 
 		// Set Status
@@ -420,7 +425,17 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 		return nil, cloudprovider.NewCreateError(fmt.Errorf("resolving nodeclass readiness, nodeclass is in Ready=Unknown: %s", nodeClassReady.Message), "NodeClassReadinessUnknown", "NodeClass is in Ready=Unknown")
 	}
 
-	// 3. Get all instance types
+
+	// 3. DEFENSIVE CHECK: Verify VSwitches are populated
+	// This catches the race condition where NodeClass is marked Ready but status has not been fully populated.
+	// Without this check, we proceed with empty availableZones, resulting in 0 offerings for all instance types.
+	if len(nodeClass.Status.VSwitches) == 0 {
+		logger.Error(nil, "NodeClass is marked Ready but has no VSwitches - status not fully populated",
+			"nodeClass", nodeClass.Name,
+			"nodePool", nodePool.Name)
+		return nil, cloudprovider.NewNodeClassNotReadyError(fmt.Errorf("nodeclass %s has no vswitches - status not ready", nodeClass.Name))
+	}
+	// 4. Get all instance types
 	instanceTypes, err := c.instanceTypeProvider.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list instance types: %w", err)
@@ -545,16 +560,10 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 		// Create core InstanceType with fully-populated Requirements.
 		// Requirements are required for Karpenter's scheduling logic (arch, OS, zone, capacity-type filtering).
 		coreIT := &cloudprovider.InstanceType{
-			Name:      it.Name,
-			Capacity:  capacity,
-			Offerings: offerings,
-			Requirements: scheduling.NewRequirements(
-				scheduling.NewRequirement(corev1.LabelInstanceTypeStable, corev1.NodeSelectorOpIn, it.Name),
-				scheduling.NewRequirement(corev1.LabelArchStable, corev1.NodeSelectorOpIn, ecsArchToKubernetesArch(it.Architecture)),
-				scheduling.NewRequirement(corev1.LabelOSStable, corev1.NodeSelectorOpIn, string(corev1.Linux)),
-				scheduling.NewRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, offeringZones...),
-				scheduling.NewRequirement(coreapis.CapacityTypeLabelKey, corev1.NodeSelectorOpIn, offeringCapTypes...),
-			),
+			Name:         it.Name,
+			Capacity:     capacity,
+			Offerings:    offerings,
+			Requirements: buildInstanceTypeRequirements(it, options.FromContext(ctx).Region, offeringZones, offeringCapTypes),
 			Overhead: &cloudprovider.InstanceTypeOverhead{
 				EvictionThreshold: evictionThreshold,
 				KubeReserved:      kubeReserved,
@@ -578,6 +587,21 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 	logger.V(1).Info("Returning instance types", "count", len(coreInstanceTypes))
 
 	return coreInstanceTypes, nil
+}
+
+func buildInstanceTypeRequirements(it *instancetype.InstanceType, region string, zones, capacityTypes []string) scheduling.Requirements {
+	requirements := scheduling.NewRequirements(
+		scheduling.NewRequirement(corev1.LabelInstanceTypeStable, corev1.NodeSelectorOpIn, it.Name),
+		scheduling.NewRequirement(corev1.LabelArchStable, corev1.NodeSelectorOpIn, ecsArchToKubernetesArch(it.Architecture)),
+		scheduling.NewRequirement(corev1.LabelOSStable, corev1.NodeSelectorOpIn, string(corev1.Linux)),
+		scheduling.NewRequirement(corev1.LabelTopologyRegion, corev1.NodeSelectorOpIn, region),
+		scheduling.NewRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, zones...),
+		scheduling.NewRequirement(coreapis.CapacityTypeLabelKey, corev1.NodeSelectorOpIn, capacityTypes...),
+	)
+	for key, value := range instancetype.ResolvedLabels(it) {
+		requirements.Add(scheduling.NewRequirement(key, corev1.NodeSelectorOpIn, value))
+	}
+	return requirements
 }
 
 // RepairPolicies returns the repair policies for Alibaba Cloud nodes
@@ -641,7 +665,7 @@ func (c *CloudProvider) IsDrifted(ctx context.Context, nodeClaim *coreapis.NodeC
 		return "", fmt.Errorf("invalid providerID: %s", nodeClaim.Status.ProviderID)
 	}
 
-	inst, err := c.instanceProvider.Get(ctx, instanceID)
+	inst, err := c.instanceProvider.Get(ctx, instanceID, false)
 	if err != nil {
 		return "", fmt.Errorf("failed to get instance: %w", err)
 	}
@@ -718,17 +742,14 @@ func getCustomUserData(nodeClass *v1alpha1.ECSNodeClass) string {
 // ecsArchToKubernetesArch maps ECS CpuArchitecture values to Kubernetes arch label values.
 // ECS returns "X86" for x86_64 and "ARM" or "ARM64" for AArch64.
 func ecsArchToKubernetesArch(ecsArch string) string {
-	if strings.HasPrefix(strings.ToLower(ecsArch), "arm") {
-		return "arm64"
-	}
-	return "amd64"
+	return ecsutil.KubeArchitecture(ecsArch)
 }
 
-func buildInstanceTags(nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNodeClass) map[string]string {
+func BuildInstanceTags(nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNodeClass) map[string]string {
 	tags := make(map[string]string)
 
 	// Layer 1: management tags — always present, required for List() tag filter
-	tags[v1alpha1.TagManagedBy] = "karpenter"
+	tags[v1alpha1.TagManagedBy] = v1alpha1.TagManagedByValue
 	if nodeClass.Spec.ClusterID != "" {
 		tags[v1alpha1.TagClusterID] = nodeClass.Spec.ClusterID
 	}
@@ -749,16 +770,51 @@ func buildInstanceTags(nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNod
 	return tags
 }
 
+// resolveArchitecture returns the Kubernetes arch label value for a discovered
+// instance. It prefers the authoritative CpuArchitecture obtained from ECS
+// DescribeInstanceTypes (carried on the matched InstanceType), because
+// DescribeInstances itself does not return CpuArchitecture. It only falls back
+// to the instance-type-name heuristic when the authoritative value is missing
+// (e.g. the instance type is no longer offered / not in the cache).
+func resolveArchitecture(inst *instance.Instance, it *instancetype.InstanceType) string {
+	if it != nil && it.Architecture != "" {
+		return ecsutil.KubeArchitecture(it.Architecture)
+	}
+	return ecsutil.ArchitectureFromInstanceType(inst.InstanceType)
+}
+
 // instanceLabelsFromInstance builds K8s NodeClaim labels from a discovered ECS instance.
 // It never mirrors raw ECS tags as K8s labels — ECS tag values can contain characters
 // that K8s rejects (colons, slashes, @). Only values we control are trusted.
-func instanceLabelsFromInstance(inst *instance.Instance) map[string]string {
+func instanceLabelsFromInstance(inst *instance.Instance, it *instancetype.InstanceType) map[string]string {
 	labels := map[string]string{
+		corev1.LabelTopologyRegion:     inst.Region,
 		corev1.LabelTopologyZone:       inst.Zone,
 		v1alpha1.LabelCapacityType:     inst.CapacityType,
-		corev1.LabelArchStable:         ecsArchToKubernetesArch(inst.Architecture),
+		corev1.LabelArchStable:         resolveArchitecture(inst, it),
 		corev1.LabelOSStable:           "linux",
 		corev1.LabelInstanceTypeStable: inst.InstanceType,
+	}
+	// Authoritative attributes come from the matched InstanceType (DescribeInstanceTypes),
+	// the same source buildInstanceTypeRequirements uses, so planning requirements and
+	// returned labels stay consistent.
+	for key, value := range instancetype.ResolvedLabels(it) {
+		labels[key] = value
+	}
+	// Fallback for instances whose type is no longer offered: DescribeInstances carries
+	// CPU, memory, GPU spec and GPU amount. GPU memory is not returned by DescribeInstances,
+	// so it is never fabricated here. Authoritative values above always win.
+	for key, value := range map[string]string{
+		v1alpha1.LabelInstanceCPU:      quantityLabelValue(inst.CPU),
+		v1alpha1.LabelInstanceMemory:   quantityLabelValueMiB(inst.Memory),
+		v1alpha1.LabelInstanceGPUName:  v1alpha1.NormalizeLabelValue(inst.GPUSpec),
+		v1alpha1.LabelInstanceGPUCount: quantityLabelValue(inst.GPU),
+	} {
+		if value != "" {
+			if _, ok := labels[key]; !ok {
+				labels[key] = value
+			}
+		}
 	}
 	// Restore NodePool label from the tag we wrote in buildInstanceTags (value is always valid)
 	if v, ok := inst.Tags[v1alpha1.TagNodePool]; ok {
@@ -767,19 +823,33 @@ func instanceLabelsFromInstance(inst *instance.Instance) map[string]string {
 	return labels
 }
 
+func quantityLabelValue(q resource.Quantity) string {
+	if q.Sign() <= 0 {
+		return ""
+	}
+	return fmt.Sprint(q.Value())
+}
+
+func quantityLabelValueMiB(q resource.Quantity) string {
+	if q.Sign() <= 0 {
+		return ""
+	}
+	return fmt.Sprint(q.Value() / (1024 * 1024))
+}
+
 // capacityTypeFromRequirements returns "spot" when the NodeClaim requirements include
 // karpenter.sh/capacity-type In [spot], otherwise returns "on-demand".
 func capacityTypeFromRequirements(reqs []coreapis.NodeSelectorRequirementWithMinValues) string {
 	for _, req := range reqs {
 		if req.Key == v1alpha1.LabelCapacityType && req.Operator == corev1.NodeSelectorOpIn {
 			for _, v := range req.Values {
-				if v == "spot" {
-					return "spot"
+				if v == v1alpha1.CapacityTypeSpot {
+					return v1alpha1.CapacityTypeSpot
 				}
 			}
 		}
 	}
-	return "on-demand"
+	return v1alpha1.CapacityTypeOnDemand
 }
 
 // zonesFromRequirements extracts the allowed zones from a NodeClaim's requirements.
@@ -853,71 +923,103 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClaim *
 		return "", fmt.Errorf("missing required parameters for instance creation")
 	}
 
-	instanceType := instanceTypes[0]
-	image := images[0]
-	securityGroup := securityGroups[0]
+	ramRoleName, err := validateRAMRoleForCreate(nodeClass)
+	if err != nil {
+		return "", err
+	}
+	disks, err := v1alpha1.NormalizeDisks(nodeClass.Spec)
+	if err != nil {
+		return "", err
+	}
 
-	baseOpts := instance.CreateOptions{
-		InstanceType: instanceType.Name,
-		ImageID:      image.ID,
-		SecurityGroupIDs: []string{
-			securityGroup.ID,
-		},
-		UserData: userData,
-		Tags:     tags,
-		SystemDisk: instance.SystemDisk{
-			Category:         "cloud_essd",
-			Size:             40,
-			PerformanceLevel: "PL0",
-		},
+	securityGroupIDs := make([]string, 0, len(securityGroups))
+	for _, securityGroup := range securityGroups {
+		securityGroupIDs = append(securityGroupIDs, securityGroup.ID)
 	}
-	if nodeClass.Spec.SystemDisk != nil {
-		baseOpts.SystemDisk.Category = nodeClass.Spec.SystemDisk.Category
-		if nodeClass.Spec.SystemDisk.Size != nil {
-			baseOpts.SystemDisk.Size = *nodeClass.Spec.SystemDisk.Size
-		}
-		if nodeClass.Spec.SystemDisk.PerformanceLevel != nil {
-			baseOpts.SystemDisk.PerformanceLevel = *nodeClass.Spec.SystemDisk.PerformanceLevel
-		}
-	}
-	if nodeClass.Spec.DataDisks != nil {
-		baseOpts.DataDisks = []instance.DataDisk{}
-		for _, disk := range nodeClass.Spec.DataDisks {
-			dataDisk := instance.DataDisk{
-				Category: disk.Category,
-				Size:     disk.Size,
-			}
-			if disk.Device != nil {
-				dataDisk.Device = *disk.Device
-			}
-			if disk.PerformanceLevel != nil {
-				dataDisk.PerformanceLevel = *disk.PerformanceLevel
-			}
-			baseOpts.DataDisks = append(baseOpts.DataDisks, dataDisk)
-		}
-	}
-	// Derive capacity type from NodeClaim requirements (karpenter.sh/capacity-type).
-	// ECSNodeClass.Spec.SpotStrategy controls the algorithm only when spot is requested.
+	securityGroupIDs = securitygroups.NormalizeIDs(securityGroupIDs)
+
+	// Derive capacity type from NodeClaim requirements (karpenter.sh/capacity-type),
+	// then translate it into the ECS SpotStrategy request parameter. Both steps are
+	// centralized in pkg/utils/ecs so the spot semantics stay consistent everywhere.
 	capacityType := capacityTypeFromRequirements(nodeClaim.Spec.Requirements)
-	if capacityType == "spot" {
-		if nodeClass.Spec.SpotStrategy != nil {
-			baseOpts.SpotStrategy = *nodeClass.Spec.SpotStrategy
-		} else {
-			baseOpts.SpotStrategy = "SpotAsPriceGo"
+
+	// Build data disks once (independent of instance type).
+	var dataDisks []instance.DataDisk
+	if len(disks.DataDisks) > 0 {
+		dataDisks = make([]instance.DataDisk, 0, len(disks.DataDisks))
+		for _, disk := range disks.DataDisks {
+			dataDisks = append(dataDisks, instance.DataDisk{
+				Category:           disk.Category,
+				Size:               disk.Size,
+				Device:             disk.Device,
+				PerformanceLevel:   disk.PerformanceLevel,
+				Encrypted:          disk.Encrypted,
+				KMSKeyID:           disk.KMSKeyID,
+				SnapshotID:         disk.SnapshotID,
+				DeleteWithInstance: disk.DeleteWithInstance,
+			})
 		}
-		if nodeClass.Spec.SpotPriceLimit != nil {
+	}
+
+	// Outer loop: iterate instance types in Karpenter's priority order.
+	// For each instance type, try all vSwitches (inner fallback). This mirrors
+	// the upstream AWS provider behaviour — if the first instance type has no
+	// capacity in any zone, we fall back to the next best fit rather than
+	// failing the whole launch.
+	logger := log.FromContext(ctx)
+	var lastErr error
+	for _, it := range instanceTypes {
+		// Pick an image whose architecture matches this instance type. The
+		// NodeClass may resolve images for multiple architectures; blindly
+		// taking the first one can hand an arm64 instance an x86_64 image
+		// (or vice versa), which ECS rejects. For single-arch NodeClasses
+		// this is a no-op.
+		image := selectImageForArchitecture(images, it.Architecture)
+
+		baseOpts := instance.CreateOptions{
+			InstanceType:     it.Name,
+			ImageID:          image.ID,
+			SecurityGroupIDs: securityGroupIDs,
+			UserData:         userData,
+			Tags:             tags,
+			RAMRoleName:      ramRoleName,
+			MetadataOptions:  convertMetadataOptions(nodeClass.Spec.MetadataOptions),
+			SystemDisk: instance.SystemDisk{
+				Category:         disks.SystemDisk.Category,
+				Size:             disks.SystemDisk.Size,
+				PerformanceLevel: disks.SystemDisk.PerformanceLevel,
+				Encrypted:        disks.SystemDisk.Encrypted,
+				KMSKeyID:         disks.SystemDisk.KMSKeyID,
+			},
+			InstanceStorePolicy: disks.InstanceStorePolicy,
+			DataDisks:           dataDisks,
+			SpotStrategy:        ecsutil.SpotStrategyForCapacityType(capacityType, nodeClass.Spec.SpotStrategy),
+		}
+		if capacityType == v1alpha1.CapacityTypeSpot && nodeClass.Spec.SpotPriceLimit != nil {
 			baseOpts.SpotPriceLimit = *nodeClass.Spec.SpotPriceLimit
 		}
-	} else {
-		baseOpts.SpotStrategy = "NoSpot"
-	}
 
-	if c.clusterNetworkConfig != nil && c.clusterNetworkConfig.DualStack {
-		one := int32(1)
-		baseOpts.Ipv6AddressCount = &one
-	}
+		if c.clusterNetworkConfig != nil && c.clusterNetworkConfig.DualStack {
+			one := int32(1)
+			baseOpts.Ipv6AddressCount = &one
+		}
 
-	return vswitchFallbackCreate(ctx, baseOpts, vswitches, c.instanceProvider.Create)
+		instanceID, err := vswitchFallbackCreate(ctx, baseOpts, vswitches, c.instanceProvider.Create)
+		if err == nil {
+			return instanceID, nil
+		}
+
+		if errors.IsInsufficientCapacityError(err) {
+			logger.Info("instance type unavailable in all zones, trying next instance type",
+				"instanceType", it.Name, "error", err)
+			lastErr = err
+			continue
+		}
+		// Non-capacity errors (parameter, permission, etc.) fail fast — retrying
+		// a different instance type won't fix a bad parameter.
+		return "", fmt.Errorf("failed to create instance: %w", err)
+	}
+	return "", fmt.Errorf("all instance types exhausted across all zones (%d types tried), last error: %w", len(instanceTypes), lastErr)
 }
 
 // vswitchFallbackCreate tries vswitches in order, falling back to the next on capacity or IP-exhaustion
@@ -948,14 +1050,48 @@ func vswitchFallbackCreate(ctx context.Context, baseOpts instance.CreateOptions,
 	return "", fmt.Errorf("all vSwitches exhausted, last error: %w", lastErr)
 }
 
+func convertMetadataOptions(opts *v1alpha1.MetadataOptions) *instance.MetadataOptions {
+	if opts == nil {
+		return nil
+	}
+	converted := &instance.MetadataOptions{}
+	if opts.HttpEndpoint != nil && *opts.HttpEndpoint != "" {
+		endpoint := *opts.HttpEndpoint
+		converted.HttpEndpoint = &endpoint
+	}
+	if opts.HttpTokens != "" {
+		tokens := opts.HttpTokens
+		converted.HttpTokens = &tokens
+	}
+	if opts.HttpPutResponseHopLimit != nil {
+		hopLimit := *opts.HttpPutResponseHopLimit
+		converted.HttpPutResponseHopLimit = &hopLimit
+	}
+	return converted
+}
+
+func validateRAMRoleForCreate(nodeClass *v1alpha1.ECSNodeClass) (string, error) {
+	if nodeClass.Spec.Role == nil {
+		return "", nil
+	}
+	if nodeClass.Status.RAMRole == nil {
+		return "", fmt.Errorf("nodeclass status.ramRole is not resolved for spec.role %q", *nodeClass.Spec.Role)
+	}
+	if *nodeClass.Status.RAMRole != *nodeClass.Spec.Role {
+		return "", fmt.Errorf("nodeclass status.ramRole %q does not match spec.role %q; status may be stale", *nodeClass.Status.RAMRole, *nodeClass.Spec.Role)
+	}
+	return *nodeClass.Status.RAMRole, nil
+}
+
 func (c *CloudProvider) convertInstanceToNodeClaim(ctx context.Context, inst *instance.Instance, original *coreapis.NodeClaim, instanceTypes []*instancetype.InstanceType, clusterID string) *coreapis.NodeClaim {
-	labels := make(map[string]string)
 	// Find instance type info
 	var capacity corev1.ResourceList
 	var allocatable corev1.ResourceList
+	var matchedIT *instancetype.InstanceType
 
 	for _, it := range instanceTypes {
 		if it.Name == inst.InstanceType {
+			matchedIT = it
 			capacity, allocatable, _ = c.calculateCapacityAndAllocatable(ctx, it, clusterID)
 			break
 		}
@@ -966,17 +1102,8 @@ func (c *CloudProvider) convertInstanceToNodeClaim(ctx context.Context, inst *in
 	nodeClaim.Status.ProviderID = fmt.Sprintf("%s.%s", inst.Region, inst.InstanceID)
 	nodeClaim.Status.Capacity = capacity
 	nodeClaim.Status.Allocatable = allocatable
-
-	labels[corev1.LabelTopologyZone] = inst.Zone
-	labels[v1alpha1.LabelCapacityType] = inst.CapacityType
-	labels[v1alpha1.LabelInstanceType] = inst.InstanceType
-	labels[corev1.LabelArchStable] = ecsArchToKubernetesArch(inst.Architecture)
-	labels[corev1.LabelOSStable] = "linux"
-	labels[corev1.LabelInstanceTypeStable] = inst.InstanceType
-	if v, ok := inst.Tags[v1alpha1.TagNodePool]; ok {
-		labels[coreapis.NodePoolLabelKey] = v
-	}
-	nodeClaim.Labels = labels
+	nodeClaim.Status.ImageID = inst.ImageID
+	nodeClaim.Labels = instanceLabelsFromInstance(inst, matchedIT)
 	return nodeClaim
 }
 
@@ -1010,6 +1137,21 @@ func convertKubeletConfigToBootstrap(config *v1alpha1.KubeletConfiguration) *boo
 	}
 }
 
+// selectImageForArchitecture returns the first image whose architecture matches
+// the target Kubernetes arch value ("amd64"/"arm64"). Image.Architecture holds
+// the raw ECS API value (e.g. "x86_64"/"arm64"), so it is normalized through
+// ecsutil.KubeArchitecture before comparison. If no image matches (e.g. the
+// architecture field is empty on older resolved images), it falls back to the
+// first image to preserve the previous behaviour.
+func selectImageForArchitecture(images []v1alpha1.Image, targetArch string) v1alpha1.Image {
+	for _, img := range images {
+		if ecsutil.KubeArchitecture(img.Architecture) == targetArch {
+			return img
+		}
+	}
+	return images[0]
+}
+
 // Drift detection helper functions (from drift.go)
 
 func isImageAllowed(imageID string, allowedImages []v1alpha1.Image) bool {
@@ -1031,20 +1173,11 @@ func isVSwitchAllowed(vswitchID string, allowedVSwitches []v1alpha1.VSwitch) boo
 }
 
 func isSecurityGroupAllowed(instanceSGs []string, allowedSGs []v1alpha1.SecurityGroup) bool {
-	// Build allowed IDs map
-	allowedIDs := make(map[string]bool)
+	allowedIDs := make([]string, 0, len(allowedSGs))
 	for _, sg := range allowedSGs {
-		allowedIDs[sg.ID] = true
+		allowedIDs = append(allowedIDs, sg.ID)
 	}
-
-	// Check if all instance security groups are in the allowed list
-	for _, sgID := range instanceSGs {
-		if !allowedIDs[sgID] {
-			return false
-		}
-	}
-
-	return true
+	return securitygroups.EqualIDs(instanceSGs, allowedIDs)
 }
 
 // calculateNodeClassHash calculates a hash of the ECSNodeClass configuration
@@ -1061,6 +1194,10 @@ func calculateNodeClassHash(nodeClass *v1alpha1.ECSNodeClass) string {
 		Kubelet                    *v1alpha1.KubeletConfiguration       `json:"kubelet,omitempty"`
 		Tags                       map[string]string                    `json:"tags,omitempty"`
 		Role                       *string                              `json:"role,omitempty"`
+		MetadataOptions            *v1alpha1.MetadataOptions            `json:"metadataOptions,omitempty"`
+		SystemDisk                 *v1alpha1.SystemDiskSpec             `json:"systemDisk,omitempty"`
+		DataDisks                  []v1alpha1.DataDiskSpec              `json:"dataDisks,omitempty"`
+		InstanceStorePolicy        *string                              `json:"instanceStorePolicy,omitempty"`
 	}
 
 	hashInput := NodeClassHashInput{
@@ -1071,6 +1208,10 @@ func calculateNodeClassHash(nodeClass *v1alpha1.ECSNodeClass) string {
 		Kubelet:                    nodeClass.Spec.Kubelet,
 		Tags:                       nodeClass.Spec.Tags,
 		Role:                       nodeClass.Spec.Role,
+		MetadataOptions:            nodeClass.Spec.MetadataOptions,
+		SystemDisk:                 nodeClass.Spec.SystemDisk,
+		DataDisks:                  nodeClass.Spec.DataDisks,
+		InstanceStorePolicy:        nodeClass.Spec.InstanceStorePolicy,
 	}
 
 	// Serialize to JSON with deterministic ordering

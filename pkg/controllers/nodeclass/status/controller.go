@@ -65,6 +65,8 @@ const (
 	failedResolutionRequeueJitter = time.Minute
 )
 
+const defaultSecurityGroupAttachLimit = 5
+
 // NewController creates a new NodeClass status controller
 func NewController(
 	client client.Client,
@@ -227,7 +229,7 @@ func (c *Controller) resolveSelectorResources(nodeClass *v1alpha1.ECSNodeClass, 
 		resolveErr = fmt.Errorf("failed to resolve vswitches: %w", err)
 	} else if len(vswitches) == 0 {
 		c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionFalse,
-			"VSwitchResolutionFailed", "vswitch not found")
+			"VSwitchResolutionFailed", "vSwitchSelectorTerms resolved zero VSwitches")
 		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
 			"ResourceResolutionFailed", "VSwitch resolution failed")
 		resolveErr = fmt.Errorf("no vswitches found matching selector terms")
@@ -249,11 +251,19 @@ func (c *Controller) resolveSelectorResources(nodeClass *v1alpha1.ECSNodeClass, 
 		}
 	} else if len(securityGroups) == 0 {
 		c.setCondition(nodeClass, v1alpha1.ConditionTypeSecurityGroupResolved, metav1.ConditionFalse,
-			"SecurityGroupResolutionFailed", "security group not found")
+			"SecurityGroupResolutionFailed", "securityGroupSelectorTerms resolved zero security groups")
 		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
 			"ResourceResolutionFailed", "SecurityGroup resolution failed")
 		if resolveErr == nil {
 			resolveErr = fmt.Errorf("no security groups found matching selector terms")
+		}
+	} else if err := validateResolvedSecurityGroupAttachLimit(securityGroups); err != nil {
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeSecurityGroupResolved, metav1.ConditionFalse,
+			"SecurityGroupResolutionFailed", err.Error())
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			"ResourceResolutionFailed", "SecurityGroup resolution failed")
+		if resolveErr == nil {
+			resolveErr = err
 		}
 	} else {
 		nodeClass.Status.SecurityGroups = securityGroups
@@ -273,7 +283,7 @@ func (c *Controller) resolveSelectorResources(nodeClass *v1alpha1.ECSNodeClass, 
 		}
 	} else if len(images) == 0 {
 		c.setCondition(nodeClass, v1alpha1.ConditionTypeImageResolved, metav1.ConditionFalse,
-			"ImageResolutionFailed", "image not found")
+			"ImageResolutionFailed", "imageSelectorTerms resolved zero images")
 		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
 			"ResourceResolutionFailed", "Image resolution failed")
 		if resolveErr == nil {
@@ -339,6 +349,16 @@ func (c *Controller) isReady(nodeClass *v1alpha1.ECSNodeClass) bool {
 	}
 
 	return true
+}
+
+func validateResolvedSecurityGroupAttachLimit(securityGroups []v1alpha1.SecurityGroup) error {
+	if len(securityGroups) < 1 {
+		return fmt.Errorf("securityGroupSelectorTerms resolved zero security groups")
+	}
+	if len(securityGroups) > defaultSecurityGroupAttachLimit {
+		return fmt.Errorf("securityGroupSelectorTerms resolved %d security groups, exceeding attach limit %d", len(securityGroups), defaultSecurityGroupAttachLimit)
+	}
+	return nil
 }
 
 // getCondition gets a condition from the ECSNodeClass

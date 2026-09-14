@@ -92,9 +92,12 @@ func InitializeClusterNetworkConfig(csClient clients.CSClient, clusterID string)
 			}
 		}
 		if detail.Body.IpStack != nil {
-			// When a cluster has IPv6 dual-stack enabled, the IpStack field is
-			// reported as "dual" (not "ipv6"). Only "dual" indicates dual-stack.
-			if strings.EqualFold(strings.TrimSpace(*detail.Body.IpStack), "dual") {
+			// A cluster with IPv6 enabled reports IpStack as either "dual" or
+			// "ipv6" depending on the ACK cluster mode; both mean IPv6 is on and
+			// require assigning an IPv6 address to provisioned nodes. Treat both
+			// enum values as dual-stack. Anything else (e.g. "ipv4"/empty) is not.
+			switch strings.ToLower(strings.TrimSpace(*detail.Body.IpStack)) {
+			case "dual", "ipv6":
 				dualStack = true
 			}
 		}

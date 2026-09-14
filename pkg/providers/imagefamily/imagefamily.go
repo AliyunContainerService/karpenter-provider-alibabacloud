@@ -19,12 +19,13 @@ package imagefamily
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // Provider handles image operations for Alibaba Cloud
@@ -34,6 +35,17 @@ type Provider struct {
 	cacheMu   sync.RWMutex
 	cacheTTL  time.Duration
 }
+
+type ImageQuery struct {
+	ID              string
+	ImageFamily     string
+	Name            string
+	ImageOwnerAlias string
+	ImageOwnerID    string
+	Tags            map[string]string
+}
+
+var imageOwnerIDRegex = regexp.MustCompile(`^[1-9][0-9]{5,19}$`)
 
 // CacheEntry represents a cached result with expiration
 type CacheEntry struct {
@@ -104,8 +116,6 @@ func (p *Provider) setCachedValue(key string, value interface{}) {
 
 // Resolve resolves image selectors to actual images
 func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.ImageSelectorTerm) ([]v1alpha1.Image, error) {
-	logger := log.FromContext(ctx)
-
 	// If no selector terms, return empty list
 	if len(terms) == 0 {
 		return []v1alpha1.Image{}, nil
@@ -121,44 +131,16 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.ImageSelectorTe
 
 	var result []v1alpha1.Image
 
-	// Process each selector term
-	for _, term := range terms {
-		// If image family is specified, use it as a filter
-		if term.ImageFamily != nil {
-			filters := map[string]string{
-				"ImageFamily": *term.ImageFamily,
-			}
-			images, err := p.ecsClient.DescribeImages(ctx, nil, filters)
-			if err != nil {
-				return nil, fmt.Errorf("failed to describe images by family %s: %w", *term.ImageFamily, err)
-			}
-
-			for _, img := range images {
-				result = append(result, v1alpha1.Image{
-					ID:           *img.ImageId,
-					Name:         *img.ImageName,
-					Architecture: *img.Architecture,
-				})
-			}
-		} else if term.ID != nil {
-			// Direct ID reference
-			images, err := p.ecsClient.DescribeImages(ctx, []string{*term.ID}, nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to describe image by ID %s: %w", *term.ID, err)
-			}
-
-			for _, img := range images {
-				result = append(result, v1alpha1.Image{
-					ID:           *img.ImageId,
-					Name:         *img.ImageName,
-					Architecture: *img.Architecture,
-				})
-			}
-		} else if term.Name != nil {
-			// Name-based selection would require a different API call
-			// For now, we'll skip this as it's not commonly used
-			logger.Info("Image name-based selection is not implemented", "name", *term.Name)
+	for i, term := range terms {
+		query := imageQueryFromTerm(term)
+		if query.ImageOwnerID != "" && !imageOwnerIDRegex.MatchString(query.ImageOwnerID) {
+			return nil, fmt.Errorf("resolve imageSelectorTerms[%d]: imageOwnerID %q is invalid", i, query.ImageOwnerID)
 		}
+		images, err := p.getByQuery(ctx, query)
+		if err != nil {
+			return nil, fmt.Errorf("resolve imageSelectorTerms[%d]: %w", i, err)
+		}
+		result = append(result, images...)
 	}
 
 	// Remove duplicates
@@ -170,17 +152,87 @@ func (p *Provider) Resolve(ctx context.Context, terms []v1alpha1.ImageSelectorTe
 	return result, nil
 }
 
+func imageQueryFromTerm(term v1alpha1.ImageSelectorTerm) ImageQuery {
+	query := ImageQuery{Tags: term.Tags}
+	if term.ID != nil {
+		query.ID = *term.ID
+	}
+	if term.ImageFamily != nil {
+		query.ImageFamily = *term.ImageFamily
+	}
+	if term.Name != nil {
+		query.Name = *term.Name
+	}
+	if term.ImageOwnerAlias != nil {
+		query.ImageOwnerAlias = *term.ImageOwnerAlias
+	}
+	if term.ImageOwnerID != nil {
+		query.ImageOwnerID = *term.ImageOwnerID
+	}
+	return query
+}
+
+func (p *Provider) getByQuery(ctx context.Context, query ImageQuery) ([]v1alpha1.Image, error) {
+	imageIDs := []string(nil)
+	filters := map[string]string{}
+	if query.ID != "" {
+		imageIDs = []string{query.ID}
+	}
+	if query.ImageFamily != "" {
+		filters["ImageFamily"] = query.ImageFamily
+	}
+	if query.Name != "" {
+		filters["ImageName"] = query.Name
+	}
+	if query.ImageOwnerAlias != "" {
+		filters["ImageOwnerAlias"] = query.ImageOwnerAlias
+	}
+	if query.ImageOwnerID != "" {
+		filters["ImageOwnerID"] = query.ImageOwnerID
+	}
+	for k, v := range query.Tags {
+		filters["tag:"+k] = v
+	}
+	if len(filters) == 0 {
+		filters = nil
+	}
+
+	images, err := p.ecsClient.DescribeImages(ctx, imageIDs, filters)
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe images: %w", err)
+	}
+
+	result := make([]v1alpha1.Image, 0, len(images))
+	for _, img := range images {
+		if img.ImageId == nil {
+			continue
+		}
+		image := v1alpha1.Image{ID: *img.ImageId}
+		if img.ImageName != nil {
+			image.Name = *img.ImageName
+		}
+		if img.Architecture != nil {
+			image.Architecture = *img.Architecture
+		}
+		result = append(result, image)
+	}
+	return result, nil
+}
+
 // removeDuplicateImages removes duplicate images from a slice
 func removeDuplicateImages(images []v1alpha1.Image) []v1alpha1.Image {
 	seen := make(map[string]bool)
 	var result []v1alpha1.Image
 
 	for _, img := range images {
-		if !seen[img.ID] {
+		if img.ID != "" && !seen[img.ID] {
 			seen[img.ID] = true
 			result = append(result, img)
 		}
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].ID < result[j].ID
+	})
 
 	return result
 }

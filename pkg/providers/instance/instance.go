@@ -29,6 +29,8 @@ import (
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/batcher"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/errors"
+	ecsutil "github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/utils/ecs"
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/utils/securitygroups"
 	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"github.com/alibabacloud-go/tea/tea"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -63,8 +65,17 @@ type CreateOptions struct {
 	DataDisks           []DataDisk
 	SpotStrategy        string
 	SpotPriceLimit      float64
+	RAMRoleName         string
+	MetadataOptions     *MetadataOptions
 	InstanceStorePolicy *string // Add instance store policy field
 	Ipv6AddressCount    *int32
+}
+
+// MetadataOptions represents metadata service options for instance creation.
+type MetadataOptions struct {
+	HttpEndpoint            *string
+	HttpTokens              *string
+	HttpPutResponseHopLimit *int32
 }
 
 // SystemDisk represents system disk configuration
@@ -72,14 +83,20 @@ type SystemDisk struct {
 	Category         string
 	Size             int32
 	PerformanceLevel string
+	Encrypted        *bool
+	KMSKeyID         string
 }
 
 // DataDisk represents data disk configuration
 type DataDisk struct {
-	Category         string
-	Size             int32
-	PerformanceLevel string
-	Device           string
+	Category           string
+	Size               int32
+	PerformanceLevel   string
+	Encrypted          *bool
+	KMSKeyID           string
+	SnapshotID         string
+	DeleteWithInstance *bool
+	Device             string
 }
 
 // Instance represents an ECS instance
@@ -184,17 +201,23 @@ func (p *Provider) deleteCachedInstance(instanceID string) {
 func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, error) {
 	logger := log.FromContext(ctx)
 
-	// Create instance request
-	request := &ecs.RunInstancesRequest{
-		RegionId:     tea.String(p.region),
-		InstanceType: tea.String(opts.InstanceType),
-		ImageId:      tea.String(opts.ImageID),
-		VSwitchId:    tea.String(opts.VSwitchID),
+	securityGroupIDs := securitygroups.NormalizeIDs(opts.SecurityGroupIDs)
+	if len(securityGroupIDs) == 0 {
+		return "", fmt.Errorf("at least one security group ID is required")
+	}
+	for _, id := range securityGroupIDs {
+		if id == "" {
+			return "", fmt.Errorf("security group ID cannot be empty")
+		}
 	}
 
-	// Set security group IDs
-	if len(opts.SecurityGroupIDs) > 0 {
-		request.SecurityGroupId = tea.String(opts.SecurityGroupIDs[0])
+	// Create instance request
+	request := &ecs.RunInstancesRequest{
+		RegionId:         tea.String(p.region),
+		InstanceType:     tea.String(opts.InstanceType),
+		ImageId:          tea.String(opts.ImageID),
+		VSwitchId:        tea.String(opts.VSwitchID),
+		SecurityGroupIds: tea.StringSlice(securityGroupIDs),
 	}
 
 	if opts.SpotStrategy != "" {
@@ -209,10 +232,29 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 		request.Ipv6AddressCount = opts.Ipv6AddressCount
 	}
 
+	if opts.RAMRoleName != "" {
+		request.RamRoleName = tea.String(opts.RAMRoleName)
+	}
+
+	applyMetadataOptions(request, opts.MetadataOptions)
+
 	// Set system disk
 	request.SystemDisk = &ecs.RunInstancesRequestSystemDisk{
 		Category: tea.String(opts.SystemDisk.Category),
 		Size:     tea.String(fmt.Sprintf("%d", opts.SystemDisk.Size)),
+	}
+	if opts.SystemDisk.Category == "cloud_essd" {
+		performanceLevel := opts.SystemDisk.PerformanceLevel
+		if performanceLevel == "" {
+			performanceLevel = "PL0"
+		}
+		request.SystemDisk.PerformanceLevel = tea.String(performanceLevel)
+	}
+	if boolValue(opts.SystemDisk.Encrypted) {
+		request.SystemDisk.Encrypted = tea.String("true")
+		if opts.SystemDisk.KMSKeyID != "" {
+			request.SystemDisk.KMSKeyId = tea.String(opts.SystemDisk.KMSKeyID)
+		}
 	}
 
 	// Set data disks
@@ -226,8 +268,24 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 			if disk.Device != "" {
 				dataDisk.Device = tea.String(disk.Device)
 			}
-			if disk.PerformanceLevel != "" {
-				dataDisk.PerformanceLevel = tea.String(disk.PerformanceLevel)
+			if disk.Category == "cloud_essd" {
+				performanceLevel := disk.PerformanceLevel
+				if performanceLevel == "" {
+					performanceLevel = "PL0"
+				}
+				dataDisk.PerformanceLevel = tea.String(performanceLevel)
+			}
+			if boolValue(disk.Encrypted) {
+				dataDisk.Encrypted = tea.String("true")
+				if disk.KMSKeyID != "" {
+					dataDisk.KMSKeyId = tea.String(disk.KMSKeyID)
+				}
+			}
+			if disk.SnapshotID != "" {
+				dataDisk.SnapshotId = tea.String(disk.SnapshotID)
+			}
+			if disk.DeleteWithInstance != nil && !*disk.DeleteWithInstance {
+				dataDisk.DeleteWithInstance = tea.Bool(false)
 			}
 			dataDisks = append(dataDisks, dataDisk)
 		}
@@ -240,16 +298,27 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 		request.UserData = tea.String(base64.StdEncoding.EncodeToString([]byte(opts.UserData)))
 	}
 
-	// Set tags
+	// Set tags — ECS RunInstances accepts at most MaxTagsPerRequest (20) tags.
+	// Split into batches: the first batch goes into RunInstances, any remaining
+	// batches are applied after creation via TagResources. See GH issue #14.
+	var deferredTagBatches []map[string]string
 	if len(opts.Tags) > 0 {
-		var tags []*ecs.RunInstancesRequestTag
-		for key, value := range opts.Tags {
-			tags = append(tags, &ecs.RunInstancesRequestTag{
-				Key:   tea.String(key),
-				Value: tea.String(value),
-			})
+		batches := ecsutil.BatchTags(opts.Tags)
+		// First batch goes into RunInstances request
+		if len(batches) > 0 {
+			var tags []*ecs.RunInstancesRequestTag
+			for key, value := range batches[0] {
+				tags = append(tags, &ecs.RunInstancesRequestTag{
+					Key:   tea.String(key),
+					Value: tea.String(value),
+				})
+			}
+			request.Tag = tags
 		}
-		request.Tag = tags
+		// Remaining batches will be applied after instance creation
+		if len(batches) > 1 {
+			deferredTagBatches = batches[1:]
+		}
 	}
 
 	// Handle instance store policy if specified
@@ -293,17 +362,47 @@ func (p *Provider) Create(ctx context.Context, opts CreateOptions) (string, erro
 	instanceID := *response.Body.InstanceIdSets.InstanceIdSet[0]
 	logger.Info("created instance", "instanceID", instanceID)
 
+	// Apply any remaining tag batches that exceeded RunInstances' 20-tag limit
+	for i, batch := range deferredTagBatches {
+		if err := p.TagInstance(ctx, instanceID, batch); err != nil {
+			logger.Error(err, "failed to apply deferred tag batch",
+				"instanceID", instanceID, "batch", i+2, "totalDeferred", len(deferredTagBatches))
+			// Log but don't fail creation — the instance exists; tagging controller will reconcile
+		}
+	}
+
 	return instanceID, nil
 }
 
+func boolValue(value *bool) bool {
+	return value != nil && *value
+}
+
+func applyMetadataOptions(req *ecs.RunInstancesRequest, opts *MetadataOptions) {
+	if opts == nil {
+		return
+	}
+	if opts.HttpEndpoint != nil && *opts.HttpEndpoint != "" {
+		req.HttpEndpoint = tea.String(*opts.HttpEndpoint)
+	}
+	if opts.HttpTokens != nil && *opts.HttpTokens != "" {
+		req.HttpTokens = tea.String(*opts.HttpTokens)
+	}
+	if opts.HttpPutResponseHopLimit != nil {
+		req.HttpPutResponseHopLimit = tea.Int32(*opts.HttpPutResponseHopLimit)
+	}
+}
+
 // Get retrieves an ECS instance by ID
-func (p *Provider) Get(ctx context.Context, instanceID string) (*Instance, error) {
+func (p *Provider) Get(ctx context.Context, instanceID string, skipCache bool) (*Instance, error) {
 	logger := log.FromContext(ctx)
 
-	// First check cache
-	if instance, exists := p.getCachedInstance(instanceID); exists {
-		logger.Info("Found instance in cache", "instanceID", instanceID)
-		return instance, nil
+	// First check cache (unless skipCache is true)
+	if !skipCache {
+		if instance, exists := p.getCachedInstance(instanceID); exists {
+			logger.Info("Found instance in cache", "instanceID", instanceID)
+			return instance, nil
+		}
 	}
 
 	// 使用批处理机制来减少API调用
@@ -367,20 +466,11 @@ func (p *Provider) Get(ctx context.Context, instanceID string) (*Instance, error
 	storage := resource.MustParse("0") // Storage is not directly available in DescribeInstances response
 	gpuMem := resource.MustParse("0")  // GPUMem is not directly available in DescribeInstances response
 
-	// Get architecture from instance type
-	architecture := "amd64"
-	if strings.HasPrefix(*inst.InstanceType, "ecs.gn") || strings.HasPrefix(*inst.InstanceType, "ecs.cu") {
-		architecture = "arm64"
-	}
+	// DescribeInstances does not return CpuArchitecture, so infer it from the
+	// instance-type family (centralized heuristic in pkg/utils/ecs).
+	architecture := ecsutil.ArchitectureFromInstanceType(derefString(inst.InstanceType))
 
-	var capacityType string
-	if *inst.InstanceChargeType == "PostPaid" {
-		capacityType = "on-demand"
-	} else if *inst.InstanceChargeType == "PrePaid" {
-		capacityType = "pre-paid"
-	} else if inst.SpotStrategy != nil && *inst.SpotStrategy != "" && *inst.SpotStrategy != "NoSpot" {
-		capacityType = "spot"
-	}
+	capacityType := ecsutil.CapacityTypeFromInstance(derefString(inst.InstanceChargeType), derefString(inst.SpotStrategy))
 
 	securityGroupIds := []string{}
 	if inst.SecurityGroupIds != nil && inst.SecurityGroupIds.SecurityGroupId != nil {
@@ -585,24 +675,13 @@ func (p *Provider) List(ctx context.Context, tags map[string]string) ([]*Instanc
 			gpu := resource.MustParse(fmt.Sprintf("%d", gpuAmount))
 			gpuMem := resource.MustParse("0") // GPUMem is not directly available in DescribeInstances response
 
-			// Get architecture from instance type
-			architecture := "amd64"
-			instType := derefString(inst.InstanceType)
-			if strings.HasPrefix(instType, "ecs.gn") || strings.HasPrefix(instType, "ecs.cu") {
-				architecture = "arm64"
-			}
+			// DescribeInstances does not return CpuArchitecture, so infer it from
+			// the instance-type family (centralized heuristic in pkg/utils/ecs).
+			architecture := ecsutil.ArchitectureFromInstanceType(derefString(inst.InstanceType))
 
-			// Determine capacity type
-			var capacityType string
-			chargeType := derefString(inst.InstanceChargeType)
-			spotStrategy := derefString(inst.SpotStrategy)
-			if chargeType == "PostPaid" {
-				capacityType = "on-demand"
-			} else if chargeType == "PrePaid" {
-				capacityType = "pre-paid"
-			} else if spotStrategy != "" && spotStrategy != "NoSpot" {
-				capacityType = "spot"
-			}
+			// Determine capacity type (spot instances report PostPaid, so this is
+			// centralized in pkg/utils/ecs to keep the spot-first ordering correct).
+			capacityType := ecsutil.CapacityTypeFromInstance(derefString(inst.InstanceChargeType), derefString(inst.SpotStrategy))
 
 			securityGroupIds := []string{}
 			if inst.SecurityGroupIds != nil && inst.SecurityGroupIds.SecurityGroupId != nil {
@@ -665,36 +744,62 @@ func (p *Provider) List(ctx context.Context, tags map[string]string) ([]*Instanc
 	return allInstances, nil
 }
 
-// TagInstance tags an ECS instance with the given tags
+// TagInstance tags an ECS instance with the given tags.
+// If the number of tags exceeds MaxTagsPerRequest (20), the tags are automatically
+// split into multiple API requests to comply with Alibaba Cloud ECS API limits.
 func (p *Provider) TagInstance(ctx context.Context, instanceID string, tags map[string]string) error {
-	logger := log.FromContext(ctx)
-
-	// Create tag resources request
-	request := &ecs.TagResourcesRequest{
-		RegionId:     tea.String(p.region),
-		ResourceType: tea.String("instance"),
-		ResourceId:   []*string{tea.String(instanceID)},
+	if len(tags) == 0 {
+		return nil
 	}
 
-	// Convert tags to ECS format
-	var ecsTags []*ecs.TagResourcesRequestTag
+	logger := log.FromContext(ctx)
+
+	// Split tags into batches of MaxTagsPerRequest to comply with ECS API limits
+	batches := ecsutil.BatchTags(tags)
+
+	logger.V(1).Info("tagging instance", "instanceID", instanceID, "totalTags", len(tags), "batches", len(batches))
+
+	// Apply each batch
+	for i, batch := range batches {
+		request := &ecs.TagResourcesRequest{
+			RegionId:     tea.String(p.region),
+			ResourceType: tea.String("instance"),
+			ResourceId:   []*string{tea.String(instanceID)},
+			Tag:          convertToTagResourcesRequestTags(batch),
+		}
+
+		if _, err := p.ecsClient.TagResources(ctx, request); err != nil {
+			logger.Error(err, "failed to tag instance",
+				"instanceID", instanceID,
+				"batch", i+1,
+				"totalBatches", len(batches),
+				"tagsInBatch", batch,
+			)
+			return fmt.Errorf("failed to tag instance %s (batch %d/%d): %w", instanceID, i+1, len(batches), err)
+		}
+
+		logger.V(1).Info("tagged instance batch",
+			"instanceID", instanceID,
+			"batch", i+1,
+			"totalBatches", len(batches),
+			"tagsInBatch", len(batch),
+		)
+	}
+
+	logger.Info("tagged instance", "instanceID", instanceID, "totalTags", len(tags))
+	return nil
+}
+
+// convertToTagResourcesRequestTags converts a tag map to TagResourcesRequestTag slice
+func convertToTagResourcesRequestTags(tags map[string]string) []*ecs.TagResourcesRequestTag {
+	result := make([]*ecs.TagResourcesRequestTag, 0, len(tags))
 	for key, value := range tags {
-		ecsTags = append(ecsTags, &ecs.TagResourcesRequestTag{
+		result = append(result, &ecs.TagResourcesRequestTag{
 			Key:   tea.String(key),
 			Value: tea.String(value),
 		})
 	}
-	request.Tag = ecsTags
-
-	// Execute request
-	_, err := p.ecsClient.TagResources(ctx, request)
-	if err != nil {
-		logger.Error(err, "failed to tag instance", "instanceID", instanceID, "tags", tags)
-		return fmt.Errorf("failed to tag instance %s: %w", instanceID, err)
-	}
-
-	logger.Info("tagged instance", "instanceID", instanceID, "tags", tags)
-	return nil
+	return result
 }
 
 // convertTags converts ECS tags to map

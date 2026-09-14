@@ -157,14 +157,16 @@ var _ = Describe("Scheduling", func() {
 		instanceType := testInstanceTypes()[0]
 		nodePool.Spec.Template.Spec.Requirements = withInstanceTypeRequirements(instanceType)
 		pod := schedulingPod("well-known-labels", map[string]string{
-			karpv1.NodePoolLabelKey:          nodePool.Name,
-			corev1.LabelInstanceTypeStable:   instanceType,
-			v1alpha1.LabelInstanceFamily:     instanceFamily(instanceType),
-			v1alpha1.LabelInstanceCategory:   instanceCategory(instanceType),
-			v1alpha1.LabelInstanceGeneration: instanceGeneration(instanceType),
-			v1alpha1.LabelInstanceSize:       instanceSize(instanceType),
-			corev1.LabelOSStable:             v1alpha1.OSLinux,
-			v1alpha1.LabelCapacityType:       v1alpha1.CapacityTypeOnDemand,
+			karpv1.NodePoolLabelKey:               nodePool.Name,
+			corev1.LabelInstanceTypeStable:        instanceType,
+			v1alpha1.LabelInstanceFamily:          instanceFamily(instanceType),
+			v1alpha1.LabelInstanceFamilyCanonical: instanceFamily(instanceType),
+			v1alpha1.LabelInstanceCategory:        instanceCategory(instanceType),
+			v1alpha1.LabelInstanceGeneration:      instanceGeneration(instanceType),
+			v1alpha1.LabelInstanceSize:            instanceSize(instanceType),
+			v1alpha1.LabelInstanceSizeCanonical:   instanceSize(instanceType),
+			corev1.LabelOSStable:                  v1alpha1.OSLinux,
+			v1alpha1.LabelCapacityType:            v1alpha1.CapacityTypeOnDemand,
 		}, corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("100m"),
 			corev1.ResourceMemory: resource.MustParse("128Mi"),
@@ -174,7 +176,12 @@ var _ = Describe("Scheduling", func() {
 		env.EventuallyExpectHealthy(pod)
 		node := env.EventuallyExpectCreatedNodeCount("==", 1)[0]
 		Expect(node.Labels).To(HaveKeyWithValue(corev1.LabelInstanceTypeStable, instanceType))
+		Expect(node.Labels).To(HaveKeyWithValue(v1alpha1.LabelInstanceFamily, instanceFamily(instanceType)))
+		Expect(node.Labels).To(HaveKeyWithValue(v1alpha1.LabelInstanceFamilyCanonical, instanceFamily(instanceType)))
 		Expect(node.Labels).To(HaveKeyWithValue(v1alpha1.LabelInstanceCategory, instanceCategory(instanceType)))
+		Expect(node.Labels).To(HaveKeyWithValue(v1alpha1.LabelInstanceGeneration, instanceGeneration(instanceType)))
+		Expect(node.Labels).To(HaveKeyWithValue(v1alpha1.LabelInstanceSize, instanceSize(instanceType)))
+		Expect(node.Labels).To(HaveKeyWithValue(v1alpha1.LabelInstanceSizeCanonical, instanceSize(instanceType)))
 	})
 
 	It("should provision nodes for pods with zone requirements in the correct zone", Label("zone"), func() {
@@ -467,7 +474,7 @@ func testInstanceTypes() []string {
 	if values := envList("TEST_INSTANCE_TYPES"); len(values) > 0 {
 		return values
 	}
-	return []string{"ecs.c9i.large", "ecs.c9i.xlarge"}
+	return []string{"ecs.g7.large", "ecs.g7.xlarge"}
 }
 
 func capacityReservationInstanceTypes() []string {

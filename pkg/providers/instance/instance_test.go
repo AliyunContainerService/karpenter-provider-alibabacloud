@@ -18,6 +18,7 @@ package instance
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"testing"
@@ -70,7 +71,7 @@ func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, f
 	panic("implement me")
 }
 
-func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
+func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, id string, name string, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -160,10 +161,63 @@ func TestCreate(t *testing.T) {
 			},
 		},
 		{
+			name: "sets RAM role name",
+			opts: CreateOptions{
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: []string{"sg-123"},
+				RAMRoleName:      "KarpenterNodeRole",
+				SystemDisk: SystemDisk{
+					Category: "cloud_essd",
+					Size:     40,
+				},
+			},
+			mockSetup: func(m *MockECSClient) {
+				instanceID := "i-123456"
+				response := &ecs.RunInstancesResponse{
+					Body: &ecs.RunInstancesResponseBody{
+						InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
+							InstanceIdSet: []*string{&instanceID},
+						},
+					},
+				}
+				m.On("RunInstances", mock.Anything, mock.MatchedBy(func(request *ecs.RunInstancesRequest) bool {
+					return request.RamRoleName != nil && *request.RamRoleName == "KarpenterNodeRole"
+				})).Return(response, nil)
+			},
+		},
+		{
+			name: "encodes user data exactly once",
+			opts: CreateOptions{
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: []string{"sg-123"},
+				UserData:         "#!/bin/bash\necho bootstrap\necho custom",
+			},
+			mockSetup: func(m *MockECSClient) {
+				instanceID := "i-123456"
+				response := &ecs.RunInstancesResponse{
+					Body: &ecs.RunInstancesResponseBody{
+						InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
+							InstanceIdSet: []*string{&instanceID},
+						},
+					},
+				}
+				expected := base64.StdEncoding.EncodeToString([]byte("#!/bin/bash\necho bootstrap\necho custom"))
+				m.On("RunInstances", mock.Anything, mock.MatchedBy(func(request *ecs.RunInstancesRequest) bool {
+					return request.UserData != nil && *request.UserData == expected
+				})).Return(response, nil)
+			},
+		},
+		{
 			name: "API error",
 			opts: CreateOptions{
-				InstanceType: "ecs.g6.large",
-				ImageID:      "img-123",
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: []string{"sg-123"},
 			},
 			mockSetup: func(m *MockECSClient) {
 				m.On("RunInstances", mock.Anything, mock.Anything).Return(nil, errors.New("API error"))
@@ -190,6 +244,200 @@ func TestCreate(t *testing.T) {
 			mockClient.AssertExpectations(t)
 		})
 	}
+}
+
+func TestCreateSecurityGroupIDs(t *testing.T) {
+	tests := []struct {
+		name               string
+		securityGroupIDs   []string
+		expectedRequestIDs []string
+		expectError        string
+		expectAPICall      bool
+	}{
+		{
+			name:               "single security group uses repeated field",
+			securityGroupIDs:   []string{"sg-1"},
+			expectedRequestIDs: []string{"sg-1"},
+			expectAPICall:      true,
+		},
+		{
+			name:               "multiple security groups are normalized before request",
+			securityGroupIDs:   []string{"sg-2", "sg-1", "sg-2"},
+			expectedRequestIDs: []string{"sg-1", "sg-2"},
+			expectAPICall:      true,
+		},
+		{
+			name:          "zero security groups are rejected before ECS call",
+			expectError:   "at least one security group ID is required",
+			expectAPICall: false,
+		},
+		{
+			name:             "empty security group ID is rejected before ECS call",
+			securityGroupIDs: []string{"sg-1", ""},
+			expectError:      "security group ID cannot be empty",
+			expectAPICall:    false,
+		},
+		{
+			name:               "more than five security groups are sent to ECS",
+			securityGroupIDs:   []string{"sg-6", "sg-5", "sg-4", "sg-3", "sg-2", "sg-1"},
+			expectedRequestIDs: []string{"sg-1", "sg-2", "sg-3", "sg-4", "sg-5", "sg-6"},
+			expectAPICall:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := new(MockECSClient)
+			if tt.expectAPICall {
+				instanceID := "i-123456"
+				response := &ecs.RunInstancesResponse{
+					Body: &ecs.RunInstancesResponseBody{
+						InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
+							InstanceIdSet: []*string{&instanceID},
+						},
+					},
+				}
+				mockClient.On("RunInstances", mock.Anything, mock.MatchedBy(func(request *ecs.RunInstancesRequest) bool {
+					assert.Nil(t, request.SecurityGroupId)
+					assert.Equal(t, tt.expectedRequestIDs, stringPointersToValues(request.SecurityGroupIds))
+					return true
+				})).Return(response, nil)
+			}
+
+			provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+			_, err := provider.Create(context.Background(), CreateOptions{
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: tt.securityGroupIDs,
+				SystemDisk: SystemDisk{
+					Category: "cloud_essd",
+					Size:     40,
+				},
+			})
+
+			if tt.expectError != "" {
+				assert.ErrorContains(t, err, tt.expectError)
+			} else {
+				assert.NoError(t, err)
+			}
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestCreatePreservesECSSecurityGroupErrorDetails(t *testing.T) {
+	mockClient := new(MockECSClient)
+	mockClient.On("RunInstances", mock.Anything, mock.Anything).Return(nil, errors.New("InvalidSecurityGroupLimitExceeded: attach limit exceeded"))
+
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	_, err := provider.Create(context.Background(), CreateOptions{
+		InstanceType:     "ecs.g6.large",
+		ImageID:          "img-123",
+		VSwitchID:        "vsw-123",
+		SecurityGroupIDs: []string{"sg-1", "sg-2", "sg-3", "sg-4", "sg-5", "sg-6"},
+		SystemDisk: SystemDisk{
+			Category: "cloud_essd",
+			Size:     40,
+		},
+	})
+
+	assert.ErrorContains(t, err, "failed to create instance")
+	assert.ErrorContains(t, err, "InvalidSecurityGroupLimitExceeded")
+	assert.ErrorContains(t, err, "attach limit exceeded")
+	mockClient.AssertExpectations(t)
+}
+
+func TestCreateDiskOptionsOmitSendSemantics(t *testing.T) {
+	encrypted := true
+	deleteWithInstanceFalse := false
+	mockClient := new(MockECSClient)
+	instanceID := "i-123456"
+	response := &ecs.RunInstancesResponse{
+		Body: &ecs.RunInstancesResponseBody{
+			InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
+				InstanceIdSet: []*string{&instanceID},
+			},
+		},
+	}
+	mockClient.On("RunInstances", mock.Anything, mock.MatchedBy(func(request *ecs.RunInstancesRequest) bool {
+		assert.Equal(t, "cloud_essd", *request.SystemDisk.Category)
+		assert.Equal(t, "40", *request.SystemDisk.Size)
+		assert.Equal(t, "PL0", *request.SystemDisk.PerformanceLevel)
+		assert.Equal(t, "true", *request.SystemDisk.Encrypted)
+		assert.Equal(t, "kms-system", *request.SystemDisk.KMSKeyId)
+
+		if assert.Len(t, request.DataDisk, 2) {
+			essd := request.DataDisk[0]
+			assert.Equal(t, "cloud_essd", *essd.Category)
+			assert.Equal(t, int32(120), *essd.Size)
+			assert.Equal(t, "/dev/xvdb", *essd.Device)
+			assert.Equal(t, "PL1", *essd.PerformanceLevel)
+			assert.Equal(t, "true", *essd.Encrypted)
+			assert.Equal(t, "kms-data", *essd.KMSKeyId)
+			assert.Equal(t, "s-123", *essd.SnapshotId)
+			assert.Equal(t, false, *essd.DeleteWithInstance)
+
+			ssd := request.DataDisk[1]
+			assert.Equal(t, "cloud_ssd", *ssd.Category)
+			assert.Equal(t, int32(80), *ssd.Size)
+			assert.Nil(t, ssd.PerformanceLevel)
+			assert.Nil(t, ssd.Encrypted)
+			assert.Nil(t, ssd.KMSKeyId)
+			assert.Nil(t, ssd.SnapshotId)
+			assert.Nil(t, ssd.Device)
+			assert.Nil(t, ssd.DeleteWithInstance)
+		}
+		return true
+	})).Return(response, nil)
+
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	_, err := provider.Create(context.Background(), CreateOptions{
+		InstanceType:     "ecs.g6.large",
+		ImageID:          "img-123",
+		VSwitchID:        "vsw-123",
+		SecurityGroupIDs: []string{"sg-123"},
+		SystemDisk: SystemDisk{
+			Category:         "cloud_essd",
+			Size:             40,
+			PerformanceLevel: "PL0",
+			Encrypted:        &encrypted,
+			KMSKeyID:         "kms-system",
+		},
+		DataDisks: []DataDisk{
+			{
+				Category:           "cloud_essd",
+				Size:               120,
+				Device:             "/dev/xvdb",
+				PerformanceLevel:   "PL1",
+				Encrypted:          &encrypted,
+				KMSKeyID:           "kms-data",
+				SnapshotID:         "s-123",
+				DeleteWithInstance: &deleteWithInstanceFalse,
+			},
+			{
+				Category: "cloud_ssd",
+				Size:     80,
+			},
+		},
+	})
+	assert.NoError(t, err)
+	mockClient.AssertExpectations(t)
+}
+
+func stringPointersToValues(values []*string) []string {
+	if values == nil {
+		return nil
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == nil {
+			result = append(result, "")
+			continue
+		}
+		result = append(result, *value)
+	}
+	return result
 }
 
 func TestList(t *testing.T) {
@@ -599,4 +847,322 @@ func TestNotFoundError(t *testing.T) {
 
 	regularErr := errors.New("regular error")
 	assert.False(t, IsNotFoundError(regularErr))
+}
+
+func TestCreateMetadataOptions(t *testing.T) {
+	tests := []struct {
+		name   string
+		opts   CreateOptions
+		assert func(*testing.T, *ecs.RunInstancesRequest)
+	}{
+		{
+			name: "nil metadata options omits request fields",
+			opts: CreateOptions{
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: []string{"sg-123"},
+				SystemDisk: SystemDisk{
+					Category: "cloud_essd",
+					Size:     40,
+				},
+			},
+			assert: func(t *testing.T, request *ecs.RunInstancesRequest) {
+				assert.Nil(t, request.HttpEndpoint)
+				assert.Nil(t, request.HttpTokens)
+				assert.Nil(t, request.HttpPutResponseHopLimit)
+			},
+		},
+		{
+			name: "sets non-empty metadata options",
+			opts: CreateOptions{
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: []string{"sg-123"},
+				SystemDisk: SystemDisk{
+					Category: "cloud_essd",
+					Size:     40,
+				},
+				MetadataOptions: &MetadataOptions{
+					HttpEndpoint:            stringPtr("disabled"),
+					HttpTokens:              stringPtr("required"),
+					HttpPutResponseHopLimit: int32Ptr(2),
+				},
+			},
+			assert: func(t *testing.T, request *ecs.RunInstancesRequest) {
+				assert.Equal(t, "disabled", *request.HttpEndpoint)
+				assert.Equal(t, "required", *request.HttpTokens)
+				assert.Equal(t, int32(2), *request.HttpPutResponseHopLimit)
+			},
+		},
+		{
+			name: "empty metadata strings are omitted",
+			opts: CreateOptions{
+				InstanceType:     "ecs.g6.large",
+				ImageID:          "img-123",
+				VSwitchID:        "vsw-123",
+				SecurityGroupIDs: []string{"sg-123"},
+				SystemDisk: SystemDisk{
+					Category: "cloud_essd",
+					Size:     40,
+				},
+				MetadataOptions: &MetadataOptions{
+					HttpEndpoint: stringPtr(""),
+					HttpTokens:   stringPtr(""),
+				},
+			},
+			assert: func(t *testing.T, request *ecs.RunInstancesRequest) {
+				assert.Nil(t, request.HttpEndpoint)
+				assert.Nil(t, request.HttpTokens)
+				assert.Nil(t, request.HttpPutResponseHopLimit)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := new(MockECSClient)
+			instanceID := "i-123456"
+			response := &ecs.RunInstancesResponse{
+				Body: &ecs.RunInstancesResponseBody{
+					InstanceIdSets: &ecs.RunInstancesResponseBodyInstanceIdSets{
+						InstanceIdSet: []*string{&instanceID},
+					},
+				},
+			}
+			mockClient.On("RunInstances", mock.Anything, mock.MatchedBy(func(request *ecs.RunInstancesRequest) bool {
+				tt.assert(t, request)
+				return true
+			})).Return(response, nil)
+
+			provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+			_, err := provider.Create(context.Background(), tt.opts)
+			assert.NoError(t, err)
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+// TestListParsesCapacityTypeAndArchitecture verifies that List() correctly
+// derives Instance.CapacityType and Instance.Architecture from the raw
+// DescribeInstances response. These are ECS API field conversions and MUST be
+// covered by a real unit test (not inferred), per AGENT.md.
+//
+// The critical regression this guards: an Alibaba Cloud spot instance reports
+// InstanceChargeType=PostPaid and is distinguished only by SpotStrategy, so it
+// must be classified as "spot", not "on-demand".
+func TestListParsesCapacityTypeAndArchitecture(t *testing.T) {
+	tests := []struct {
+		name             string
+		instanceType     string
+		instanceCharge   string
+		spotStrategy     *string
+		wantCapacityType string
+		wantArchitecture string
+	}{
+		{
+			name:             "spot instance reports PostPaid but must be classified spot",
+			instanceType:     "ecs.g7.large",
+			instanceCharge:   "PostPaid",
+			spotStrategy:     stringPtr("SpotAsPriceGo"),
+			wantCapacityType: "spot",
+			wantArchitecture: "amd64",
+		},
+		{
+			name:             "spot with price limit is spot",
+			instanceType:     "ecs.g7.large",
+			instanceCharge:   "PostPaid",
+			spotStrategy:     stringPtr("SpotWithPriceLimit"),
+			wantCapacityType: "spot",
+			wantArchitecture: "amd64",
+		},
+		{
+			name:             "on-demand PostPaid with NoSpot",
+			instanceType:     "ecs.g6.large",
+			instanceCharge:   "PostPaid",
+			spotStrategy:     stringPtr("NoSpot"),
+			wantCapacityType: "on-demand",
+			wantArchitecture: "amd64",
+		},
+		{
+			name:             "on-demand PostPaid without spot strategy",
+			instanceType:     "ecs.g6.large",
+			instanceCharge:   "PostPaid",
+			spotStrategy:     nil,
+			wantCapacityType: "on-demand",
+			wantArchitecture: "amd64",
+		},
+		{
+			name:             "subscription PrePaid is pre-paid",
+			instanceType:     "ecs.g6.large",
+			instanceCharge:   "PrePaid",
+			spotStrategy:     nil,
+			wantCapacityType: "pre-paid",
+			wantArchitecture: "amd64",
+		},
+		{
+			name:             "ARM (Yitian g8y) instance type is arm64",
+			instanceType:     "ecs.g8y.large",
+			instanceCharge:   "PostPaid",
+			spotStrategy:     stringPtr("NoSpot"),
+			wantCapacityType: "on-demand",
+			wantArchitecture: "arm64",
+		},
+		{
+			name:             "GPU family (ecs.gn) is amd64, not arm64",
+			instanceType:     "ecs.gn7i-c8g1.2xlarge",
+			instanceCharge:   "PostPaid",
+			spotStrategy:     nil,
+			wantCapacityType: "on-demand",
+			wantArchitecture: "amd64",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := new(MockECSClient)
+			response := &ecs.DescribeInstancesResponse{
+				Body: &ecs.DescribeInstancesResponseBody{
+					TotalCount: int32Ptr(1),
+					PageNumber: int32Ptr(1),
+					PageSize:   int32Ptr(100),
+					Instances: &ecs.DescribeInstancesResponseBodyInstances{
+						Instance: []*ecs.DescribeInstancesResponseBodyInstancesInstance{
+							{
+								InstanceId:         stringPtr("i-123"),
+								RegionId:           stringPtr("cn-hangzhou"),
+								ZoneId:             stringPtr("cn-hangzhou-h"),
+								InstanceType:       stringPtr(tt.instanceType),
+								ImageId:            stringPtr("img-123"),
+								Cpu:                int32Ptr(2),
+								Memory:             int32Ptr(8192),
+								Status:             stringPtr("Running"),
+								InstanceChargeType: stringPtr(tt.instanceCharge),
+								SpotStrategy:       tt.spotStrategy,
+								CreationTime:       stringPtr("2024-01-01T00:00:00Z"),
+								Tags: &ecs.DescribeInstancesResponseBodyInstancesInstanceTags{
+									Tag: []*ecs.DescribeInstancesResponseBodyInstancesInstanceTagsTag{},
+								},
+							},
+						},
+					},
+				},
+			}
+			mockClient.On("DescribeInstances", mock.Anything, mock.Anything).Return(response, nil)
+
+			provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+			result, err := provider.List(context.Background(), map[string]string{"env": "test"})
+			assert.NoError(t, err)
+			assert.Len(t, result, 1)
+			assert.Equal(t, tt.wantCapacityType, result[0].CapacityType, "CapacityType mismatch")
+			assert.Equal(t, tt.wantArchitecture, result[0].Architecture, "Architecture mismatch")
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestTagInstanceBatching_EmptyTags(t *testing.T) {
+	mockClient := new(MockECSClient)
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+
+	// Empty tags should not call API
+	err := provider.TagInstance(context.Background(), "i-123", map[string]string{})
+	assert.NoError(t, err)
+	mockClient.AssertNotCalled(t, "TagResources", mock.Anything, mock.Anything)
+}
+
+func TestTagInstanceBatching_UnderLimit(t *testing.T) {
+	mockClient := new(MockECSClient)
+
+	// 10 tags should result in 1 API call
+	tags := make(map[string]string)
+	for i := 0; i < 10; i++ {
+		tags[fmt.Sprintf("key%02d", i)] = fmt.Sprintf("val%02d", i)
+	}
+
+	mockClient.On("TagResources", mock.Anything, mock.Anything).Return(&ecs.TagResourcesResponse{}, nil)
+
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	err := provider.TagInstance(context.Background(), "i-123", tags)
+
+	assert.NoError(t, err)
+	mockClient.AssertNumberOfCalls(t, "TagResources", 1)
+}
+
+func TestTagInstanceBatching_ExactlyLimit(t *testing.T) {
+	mockClient := new(MockECSClient)
+
+	// Exactly 20 tags should result in 1 API call
+	tags := make(map[string]string)
+	for i := 0; i < 20; i++ {
+		tags[fmt.Sprintf("key%02d", i)] = fmt.Sprintf("val%02d", i)
+	}
+
+	mockClient.On("TagResources", mock.Anything, mock.Anything).Return(&ecs.TagResourcesResponse{}, nil)
+
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	err := provider.TagInstance(context.Background(), "i-123", tags)
+
+	assert.NoError(t, err)
+	mockClient.AssertNumberOfCalls(t, "TagResources", 1)
+}
+
+func TestTagInstanceBatching_OverLimit(t *testing.T) {
+	mockClient := new(MockECSClient)
+
+	// 30 tags should result in 2 API calls
+	tags := make(map[string]string)
+	for i := 0; i < 30; i++ {
+		tags[fmt.Sprintf("key%02d", i)] = fmt.Sprintf("val%02d", i)
+	}
+
+	mockClient.On("TagResources", mock.Anything, mock.Anything).Return(&ecs.TagResourcesResponse{}, nil)
+
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	err := provider.TagInstance(context.Background(), "i-123", tags)
+
+	assert.NoError(t, err)
+	mockClient.AssertNumberOfCalls(t, "TagResources", 2)
+}
+
+func TestTagInstanceBatching_MultipleBatches(t *testing.T) {
+	mockClient := new(MockECSClient)
+
+	// 50 tags should result in 3 API calls
+	tags := make(map[string]string)
+	for i := 0; i < 50; i++ {
+		tags[fmt.Sprintf("key%02d", i)] = fmt.Sprintf("val%02d", i)
+	}
+
+	mockClient.On("TagResources", mock.Anything, mock.Anything).Return(&ecs.TagResourcesResponse{}, nil)
+
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	err := provider.TagInstance(context.Background(), "i-123", tags)
+
+	assert.NoError(t, err)
+	mockClient.AssertNumberOfCalls(t, "TagResources", 3)
+}
+
+func TestTagInstanceBatching_ErrorOnSecondBatch(t *testing.T) {
+	mockClient := new(MockECSClient)
+
+	// 30 tags should result in 2 API calls, but second call fails
+	tags := make(map[string]string)
+	for i := 0; i < 30; i++ {
+		tags[fmt.Sprintf("key%02d", i)] = fmt.Sprintf("val%02d", i)
+	}
+
+	// First call succeeds
+	mockClient.On("TagResources", mock.Anything, mock.Anything).Return(&ecs.TagResourcesResponse{}, nil).Once()
+	// Second call fails
+	mockClient.On("TagResources", mock.Anything, mock.Anything).Return(nil, errors.New("NumberExceed.Tags")).Once()
+
+	provider := NewProvider(context.Background(), "cn-hangzhou", mockClient)
+	err := provider.TagInstance(context.Background(), "i-123", tags)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "batch 2/2")
+	mockClient.AssertNumberOfCalls(t, "TagResources", 2)
 }
