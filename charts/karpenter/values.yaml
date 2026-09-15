@@ -18,7 +18,7 @@ controller:
     #   Never        - Never pull, use only local image (for air-gapped environments)
     pullPolicy: Always
     # -- Image tag/version to deploy
-    tag: "v0.2.3"
+    tag: "v0.2.4"
 
   # -- Resource requests and limits for the controller pod
   # @description --
