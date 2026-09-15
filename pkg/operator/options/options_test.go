@@ -36,6 +36,7 @@ func parseOptions(t *testing.T, args ...string) (*Options, error) {
 	opts := New()
 	fs := testFlagSet()
 	opts.AddFlags(fs)
+	args = append([]string{"--cluster-id=test-cluster-id"}, args...)
 	err := opts.Parse(fs, args...)
 	return opts, err
 }
@@ -113,6 +114,7 @@ func TestOptionsFeatureGatesReusesCoreFlagWhenPresent(t *testing.T) {
 	})
 	err := opts.Parse(fs,
 		"--cluster-name=test-cluster",
+		"--cluster-id=test-cluster-id",
 		"--cluster-endpoint=https://example.com",
 		"--feature-gates=DeploymentSet=true",
 	)
@@ -126,6 +128,7 @@ func TestOptionsEnvironmentOverridesOnlyDeploymentFields(t *testing.T) {
 	t.Setenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET", "access-key-secret")
 	t.Setenv("ALIBABA_CLOUD_REGION", "cn-shanghai")
 	t.Setenv("ALIBABA_CLOUD_CLUSTER_NAME", "cluster-from-env")
+	t.Setenv("CLUSTER_ID", "cluster-id-from-env")
 	t.Setenv("ALIBABA_CLOUD_CLUSTER_ENDPOINT", "https://env.example.com")
 	t.Setenv("FEATURE_GATES", "DeploymentSet=true")
 
@@ -144,6 +147,7 @@ func TestOptionsEnvironmentOverridesOnlyDeploymentFields(t *testing.T) {
 	opts.AddFlags(fs)
 	err = opts.Parse(fs,
 		"--cluster-name=cluster-from-cli",
+		"--cluster-id=test-cluster-id",
 		"--cluster-endpoint=https://cli.example.com",
 		"--region=cn-beijing",
 	)
@@ -175,7 +179,7 @@ func TestOptionsValidationRejectsInvalidRanges(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			args := append([]string{"--cluster-name=test-cluster", "--cluster-endpoint=https://example.com"}, tt.args...)
+			args := append([]string{"--cluster-name=test-cluster", "--cluster-id=test-cluster-id", "--cluster-endpoint=https://example.com"}, tt.args...)
 			_, err := parseOptions(t, args...)
 			require.ErrorContains(t, err, tt.want)
 		})
@@ -212,7 +216,7 @@ func TestOptionsTerwayValuesRequireGateAndNonKubeletMode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			args := append([]string{"--cluster-name=test-cluster", "--cluster-endpoint=https://example.com"}, tt.args...)
+			args := append([]string{"--cluster-name=test-cluster", "--cluster-id=test-cluster-id", "--cluster-endpoint=https://example.com"}, tt.args...)
 			_, err := parseOptions(t, args...)
 			require.ErrorContains(t, err, tt.want)
 		})
