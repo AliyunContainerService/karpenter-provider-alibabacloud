@@ -96,12 +96,54 @@ func (m *MockECSClient) DescribePrice(ctx context.Context, instanceType string) 
 	panic("implement me")
 }
 
-func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
-	args := m.Called(ctx, tags)
+func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, id string, name string, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
+	args := m.Called(ctx, id, name, tags)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*ecs.DescribeSecurityGroupsResponse), args.Error(1)
+}
+
+func TestResolveMapsIDNameTagsAndSortsDeduplicatedResults(t *testing.T) {
+	mockClient := new(MockECSClient)
+	sgB := "sg-b"
+	sgA := "sg-a"
+	name := "app-sg"
+	mockClient.On("DescribeSecurityGroups", mock.Anything, "sg-b", "", map[string]string(nil)).Return(&ecs.DescribeSecurityGroupsResponse{
+		Body: &ecs.DescribeSecurityGroupsResponseBody{
+			SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+				SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgB}},
+			},
+		},
+	}, nil)
+	mockClient.On("DescribeSecurityGroups", mock.Anything, "", "app-sg", map[string]string(nil)).Return(&ecs.DescribeSecurityGroupsResponse{
+		Body: &ecs.DescribeSecurityGroupsResponseBody{
+			SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+				SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{
+					{SecurityGroupId: &sgA, SecurityGroupName: &name},
+					{SecurityGroupId: &sgB},
+				},
+			},
+		},
+	}, nil)
+	mockClient.On("DescribeSecurityGroups", mock.Anything, "", "", map[string]string{"env": "prod"}).Return(&ecs.DescribeSecurityGroupsResponse{
+		Body: &ecs.DescribeSecurityGroupsResponseBody{
+			SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+				SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgA}},
+			},
+		},
+	}, nil)
+
+	provider := NewProvider("cn-hangzhou", mockClient)
+	result, err := provider.Resolve(context.Background(), []v1alpha1.SecurityGroupSelectorTerm{
+		{ID: stringPtr("sg-b")},
+		{Name: stringPtr("app-sg")},
+		{Tags: map[string]string{"env": "prod"}},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, []v1alpha1.SecurityGroup{{ID: "sg-a", Name: "app-sg"}, {ID: "sg-b"}}, result)
+	mockClient.AssertExpectations(t)
 }
 
 func TestResolve(t *testing.T) {
@@ -123,6 +165,19 @@ func TestResolve(t *testing.T) {
 				{
 					ID: stringPtr("sg-12345"),
 				},
+			},
+			mockSetup: func(m *MockECSClient) {
+				sgID := "sg-12345"
+				response := &ecs.DescribeSecurityGroupsResponse{
+					Body: &ecs.DescribeSecurityGroupsResponseBody{
+						SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+							SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{
+								{SecurityGroupId: &sgID},
+							},
+						},
+					},
+				}
+				m.On("DescribeSecurityGroups", mock.Anything, "sg-12345", "", map[string]string(nil)).Return(response, nil)
 			},
 			expected: []v1alpha1.SecurityGroup{
 				{
@@ -156,7 +211,7 @@ func TestResolve(t *testing.T) {
 						},
 					},
 				}
-				m.On("DescribeSecurityGroups", mock.Anything, map[string]string{"env": "prod"}).Return(response, nil)
+				m.On("DescribeSecurityGroups", mock.Anything, "", "", map[string]string{"env": "prod"}).Return(response, nil)
 			},
 			expected: []v1alpha1.SecurityGroup{
 				{
@@ -177,7 +232,7 @@ func TestResolve(t *testing.T) {
 				},
 			},
 			mockSetup: func(m *MockECSClient) {
-				m.On("DescribeSecurityGroups", mock.Anything, map[string]string{"env": "test"}).Return(nil, errors.New("API error"))
+				m.On("DescribeSecurityGroups", mock.Anything, "", "", map[string]string{"env": "test"}).Return(nil, errors.New("API error"))
 			},
 			expectError: true,
 		},
@@ -194,6 +249,17 @@ func TestResolve(t *testing.T) {
 				},
 			},
 			mockSetup: func(m *MockECSClient) {
+				sgIDDirect := "sg-12345"
+				responseDirect := &ecs.DescribeSecurityGroupsResponse{
+					Body: &ecs.DescribeSecurityGroupsResponseBody{
+						SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+							SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{
+								{SecurityGroupId: &sgIDDirect},
+							},
+						},
+					},
+				}
+				m.On("DescribeSecurityGroups", mock.Anything, "sg-12345", "", map[string]string(nil)).Return(responseDirect, nil)
 				sgID := "sg-tag-1"
 				response := &ecs.DescribeSecurityGroupsResponse{
 					Body: &ecs.DescribeSecurityGroupsResponseBody{
@@ -206,7 +272,7 @@ func TestResolve(t *testing.T) {
 						},
 					},
 				}
-				m.On("DescribeSecurityGroups", mock.Anything, map[string]string{"env": "prod"}).Return(response, nil)
+				m.On("DescribeSecurityGroups", mock.Anything, "", "", map[string]string{"env": "prod"}).Return(response, nil)
 			},
 			expected: []v1alpha1.SecurityGroup{
 				{
@@ -271,7 +337,7 @@ func TestGetByTags(t *testing.T) {
 						},
 					},
 				}
-				m.On("DescribeSecurityGroups", mock.Anything, map[string]string{"env": "prod"}).Return(response, nil)
+				m.On("DescribeSecurityGroups", mock.Anything, "", "", map[string]string{"env": "prod"}).Return(response, nil)
 			},
 			expected: []v1alpha1.SecurityGroup{
 				{
@@ -286,7 +352,7 @@ func TestGetByTags(t *testing.T) {
 			name: "API error",
 			tags: map[string]string{"env": "test"},
 			mockSetup: func(m *MockECSClient) {
-				m.On("DescribeSecurityGroups", mock.Anything, map[string]string{"env": "test"}).Return(nil, errors.New("API error"))
+				m.On("DescribeSecurityGroups", mock.Anything, "", "", map[string]string{"env": "test"}).Return(nil, errors.New("API error"))
 			},
 			expectError: true,
 		},

@@ -38,10 +38,7 @@ var _ = Describe("Provisioning", func() {
 
 			// Configure NodeClass
 			nodeClass.Name = "scale-test-node-dense"
-			nodeClass.Spec.Tags = map[string]string{
-				"testing/cluster": env.ClusterName,
-				"testing/type":    "node-dense",
-			}
+			nodeClass.Spec.Tags = env.TestTags("node-dense")
 
 			// Configure NodePool with anti-affinity to force separate nodes
 			nodePool.Name = "scale-test-pool-node-dense"
@@ -62,7 +59,7 @@ var _ = Describe("Provisioning", func() {
 					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
 						Key:      v1alpha1.LabelInstanceType,
 						Operator: corev1.NodeSelectorOpIn,
-						Values:   []string{"ecs.c6.xlarge", "ecs.c7.xlarge"},
+						Values:   testInstanceTypes(),
 					},
 				},
 			}
@@ -151,10 +148,7 @@ var _ = Describe("Provisioning", func() {
 
 			// Configure NodeClass
 			nodeClass.Name = "scale-test-pod-dense"
-			nodeClass.Spec.Tags = map[string]string{
-				"testing/cluster": env.ClusterName,
-				"testing/type":    "pod-dense",
-			}
+			nodeClass.Spec.Tags = env.TestTags("pod-dense")
 
 			// Configure NodePool
 			nodePool.Name = "scale-test-pool-pod-dense"
@@ -175,7 +169,7 @@ var _ = Describe("Provisioning", func() {
 					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
 						Key:      v1alpha1.LabelInstanceType,
 						Operator: corev1.NodeSelectorOpIn,
-						Values:   []string{"ecs.c6.xlarge", "ecs.c7.xlarge"},
+						Values:   testInstanceTypes(),
 					},
 				},
 			}
@@ -264,14 +258,14 @@ var _ = Describe("Provisioning", func() {
 		})
 
 		It("should scale up GPU workload", Label("gpu"), func() {
+			if len(testGPUInstanceTypes()) == 0 || len(testGPUZones()) == 0 {
+				Skip("GPU scale test requires TEST_GPU_INSTANCE_TYPES and TEST_GPU_ZONES from e2e GPU discovery")
+			}
 			By("creating a deployment with 11 pods requiring GPU nodes")
 
 			// Configure NodeClass
 			nodeClass.Name = "scale-test-gpu"
-			nodeClass.Spec.Tags = map[string]string{
-				"testing/cluster": env.ClusterName,
-				"testing/type":    "gpu",
-			}
+			nodeClass.Spec.Tags = env.TestTags("gpu")
 
 			// Configure NodePool
 			nodePool.Name = "scale-test-pool-gpu"
@@ -293,14 +287,14 @@ var _ = Describe("Provisioning", func() {
 					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
 						Key:      v1alpha1.LabelInstanceType,
 						Operator: corev1.NodeSelectorOpIn,
-						Values:   []string{"ecs.c6.large", "ecs.g6.large", "ecs.gn6v-c8g1.2xlarge"},
+						Values:   testGPUInstanceTypes(),
 					},
 				},
 				{
 					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
 						Key:      corev1.LabelTopologyZone,
 						Operator: corev1.NodeSelectorOpIn,
-						Values:   []string{"cn-hangzhou-i", "cn-hangzhou-j", "cn-hangzhou-k"},
+						Values:   testGPUZones(),
 					},
 				},
 			}

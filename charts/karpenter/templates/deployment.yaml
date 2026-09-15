@@ -37,11 +37,74 @@ spec:
         image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag }}"
         imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
         args:
-          - --cluster-name={{ .Values.settings.clusterID }}
+          - --cluster-name={{ .Values.settings.clusterName | default .Values.settings.clusterID }}
+          - --cluster-id={{ .Values.settings.clusterID }}
           - --cluster-endpoint={{ .Values.settings.clusterEndpoint }}
           - --region={{ .Values.settings.region }}
+          {{- if .Values.settings.interruptionQueue }}
+          - --interruption-queue={{ .Values.settings.interruptionQueue }}
+          {{- end }}
+          {{- if ne .Values.settings.pricingRefresh.enabled true }}
+          - --pricing-refresh-enabled={{ .Values.settings.pricingRefresh.enabled }}
+          {{- end }}
+          {{- if and .Values.settings.pricingRefresh.interval (ne .Values.settings.pricingRefresh.interval "12h") }}
+          - --pricing-refresh-interval={{ .Values.settings.pricingRefresh.interval }}
+          {{- end }}
+          {{- if ne (int .Values.settings.pricingRefresh.concurrency) 8 }}
+          - --pricing-refresh-concurrency={{ .Values.settings.pricingRefresh.concurrency }}
+          {{- end }}
+          {{- if ne .Values.settings.pricing.staticDefaultRegionFallbackEnabled false }}
+          - --pricing-static-default-region-fallback-enabled={{ .Values.settings.pricing.staticDefaultRegionFallbackEnabled }}
+          {{- end }}
+          {{- if and .Values.settings.unavailableOfferingCacheTTL (ne .Values.settings.unavailableOfferingCacheTTL "5m") }}
+          - --unavailable-offering-cache-ttl={{ .Values.settings.unavailableOfferingCacheTTL }}
+          {{- end }}
+          {{- if ne (int .Values.settings.maxCreateCandidateAttempts) 20 }}
+          - --max-create-candidate-attempts={{ .Values.settings.maxCreateCandidateAttempts }}
+          {{- end }}
+          {{- if and .Values.settings.podDensity.mode (ne .Values.settings.podDensity.mode "kubelet") }}
+          - --pod-density-mode={{ .Values.settings.podDensity.mode }}
+          {{- end }}
+          {{- if ne (int .Values.settings.podDensity.terwayReservedENIs) 1 }}
+          - --terway-reserved-enis={{ .Values.settings.podDensity.terwayReservedENIs }}
+          {{- end }}
+          {{- if ne (int .Values.settings.podDensity.terwayReservedIPsPerENI) 1 }}
+          - --terway-reserved-ips-per-eni={{ .Values.settings.podDensity.terwayReservedIPsPerENI }}
+          {{- end }}
+          {{- if ne (int .Values.settings.podDensity.terwayMaxPodsCap) 0 }}
+          - --terway-max-pods-cap={{ .Values.settings.podDensity.terwayMaxPodsCap }}
+          {{- end }}
+          {{- if and .Values.settings.preferencePolicy (ne .Values.settings.preferencePolicy "Respect") }}
+          - --preference-policy={{ .Values.settings.preferencePolicy }}
+          {{- end }}
+          {{- if .Values.settings.featureGates }}
+          - --feature-gates={{ .Values.settings.featureGates }}
+          {{- end }}
         env:
-          {{- toYaml .Values.controller.env | nindent 10 }}
+          {{- with .Values.settings.featureGates }}
+          - name: FEATURE_GATES
+            value: {{ . | quote }}
+          {{- end }}
+          {{- range .Values.controller.env }}
+          {{- if and $.Values.controller.credentialsSecretName (eq .name "ALIBABA_CLOUD_ACCESS_KEY_ID") }}
+          - name: {{ .name }}
+            valueFrom:
+              secretKeyRef:
+                name: {{ $.Values.controller.credentialsSecretName }}
+                key: access_key_id
+          {{- else if and $.Values.controller.credentialsSecretName (eq .name "ALIBABA_CLOUD_ACCESS_KEY_SECRET") }}
+          - name: {{ .name }}
+            valueFrom:
+              secretKeyRef:
+                name: {{ $.Values.controller.credentialsSecretName }}
+                key: access_key_secret
+          {{- else if hasKey . "value" }}
+          - name: {{ .name }}
+            value: {{ .value | quote }}
+          {{- else }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+          {{- end }}
         {{- if .Values.controller.env }}
         {{- $hasRRSA := false }}
         {{- range .Values.controller.env }}

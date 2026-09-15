@@ -27,6 +27,7 @@ import (
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/imagefamily"
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/launchtemplate"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/securitygroup"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/vswitch"
 
@@ -49,12 +50,22 @@ func init() {
 // Controller reconciles ECSNodeClass status
 // This controller is separate from the main controller to avoid conflicts
 type Controller struct {
-	client                client.Client
-	vswitchProvider       *vswitch.Provider
-	securityGroupProvider *securitygroup.Provider
-	imageFamilyProvider   *imagefamily.Provider
-	ramProvider           *ramrole.Provider
+	client                 client.Client
+	vswitchProvider        *vswitch.Provider
+	securityGroupProvider  *securitygroup.Provider
+	imageFamilyProvider    *imagefamily.Provider
+	launchTemplateProvider *launchtemplate.Provider
+	ramProvider            *ramrole.Provider
 }
+
+const (
+	successfulRequeueBase         = 15 * time.Minute
+	successfulRequeueJitter       = 5 * time.Minute
+	failedResolutionRequeueBase   = 5 * time.Minute
+	failedResolutionRequeueJitter = time.Minute
+)
+
+const defaultSecurityGroupAttachLimit = 5
 
 // NewController creates a new NodeClass status controller
 func NewController(
@@ -62,14 +73,16 @@ func NewController(
 	vswitchProvider *vswitch.Provider,
 	securityGroupProvider *securitygroup.Provider,
 	imageFamilyProvider *imagefamily.Provider,
+	launchTemplateProvider *launchtemplate.Provider,
 	ramProvider *ramrole.Provider,
 ) *Controller {
 	return &Controller{
-		client:                client,
-		vswitchProvider:       vswitchProvider,
-		securityGroupProvider: securityGroupProvider,
-		imageFamilyProvider:   imageFamilyProvider,
-		ramProvider:           ramProvider,
+		client:                 client,
+		vswitchProvider:        vswitchProvider,
+		securityGroupProvider:  securityGroupProvider,
+		imageFamilyProvider:    imageFamilyProvider,
+		launchTemplateProvider: launchTemplateProvider,
+		ramProvider:            ramProvider,
 	}
 }
 
@@ -87,72 +100,10 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	stored := nodeClass.DeepCopy()
 	var resolveErr error
 
-	// Resolve VSwitches
-	vswitches, err := c.vswitchProvider.Resolve(ctx, nodeClass.Spec.VSwitchSelectorTerms)
-	if err != nil {
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionFalse,
-			"VSwitchResolutionFailed", err.Error())
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
-			"ResourceResolutionFailed", "VSwitch resolution failed")
-		resolveErr = fmt.Errorf("failed to resolve vswitches: %w", err)
-	} else if len(vswitches) == 0 {
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionFalse,
-			"VSwitchResolutionFailed", "vswitch not found")
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
-			"ResourceResolutionFailed", "VSwitch resolution failed")
-		resolveErr = fmt.Errorf("no vswitches found matching selector terms")
+	if nodeClass.Spec.LaunchTemplateID != nil {
+		resolveErr = c.resolveLaunchTemplate(nodeClass, ctx)
 	} else {
-		nodeClass.Status.VSwitches = vswitches
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionTrue,
-			"VSwitchResolved", fmt.Sprintf("Resolved %d VSwitches", len(vswitches)))
-	}
-
-	// Resolve Security Groups
-	securityGroups, err := c.securityGroupProvider.Resolve(ctx, nodeClass.Spec.SecurityGroupSelectorTerms)
-	if err != nil {
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeSecurityGroupResolved, metav1.ConditionFalse,
-			"SecurityGroupResolutionFailed", err.Error())
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
-			"ResourceResolutionFailed", "SecurityGroup resolution failed")
-		if resolveErr == nil {
-			resolveErr = fmt.Errorf("failed to resolve security groups: %w", err)
-		}
-	} else if len(securityGroups) == 0 {
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeSecurityGroupResolved, metav1.ConditionFalse,
-			"SecurityGroupResolutionFailed", "security group not found")
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
-			"ResourceResolutionFailed", "SecurityGroup resolution failed")
-		if resolveErr == nil {
-			resolveErr = fmt.Errorf("no security groups found matching selector terms")
-		}
-	} else {
-		nodeClass.Status.SecurityGroups = securityGroups
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeSecurityGroupResolved, metav1.ConditionTrue,
-			"SecurityGroupResolved", fmt.Sprintf("Resolved %d SecurityGroups", len(securityGroups)))
-	}
-
-	// Resolve Images
-	images, err := c.imageFamilyProvider.Resolve(ctx, nodeClass.Spec.ImageSelectorTerms)
-	if err != nil {
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeImageResolved, metav1.ConditionFalse,
-			"ImageResolutionFailed", err.Error())
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
-			"ResourceResolutionFailed", "Image resolution failed")
-		if resolveErr == nil {
-			resolveErr = fmt.Errorf("failed to resolve images: %w", err)
-		}
-	} else if len(images) == 0 {
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeImageResolved, metav1.ConditionFalse,
-			"ImageResolutionFailed", "image not found")
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
-			"ResourceResolutionFailed", "Image resolution failed")
-		if resolveErr == nil {
-			resolveErr = fmt.Errorf("no images found matching selector terms")
-		}
-	} else {
-		nodeClass.Status.Images = images
-		c.setCondition(nodeClass, v1alpha1.ConditionTypeImageResolved, metav1.ConditionTrue,
-			"ImageResolved", fmt.Sprintf("Resolved %d Images", len(images)))
+		resolveErr = c.resolveSelectorResources(nodeClass, ctx)
 	}
 
 	// Validate RAM Role
@@ -194,12 +145,157 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	// If there was a resolve error, return it to trigger rate limiter backoff
 	if resolveErr != nil {
-		return reconcile.Result{}, resolveErr
+		jitter := time.Duration(rand.Int63n(int64(failedResolutionRequeueJitter)))
+		log.FromContext(ctx).Error(resolveErr, "failed to resolve ECSNodeClass resources, will retry after backoff", "requeueAfter", failedResolutionRequeueBase+jitter)
+		return reconcile.Result{RequeueAfter: failedResolutionRequeueBase + jitter}, nil
 	}
 
 	// Add jitter to avoid synchronized updates with other controllers
-	jitter := time.Duration(rand.Int63n(300)) * time.Second // 0-5 minutes random jitter
-	return reconcile.Result{RequeueAfter: 15*time.Minute + jitter}, nil
+	jitter := time.Duration(rand.Int63n(int64(successfulRequeueJitter)))
+	return reconcile.Result{RequeueAfter: successfulRequeueBase + jitter}, nil
+}
+
+func (c *Controller) resolveLaunchTemplate(nodeClass *v1alpha1.ECSNodeClass, ctx context.Context) error {
+	if c.launchTemplateProvider == nil {
+		err := fmt.Errorf("launch template provider is required")
+		c.setSelectorConditionsFromLaunchTemplateError(nodeClass, err)
+		return err
+	}
+	data, err := c.launchTemplateProvider.GetData(ctx, *nodeClass.Spec.LaunchTemplateID, nodeClass.Spec.LaunchTemplateVersion)
+	if err != nil {
+		c.setSelectorConditionsFromLaunchTemplateError(nodeClass, err)
+		return fmt.Errorf("failed to resolve launch template: %w", err)
+	}
+	if data.ImageID == "" || data.VSwitchID == "" || len(data.SecurityGroupIDs) == 0 {
+		err := fmt.Errorf("launch template must specify image, vswitch, and security group")
+		c.setSelectorConditionsFromLaunchTemplateError(nodeClass, err)
+		return err
+	}
+
+	nodeClass.Status.Images = []v1alpha1.Image{{ID: data.ImageID}}
+	vSwitchID := data.VSwitchID
+	vswitches, err := c.vswitchProvider.Resolve(ctx, []v1alpha1.VSwitchSelectorTerm{{ID: &vSwitchID}})
+	if err != nil {
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionFalse,
+			"LaunchTemplateResolutionFailed", err.Error())
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			"ResourceResolutionFailed", "Launch template VSwitch resolution failed")
+		return fmt.Errorf("failed to resolve launch template vswitch: %w", err)
+	}
+	if len(vswitches) == 0 {
+		err := fmt.Errorf("launch template vswitch not found")
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionFalse,
+			"LaunchTemplateResolutionFailed", err.Error())
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			"ResourceResolutionFailed", "Launch template VSwitch resolution failed")
+		return err
+	}
+	nodeClass.Status.VSwitches = vswitches
+	nodeClass.Status.SecurityGroups = make([]v1alpha1.SecurityGroup, 0, len(data.SecurityGroupIDs))
+	for _, id := range data.SecurityGroupIDs {
+		nodeClass.Status.SecurityGroups = append(nodeClass.Status.SecurityGroups, v1alpha1.SecurityGroup{ID: id})
+	}
+	c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionTrue,
+		"LaunchTemplateResolved", "Resolved VSwitch from launch template")
+	c.setCondition(nodeClass, v1alpha1.ConditionTypeSecurityGroupResolved, metav1.ConditionTrue,
+		"LaunchTemplateResolved", fmt.Sprintf("Resolved %d SecurityGroups from launch template", len(data.SecurityGroupIDs)))
+	c.setCondition(nodeClass, v1alpha1.ConditionTypeImageResolved, metav1.ConditionTrue,
+		"LaunchTemplateResolved", "Resolved Image from launch template")
+	return nil
+}
+
+func (c *Controller) setSelectorConditionsFromLaunchTemplateError(nodeClass *v1alpha1.ECSNodeClass, err error) {
+	message := err.Error()
+	c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionFalse,
+		"LaunchTemplateResolutionFailed", message)
+	c.setCondition(nodeClass, v1alpha1.ConditionTypeSecurityGroupResolved, metav1.ConditionFalse,
+		"LaunchTemplateResolutionFailed", message)
+	c.setCondition(nodeClass, v1alpha1.ConditionTypeImageResolved, metav1.ConditionFalse,
+		"LaunchTemplateResolutionFailed", message)
+	c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+		"ResourceResolutionFailed", "Launch template resolution failed")
+}
+
+func (c *Controller) resolveSelectorResources(nodeClass *v1alpha1.ECSNodeClass, ctx context.Context) error {
+	var resolveErr error
+
+	// Resolve VSwitches
+	vswitches, err := c.vswitchProvider.Resolve(ctx, nodeClass.Spec.VSwitchSelectorTerms)
+	if err != nil {
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionFalse,
+			"VSwitchResolutionFailed", err.Error())
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			"ResourceResolutionFailed", "VSwitch resolution failed")
+		resolveErr = fmt.Errorf("failed to resolve vswitches: %w", err)
+	} else if len(vswitches) == 0 {
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionFalse,
+			"VSwitchResolutionFailed", "vSwitchSelectorTerms resolved zero VSwitches")
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			"ResourceResolutionFailed", "VSwitch resolution failed")
+		resolveErr = fmt.Errorf("no vswitches found matching selector terms")
+	} else {
+		nodeClass.Status.VSwitches = vswitches
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeVSwitchResolved, metav1.ConditionTrue,
+			"VSwitchResolved", fmt.Sprintf("Resolved %d VSwitches", len(vswitches)))
+	}
+
+	// Resolve Security Groups
+	securityGroups, err := c.securityGroupProvider.Resolve(ctx, nodeClass.Spec.SecurityGroupSelectorTerms)
+	if err != nil {
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeSecurityGroupResolved, metav1.ConditionFalse,
+			"SecurityGroupResolutionFailed", err.Error())
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			"ResourceResolutionFailed", "SecurityGroup resolution failed")
+		if resolveErr == nil {
+			resolveErr = fmt.Errorf("failed to resolve security groups: %w", err)
+		}
+	} else if len(securityGroups) == 0 {
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeSecurityGroupResolved, metav1.ConditionFalse,
+			"SecurityGroupResolutionFailed", "securityGroupSelectorTerms resolved zero security groups")
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			"ResourceResolutionFailed", "SecurityGroup resolution failed")
+		if resolveErr == nil {
+			resolveErr = fmt.Errorf("no security groups found matching selector terms")
+		}
+	} else if err := validateResolvedSecurityGroupAttachLimit(securityGroups); err != nil {
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeSecurityGroupResolved, metav1.ConditionFalse,
+			"SecurityGroupResolutionFailed", err.Error())
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			"ResourceResolutionFailed", "SecurityGroup resolution failed")
+		if resolveErr == nil {
+			resolveErr = err
+		}
+	} else {
+		nodeClass.Status.SecurityGroups = securityGroups
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeSecurityGroupResolved, metav1.ConditionTrue,
+			"SecurityGroupResolved", fmt.Sprintf("Resolved %d SecurityGroups", len(securityGroups)))
+	}
+
+	// Resolve Images
+	images, err := c.imageFamilyProvider.Resolve(ctx, nodeClass.Spec.ImageSelectorTerms)
+	if err != nil {
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeImageResolved, metav1.ConditionFalse,
+			"ImageResolutionFailed", err.Error())
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			"ResourceResolutionFailed", "Image resolution failed")
+		if resolveErr == nil {
+			resolveErr = fmt.Errorf("failed to resolve images: %w", err)
+		}
+	} else if len(images) == 0 {
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeImageResolved, metav1.ConditionFalse,
+			"ImageResolutionFailed", "imageSelectorTerms resolved zero images")
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeReady, metav1.ConditionFalse,
+			"ResourceResolutionFailed", "Image resolution failed")
+		if resolveErr == nil {
+			resolveErr = fmt.Errorf("no images found matching selector terms")
+		}
+	} else {
+		nodeClass.Status.Images = images
+		c.setCondition(nodeClass, v1alpha1.ConditionTypeImageResolved, metav1.ConditionTrue,
+			"ImageResolved", fmt.Sprintf("Resolved %d Images", len(images)))
+	}
+
+	return resolveErr
 }
 
 // setCondition sets a condition on the ECSNodeClass
@@ -255,6 +351,16 @@ func (c *Controller) isReady(nodeClass *v1alpha1.ECSNodeClass) bool {
 	return true
 }
 
+func validateResolvedSecurityGroupAttachLimit(securityGroups []v1alpha1.SecurityGroup) error {
+	if len(securityGroups) < 1 {
+		return fmt.Errorf("securityGroupSelectorTerms resolved zero security groups")
+	}
+	if len(securityGroups) > defaultSecurityGroupAttachLimit {
+		return fmt.Errorf("securityGroupSelectorTerms resolved %d security groups, exceeding attach limit %d", len(securityGroups), defaultSecurityGroupAttachLimit)
+	}
+	return nil
+}
+
 // getCondition gets a condition from the ECSNodeClass
 func (c *Controller) getCondition(nodeClass *v1alpha1.ECSNodeClass, conditionType string) *metav1.Condition {
 	for _, condition := range nodeClass.Status.Conditions {
@@ -303,7 +409,7 @@ func (c *Controller) Register(ctx context.Context, mgr manager.Manager) error {
 				1*time.Second, // Initial backoff
 				5*time.Minute, // Max backoff
 			),
-			MaxConcurrentReconciles: 10,
+			MaxConcurrentReconciles: 1,
 		}).
 		Complete(c)
 }

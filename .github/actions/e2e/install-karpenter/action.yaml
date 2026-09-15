@@ -1,0 +1,35 @@
+name: Install Karpenter
+description: Install the AlibabaCloud Karpenter chart into the current cluster.
+inputs:
+  cluster_id:
+    required: true
+  cluster_endpoint:
+    required: true
+  region:
+    required: true
+  credentials_secret_name:
+    required: false
+    default: alibabacloud-credentials
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        CLUSTER_ID: ${{ inputs.cluster_id }}
+        CLUSTER_ENDPOINT: ${{ inputs.cluster_endpoint }}
+        REGION: ${{ inputs.region }}
+        CREDENTIALS_SECRET_NAME: ${{ inputs.credentials_secret_name }}
+      run: |
+        set -euo pipefail
+        helm upgrade --install karpenter ./charts/karpenter \
+          --namespace karpenter \
+          --create-namespace \
+          --set "controller.credentialsSecretName=${CREDENTIALS_SECRET_NAME}" \
+          --set "settings.clusterID=${CLUSTER_ID}" \
+          --set "settings.clusterEndpoint=${CLUSTER_ENDPOINT}" \
+          --set "settings.region=${REGION}" \
+          --set-string "settings.featureGates=NodeOverlay=true\,NodeRepair=true" \
+          --set "controller.tolerations[0].key=karpenter-test" \
+          --set "controller.tolerations[0].operator=Exists" \
+          --set "controller.tolerations[0].effect=NoSchedule"
+        kubectl rollout status deployment/karpenter -n karpenter --timeout=10m

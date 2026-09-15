@@ -40,10 +40,7 @@ var _ = Describe("Deprovisioning", func() {
 
 			// Configure NodeClass
 			nodeClass.Name = "scale-test-consolidation-empty"
-			nodeClass.Spec.Tags = map[string]string{
-				"testing/cluster": env.ClusterName,
-				"testing/type":    "consolidation-empty",
-			}
+			nodeClass.Spec.Tags = env.TestTags("consolidation-empty")
 
 			// Configure NodePool with consolidation enabled
 			nodePool.Name = "scale-test-pool-consolidation-empty"
@@ -64,7 +61,7 @@ var _ = Describe("Deprovisioning", func() {
 					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
 						Key:      v1alpha1.LabelInstanceType,
 						Operator: corev1.NodeSelectorOpIn,
-						Values:   []string{"ecs.c6.xlarge", "ecs.c7.xlarge"},
+						Values:   testInstanceTypes(),
 					},
 				},
 			}
@@ -151,10 +148,7 @@ var _ = Describe("Deprovisioning", func() {
 
 			// Configure NodeClass
 			nodeClass.Name = "scale-test-consolidation-underutilized"
-			nodeClass.Spec.Tags = map[string]string{
-				"testing/cluster": env.ClusterName,
-				"testing/type":    "consolidation-underutilized",
-			}
+			nodeClass.Spec.Tags = env.TestTags("consolidation-underutilized")
 
 			// Configure NodePool
 			nodePool.Name = "scale-test-pool-consolidation-underutilized"
@@ -175,7 +169,7 @@ var _ = Describe("Deprovisioning", func() {
 					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
 						Key:      v1alpha1.LabelInstanceType,
 						Operator: corev1.NodeSelectorOpIn,
-						Values:   []string{"ecs.c6.xlarge", "ecs.c7.xlarge"},
+						Values:   testInstanceTypes(),
 					},
 				}}
 			nodePool.Spec.Disruption.ConsolidationPolicy = karpv1.ConsolidationPolicyWhenEmptyOrUnderutilized
@@ -266,10 +260,7 @@ var _ = Describe("Deprovisioning", func() {
 
 			// Configure NodeClass
 			nodeClass.Name = "scale-test-emptiness"
-			nodeClass.Spec.Tags = map[string]string{
-				"testing/cluster": env.ClusterName,
-				"testing/type":    "emptiness",
-			}
+			nodeClass.Spec.Tags = env.TestTags("emptiness")
 
 			// Configure NodePool with TTLSecondsAfterEmpty
 			nodePool.Name = "scale-test-pool-emptiness"
@@ -290,7 +281,7 @@ var _ = Describe("Deprovisioning", func() {
 					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
 						Key:      v1alpha1.LabelInstanceType,
 						Operator: corev1.NodeSelectorOpIn,
-						Values:   []string{"ecs.c6.xlarge", "ecs.c7.xlarge"},
+						Values:   testInstanceTypes(),
 					},
 				}}
 			// Set TTLSecondsAfterEmpty to 0 for immediate deletion
@@ -364,10 +355,7 @@ var _ = Describe("Deprovisioning", func() {
 
 			// Configure NodeClass
 			nodeClass.Name = "scale-test-expiration"
-			nodeClass.Spec.Tags = map[string]string{
-				"testing/cluster": env.ClusterName,
-				"testing/type":    "expiration",
-			}
+			nodeClass.Spec.Tags = env.TestTags("expiration")
 
 			// Configure NodePool with short expiration
 			nodePool.Name = "scale-test-pool-expiration"
@@ -388,7 +376,7 @@ var _ = Describe("Deprovisioning", func() {
 					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
 						Key:      v1alpha1.LabelInstanceType,
 						Operator: corev1.NodeSelectorOpIn,
-						Values:   []string{"ecs.c6.xlarge", "ecs.c7.xlarge"},
+						Values:   testInstanceTypes(),
 					},
 				}}
 			// Set expiration to 5 minutes for testing
@@ -479,11 +467,8 @@ var _ = Describe("Deprovisioning", func() {
 
 			// Configure initial NodeClass
 			nodeClass.Name = "scale-test-drift"
-			nodeClass.Spec.Tags = map[string]string{
-				"testing/cluster": env.ClusterName,
-				"testing/type":    "drift",
-				"version":         "v1",
-			}
+			nodeClass.Spec.Tags = env.TestTags("drift")
+			nodeClass.Spec.Tags["version"] = "v1"
 
 			// Configure NodePool
 			nodePool.Name = "scale-test-pool-drift"
@@ -504,7 +489,7 @@ var _ = Describe("Deprovisioning", func() {
 					NodeSelectorRequirement: corev1.NodeSelectorRequirement{
 						Key:      v1alpha1.LabelInstanceType,
 						Operator: corev1.NodeSelectorOpIn,
-						Values:   []string{"ecs.c6.xlarge", "ecs.c7.xlarge"},
+						Values:   testInstanceTypes(),
 					},
 				}}
 

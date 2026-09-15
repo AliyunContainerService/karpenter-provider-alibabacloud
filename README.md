@@ -3,6 +3,10 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/AliyunContainerService/karpenter-provider-alibabacloud)](https://goreportcard.com/report/github.com/AliyunContainerService/karpenter-provider-alibabacloud)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/AliyunContainerService/karpenter-provider-alibabacloud/blob/main/LICENSE)
 
+[中文](#chinese) | [English](#english)
+
+<a id="chinese"></a>
+
 Alibaba Cloud Karpenter Provider 是一个为 [Karpenter](https://github.com/aws/karpenter) 项目提供的阿里云实现，用于在阿里云上自动管理 Kubernetes 节点。
 
 ## 功能特性
@@ -231,3 +235,236 @@ make run
 ## 许可证
 
 本项目采用 Apache-2.0 许可证。详情请见 [LICENSE](LICENSE) 文件。
+
+---
+
+<a id="english"></a>
+
+## English
+
+Alibaba Cloud Karpenter Provider is an Alibaba Cloud implementation of the [Karpenter](https://github.com/aws/karpenter) project. It automatically manages Kubernetes nodes on Alibaba Cloud.
+
+### Features
+
+- **Automatic scaling**: Automatically creates and deletes nodes based on workload requirements
+- **Multi-zone support**: Automatically distributes nodes across multiple availability zones
+- **Flexible configuration**: Flexibly configures node properties through the ECSNodeClass and NodePool CRDs
+- **Alibaba Cloud native**: Deep integration with Alibaba Cloud services such as ECS, VPC, and security groups
+
+### Architecture
+
+```mermaid
+graph TD
+    A[Kubernetes Pod] --> B[Karpenter Controller]
+    B --> C[ECSNodeClass CR]
+    B --> D[NodePool CR]
+    B --> E[Alibaba Cloud ECS API]
+    E --> F[ECS Instance]
+    F --> G[VPC Network]
+    F --> H[Security Group]
+    F --> I[System Image]
+```
+
+### Supported Features
+
+#### NodeClass Property Support
+
+| Property | Configuration |   |
+|----------|---------------|---|
+| clusterID | - | ✅ |
+| vSwitchSelectorTerms | id | ✅ |
+|  | tag | ✅ |
+| securityGroupSelectorTerms | id | ✅ |
+|  | tag | ✅ |
+| imageSelectorTerms | id | ✅ |
+|  | imageFamily | ✅ |
+| systemDisk | - | ✅ |
+| dataDisk | - | ✅ |
+
+#### NodePool Property Support
+
+| Property | Configuration |  |
+|----------|---------------|--|
+| karpenter.sh/capacity-type | On-demand only | ✅ |
+| node.kubernetes.io/instance-type | Multiple instance types | ✅ |
+| topology.kubernetes.io/zone | Multiple availability zones | ✅ |
+
+### Quick Start
+
+See the [Quick Start Guide](QUICK_START.md) to learn how to deploy and use Alibaba Cloud Karpenter Provider.
+
+### RRSA Guide
+
+RRSA (RAM Roles for Service Accounts) is an Alibaba Cloud authentication method that allows Pods to obtain temporary credentials through a ServiceAccount to access cloud services without using long-term AccessKey credentials.
+
+For information about using RRSA, see the official documentation:
+- [Chinese Documentation](https://help.aliyun.com/zh/ack/ack-managed-and-ack-dedicated/user-guide/use-rrsa-to-authorize-pods-to-access-different-cloud-services)
+- [English Documentation](https://www.alibabacloud.com/help/en/cs/user-guide/use-rrsa-to-configure-ram-permissions-for-serviceaccount-to-implement)
+
+#### Configuration Steps
+
+##### 1. Enable RRSA on the Cluster
+
+First, enable RRSA on the ACK cluster by following the official documentation above.
+
+##### 2. Create a RAM Role for the OIDC Identity Provider
+
+Create a RAM role and configure the OIDC identity provider as the trusted entity.
+
+##### 3. Grant a Policy to the RAM Role
+
+Attach the following custom permission policy to the RAM role:
+
+```json
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "cs:DescribeClusterAttachScripts",
+        "cs:GetClusterAddonInstance",
+        "cs:DescribeClusterDetail"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecs:RunInstances",
+        "ecs:DescribeInstances",
+        "ecs:DeleteInstances",
+        "ecs:TagResources",
+        "ecs:CreateLaunchTemplate",
+        "ecs:DescribeLaunchTemplates",
+        "ecs:DeleteLaunchTemplate",
+        "ecs:DescribeInstanceTypeResource",
+        "ecs:DescribeImages",
+        "ecs:DescribeSecurityGroups",
+        "ecs:DescribeCapacityReservations",
+        "ecs:DescribePrice",
+        "ecs:DescribeInstanceTypes",
+        "ecs:DescribeZones"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "vpc:DescribeVSwitches",
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "ram:GetRole",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+##### 4. Configure Helm Chart Values
+
+When deploying Karpenter, configure the RRSA environment variables in the Helm chart's `values.yaml`:
+
+```yaml
+controller:
+  env:
+    # RRSA configuration
+    - name: ALIBABA_CLOUD_ROLE_ARN
+      value: "acs:ram::<your-account-id>:role/<your-role-name>"
+    - name: ALIBABA_CLOUD_OIDC_PROVIDER_ARN
+      value: "acs:ram::<your-account-id>:oidc-provider/<your-oidc-provider-id>"
+    - name: ALIBABA_CLOUD_OIDC_TOKEN_FILE
+      value: "/var/run/secrets/ack.alibabacloud.com/rrsa-tokens/token"
+```
+
+Where:
+- `ALIBABA_CLOUD_ROLE_ARN`: The ARN of the RAM role, in the format `acs:ram::<account-id>:role/<role-name>`
+- `ALIBABA_CLOUD_OIDC_PROVIDER_ARN`: The ARN of the OIDC identity provider, in the format `acs:ram::<account-id>:oidc-provider/<cluster-id>`
+- `ALIBABA_CLOUD_OIDC_TOKEN_FILE`: The path to the OIDC token file; use the default value
+
+### Configuration Examples
+
+#### ECSNodeClass Configuration
+
+```yaml
+apiVersion: karpenter.alibabacloud.com/v1alpha1
+kind: ECSNodeClass
+metadata:
+  name: default
+spec:
+  # Cluster ID
+  clusterID: ""
+  # VSwitch selectors
+  vSwitchSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: my-cluster
+    - id: "vsw-bp1h5w****"
+
+  # Security group selectors
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: my-cluster
+    - id: "sg-bp1h5w****"
+
+  # Image selectors
+  imageSelectorTerms:
+    - imageFamily: "acs:alibaba_cloud_linux_3_2104_lts_x64"
+    - id: "aliyun_3_x64_20G_container_optimized_alibase_20250629.vhd"
+```
+
+#### NodePool Configuration
+
+```yaml
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: default
+spec:
+  template:
+    spec:
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: ["ecs.g6.large"]
+      nodeClassRef:
+        name: default
+        group: karpenter.alibabacloud.com
+        kind: ECSNodeClass
+  limits:
+    cpu: "100"
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 720h
+```
+
+### Development Guide
+
+#### Build the Project
+
+```bash
+make build
+```
+
+#### Run Tests
+
+```bash
+make test
+```
+
+#### Local Debugging
+
+```bash
+make run
+```
+
+### Contributing
+
+Issues and pull requests that improve Alibaba Cloud Karpenter Provider are welcome.
+
+### License
+
+This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.

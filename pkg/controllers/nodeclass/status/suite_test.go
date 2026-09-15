@@ -22,12 +22,14 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	ram "github.com/alibabacloud-go/ram-20150501/v2/client"
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/controllers/nodeclass/status"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/imagefamily"
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/launchtemplate"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/ramrole"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/securitygroup"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/vswitch"
@@ -46,18 +48,19 @@ import (
 )
 
 var (
-	ctx                   context.Context
-	env                   *coretest.Environment
-	statusController      *status.Controller
-	testEnv               *envtest.Environment
-	cfg                   *rest.Config
-	mockECSClient         *MockECSClient
-	mockVPCClient         *MockVPCClient
-	mockRAMClient         *MockRAMClient
-	vswitchProvider       *vswitch.Provider
-	securityGroupProvider *securitygroup.Provider
-	imageFamilyProvider   *imagefamily.Provider
-	ramProvider           *ramrole.Provider
+	ctx                    context.Context
+	env                    *coretest.Environment
+	statusController       *status.Controller
+	testEnv                *envtest.Environment
+	cfg                    *rest.Config
+	mockECSClient          *MockECSClient
+	mockVPCClient          *MockVPCClient
+	mockRAMClient          *MockRAMClient
+	vswitchProvider        *vswitch.Provider
+	securityGroupProvider  *securitygroup.Provider
+	imageFamilyProvider    *imagefamily.Provider
+	launchTemplateProvider *launchtemplate.Provider
+	ramProvider            *ramrole.Provider
 )
 
 func TestStatus(t *testing.T) {
@@ -97,6 +100,7 @@ var _ = BeforeSuite(func() {
 	vswitchProvider = vswitch.NewProvider("cn-hangzhou", mockVPCClient)
 	securityGroupProvider = securitygroup.NewProvider("cn-hangzhou", mockECSClient)
 	imageFamilyProvider = imagefamily.NewProvider(mockECSClient)
+	launchTemplateProvider = launchtemplate.NewProvider("cn-hangzhou", mockECSClient)
 	ramProvider = ramrole.NewProvider(mockRAMClient, "cn-hangzhou")
 
 	// Create status controller
@@ -105,6 +109,7 @@ var _ = BeforeSuite(func() {
 		vswitchProvider,
 		securityGroupProvider,
 		imageFamilyProvider,
+		launchTemplateProvider,
 		ramProvider,
 	)
 
@@ -133,6 +138,7 @@ var _ = Describe("StatusController", func() {
 		vswitchProvider = vswitch.NewProvider("cn-hangzhou", mockVPCClient)
 		securityGroupProvider = securitygroup.NewProvider("cn-hangzhou", mockECSClient)
 		imageFamilyProvider = imagefamily.NewProvider(mockECSClient)
+		launchTemplateProvider = launchtemplate.NewProvider("cn-hangzhou", mockECSClient)
 		ramProvider = ramrole.NewProvider(mockRAMClient, "cn-hangzhou")
 
 		// Recreate controller
@@ -141,6 +147,7 @@ var _ = Describe("StatusController", func() {
 			vswitchProvider,
 			securityGroupProvider,
 			imageFamilyProvider,
+			launchTemplateProvider,
 			ramProvider,
 		)
 
@@ -181,7 +188,7 @@ var _ = Describe("StatusController", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
 			availableIps := int64(100)
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything, "").Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
 						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{
@@ -198,7 +205,7 @@ var _ = Describe("StatusController", func() {
 			// Setup other mocks
 			sgId := "sg-test-123"
 			sgName := "test-sg"
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
 						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{
@@ -250,10 +257,10 @@ var _ = Describe("StatusController", func() {
 
 		It("should set error condition when VSwitch resolution fails", func() {
 			// Setup mock to return error for VSwitch
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(nil, fmt.Errorf("VPC API error"))
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything, "").Return(nil, fmt.Errorf("VPC API error"))
 
 			// Controller continues processing even after VSwitch error, so we need to mock other APIs
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
 						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{},
@@ -265,15 +272,12 @@ var _ = Describe("StatusController", func() {
 
 			mockRAMClient.On("GetRole", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("role not found"))
 
-			// Note: Controller returns error when VSwitch resolution fails to trigger requeue
-			// But it still updates the status before returning the error
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
-			_, err := statusController.Reconcile(ctx, reconcile.Request{
+			result, err := statusController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClass),
 			})
-			// Controller returns error to trigger rate limiter backoff
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("failed to resolve vswitches"))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">=", 5*time.Minute))
 
 			updated := &v1alpha1.ECSNodeClass{}
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
@@ -290,6 +294,34 @@ var _ = Describe("StatusController", func() {
 			Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
 		})
 
+		It("should rate limit selector resolution failures with explicit requeue", func() {
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("VPC API throttled"))
+
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
+				Body: &ecs.DescribeSecurityGroupsResponseBody{
+					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
+						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{},
+					},
+				},
+			}, nil)
+			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{}, nil)
+			mockRAMClient.On("GetRole", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("role not found"))
+
+			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
+			result, err := statusController.Reconcile(ctx, reconcile.Request{
+				NamespacedName: client.ObjectKeyFromObject(nodeClass),
+			})
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">=", 5*time.Minute))
+
+			updated := &v1alpha1.ECSNodeClass{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
+			readyCondition := getCondition(updated, v1alpha1.ConditionTypeReady)
+			Expect(readyCondition).ToNot(BeNil())
+			Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
+		})
+
 		It("should resolve multiple VSwitches", func() {
 			nodeClass.Spec.VSwitchSelectorTerms = []v1alpha1.VSwitchSelectorTerm{
 				{Tags: map[string]string{"env": "prod"}},
@@ -301,7 +333,7 @@ var _ = Describe("StatusController", func() {
 			zoneH := "cn-hangzhou-h"
 			zoneI := "cn-hangzhou-i"
 			zoneJ := "cn-hangzhou-j"
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, "", map[string]string{"env": "prod"}).Return(&vpc.DescribeVSwitchesResponse{
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, "", map[string]string{"env": "prod"}, "").Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
 						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{
@@ -314,7 +346,7 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			sgId := "sg-test-123"
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
 						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
@@ -365,7 +397,7 @@ var _ = Describe("StatusController", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
 			availableIps := int64(100)
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything, "").Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
 						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
@@ -375,7 +407,7 @@ var _ = Describe("StatusController", func() {
 
 			sgId := "sg-test-123"
 			sgName := "test-security-group"
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, map[string]string{"test": "true"}).Return(&ecs.DescribeSecurityGroupsResponse{
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, "", "", map[string]string{"test": "true"}).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
 						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{
@@ -435,7 +467,7 @@ var _ = Describe("StatusController", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
 			availableIps := int64(100)
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything, "").Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
 						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
@@ -443,19 +475,18 @@ var _ = Describe("StatusController", func() {
 				},
 			}, nil)
 
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, map[string]string{"test": "error"}).Return(nil, fmt.Errorf("ECS API error"))
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, "", "", map[string]string{"test": "error"}).Return(nil, fmt.Errorf("ECS API error"))
 
 			// Controller continues processing even after SecurityGroup error
 			mockECSClient.On("DescribeImages", mock.Anything, mock.Anything, mock.Anything).Return([]ecs.DescribeImagesResponseBodyImagesImage{}, nil)
 			mockRAMClient.On("GetRole", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("role not found"))
 
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
-			_, err := statusController.Reconcile(ctx, reconcile.Request{
+			result, err := statusController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClass),
 			})
-			// Controller returns error to trigger rate limiter backoff
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("failed to resolve security groups"))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">=", 5*time.Minute))
 
 			updated := &v1alpha1.ECSNodeClass{}
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
@@ -480,7 +511,7 @@ var _ = Describe("StatusController", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
 			availableIps := int64(100)
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
 						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
@@ -492,7 +523,7 @@ var _ = Describe("StatusController", func() {
 			sg2 := "sg-2"
 			sgName1 := "sg-prod-1"
 			sgName2 := "sg-prod-2"
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, map[string]string{"env": "prod"}).Return(&ecs.DescribeSecurityGroupsResponse{
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, "", "", map[string]string{"env": "prod"}).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
 						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{
@@ -541,7 +572,7 @@ var _ = Describe("StatusController", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
 			availableIps := int64(100)
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
 						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
@@ -550,7 +581,7 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			sgId := "sg-test-123"
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
 						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
@@ -603,7 +634,7 @@ var _ = Describe("StatusController", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
 			availableIps := int64(100)
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything, "").Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
 						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
@@ -612,7 +643,7 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			sgId := "sg-test-123"
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
 						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
@@ -626,12 +657,11 @@ var _ = Describe("StatusController", func() {
 			mockRAMClient.On("GetRole", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("role not found"))
 
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
-			_, err := statusController.Reconcile(ctx, reconcile.Request{
+			result, err := statusController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClass),
 			})
-			// Controller returns error to trigger rate limiter backoff
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("failed to resolve images"))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">=", 5*time.Minute))
 
 			updated := &v1alpha1.ECSNodeClass{}
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
@@ -658,7 +688,7 @@ var _ = Describe("StatusController", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
 			availableIps := int64(100)
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
 						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
@@ -667,7 +697,7 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			sgId := "sg-test-123"
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
 						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
@@ -715,7 +745,7 @@ var _ = Describe("StatusController", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
 			availableIps := int64(100)
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything, "").Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
 						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
@@ -724,7 +754,7 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			sgId := "sg-test-123"
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
 						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
@@ -742,12 +772,11 @@ var _ = Describe("StatusController", func() {
 			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(nil, fmt.Errorf("role not found"))
 
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
-			_, err := statusController.Reconcile(ctx, reconcile.Request{
+			result, err := statusController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClass),
 			})
-			// Controller returns error to trigger rate limiter backoff
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("failed to validate RAM role"))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">=", 5*time.Minute))
 
 			updated := &v1alpha1.ECSNodeClass{}
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
@@ -777,7 +806,7 @@ var _ = Describe("StatusController", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
 			availableIps := int64(100)
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
 						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
@@ -786,7 +815,7 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			sgId := "sg-test-123"
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
 						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
@@ -816,11 +845,84 @@ var _ = Describe("StatusController", func() {
 	})
 
 	Context("Ready Condition", func() {
+		It("should set Ready to true from launch template resources", func() {
+			version := int64(1)
+			nodeClass.Spec = v1alpha1.ECSNodeClassSpec{
+				LaunchTemplateID:      stringPtr("lt-test-123"),
+				LaunchTemplateVersion: &version,
+				Role:                  stringPtr("KarpenterNodeRole"),
+			}
+
+			imageID := "aliyun_3_x64_20G_alibase_20231221.vhd"
+			vswitchID := "vsw-test-123"
+			zoneID := "cn-hangzhou-h"
+			securityGroupID := "sg-test-123"
+			mockECSClient.On("DescribeLaunchTemplateVersions", mock.Anything, mock.MatchedBy(func(request *ecs.DescribeLaunchTemplateVersionsRequest) bool {
+				return request.LaunchTemplateId != nil &&
+					*request.LaunchTemplateId == "lt-test-123" &&
+					len(request.LaunchTemplateVersion) == 1 &&
+					request.LaunchTemplateVersion[0] != nil &&
+					*request.LaunchTemplateVersion[0] == version
+			})).Return(&ecs.DescribeLaunchTemplateVersionsResponse{
+				Body: &ecs.DescribeLaunchTemplateVersionsResponseBody{
+					LaunchTemplateVersionSets: &ecs.DescribeLaunchTemplateVersionsResponseBodyLaunchTemplateVersionSets{
+						LaunchTemplateVersionSet: []*ecs.DescribeLaunchTemplateVersionsResponseBodyLaunchTemplateVersionSetsLaunchTemplateVersionSet{
+							{
+								LaunchTemplateData: &ecs.DescribeLaunchTemplateVersionsResponseBodyLaunchTemplateVersionSetsLaunchTemplateVersionSetLaunchTemplateData{
+									ImageId:         &imageID,
+									VSwitchId:       &vswitchID,
+									ZoneId:          &zoneID,
+									SecurityGroupId: &securityGroupID,
+								},
+							},
+						},
+					},
+				},
+			}, nil)
+			availableIps := int64(100)
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, vswitchID, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+				Body: &vpc.DescribeVSwitchesResponseBody{
+					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
+						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{
+							{VSwitchId: &vswitchID, ZoneId: &zoneID, AvailableIpAddressCount: &availableIps},
+						},
+					},
+				},
+			}, nil)
+
+			roleName := "KarpenterNodeRole"
+			assumeRolePolicy := `{"Statement":[{"Effect":"Allow","Principal":{"Service":["ecs.aliyuncs.com"]},"Action":"sts:AssumeRole"}]}`
+			mockRAMClient.On("GetRole", mock.Anything, "KarpenterNodeRole").Return(&ram.GetRoleResponse{
+				Body: &ram.GetRoleResponseBody{
+					Role: &ram.GetRoleResponseBodyRole{
+						RoleName:                 &roleName,
+						AssumeRolePolicyDocument: &assumeRolePolicy,
+					},
+				},
+			}, nil)
+
+			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
+			_, err := statusController.Reconcile(ctx, reconcile.Request{
+				NamespacedName: client.ObjectKeyFromObject(nodeClass),
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			updated := &v1alpha1.ECSNodeClass{}
+			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
+			Expect(updated.Status.Images).To(Equal([]v1alpha1.Image{{ID: imageID}}))
+			Expect(updated.Status.VSwitches).To(Equal([]v1alpha1.VSwitch{{ID: vswitchID, Zone: zoneID, ZoneID: zoneID, AvailableIPAddressCount: 100}}))
+			Expect(updated.Status.SecurityGroups).To(Equal([]v1alpha1.SecurityGroup{{ID: securityGroupID}}))
+			Expect(getCondition(updated, v1alpha1.ConditionTypeReady).Status).To(Equal(metav1.ConditionTrue))
+
+			mockECSClient.AssertNotCalled(GinkgoT(), "DescribeImages", mock.Anything, mock.Anything, mock.Anything)
+			mockECSClient.AssertNotCalled(GinkgoT(), "DescribeSecurityGroups", mock.Anything, mock.Anything)
+		})
+
 		It("should set Ready to true when all resources are resolved", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
 			availableIps := int64(100)
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
 						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
@@ -829,7 +931,7 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			sgId := "sg-test-123"
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
 						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
@@ -872,10 +974,10 @@ var _ = Describe("StatusController", func() {
 		})
 
 		It("should set Ready to false when any resource resolution fails", func() {
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything).Return(nil, fmt.Errorf("VPC error"))
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, "vsw-test-123", mock.Anything, "").Return(nil, fmt.Errorf("VPC error"))
 
 			// Controller continues processing even after VSwitch error
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
 						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{},
@@ -886,12 +988,11 @@ var _ = Describe("StatusController", func() {
 			mockRAMClient.On("GetRole", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("role not found"))
 
 			Expect(env.Client.Create(ctx, nodeClass)).To(Succeed())
-			_, err := statusController.Reconcile(ctx, reconcile.Request{
+			result, err := statusController.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(nodeClass),
 			})
-			// Controller returns error to trigger rate limiter backoff
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("failed to resolve vswitches"))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">=", 5*time.Minute))
 
 			updated := &v1alpha1.ECSNodeClass{}
 			Expect(env.Client.Get(ctx, client.ObjectKeyFromObject(nodeClass), updated)).To(Succeed())
@@ -921,7 +1022,7 @@ var _ = Describe("StatusController", func() {
 			vswitchId := "vsw-test-123"
 			zoneId := "cn-hangzhou-h"
 			availableIps := int64(100)
-			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
+			mockVPCClient.On("DescribeVSwitches", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&vpc.DescribeVSwitchesResponse{
 				Body: &vpc.DescribeVSwitchesResponseBody{
 					VSwitches: &vpc.DescribeVSwitchesResponseBodyVSwitches{
 						VSwitch: []*vpc.DescribeVSwitchesResponseBodyVSwitchesVSwitch{{VSwitchId: &vswitchId, ZoneId: &zoneId, AvailableIpAddressCount: &availableIps}},
@@ -930,7 +1031,7 @@ var _ = Describe("StatusController", func() {
 			}, nil)
 
 			sgId := "sg-test-123"
-			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
+			mockECSClient.On("DescribeSecurityGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&ecs.DescribeSecurityGroupsResponse{
 				Body: &ecs.DescribeSecurityGroupsResponseBody{
 					SecurityGroups: &ecs.DescribeSecurityGroupsResponseBodySecurityGroups{
 						SecurityGroup: []*ecs.DescribeSecurityGroupsResponseBodySecurityGroupsSecurityGroup{{SecurityGroupId: &sgId}},
@@ -1012,6 +1113,14 @@ func (m *MockECSClient) DescribeLaunchTemplates(ctx context.Context, request *ec
 	return args.Get(0).(*ecs.DescribeLaunchTemplatesResponse), args.Error(1)
 }
 
+func (m *MockECSClient) DescribeLaunchTemplateVersions(ctx context.Context, request *ecs.DescribeLaunchTemplateVersionsRequest) (*ecs.DescribeLaunchTemplateVersionsResponse, error) {
+	args := m.Called(ctx, request)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ecs.DescribeLaunchTemplateVersionsResponse), args.Error(1)
+}
+
 func (m *MockECSClient) DeleteLaunchTemplate(ctx context.Context, request *ecs.DeleteLaunchTemplateRequest) (*ecs.DeleteLaunchTemplateResponse, error) {
 	args := m.Called(ctx, request)
 	if args.Get(0) == nil {
@@ -1047,8 +1156,8 @@ func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, f
 	return args.Get(0).([]ecs.DescribeImagesResponseBodyImagesImage), args.Error(1)
 }
 
-func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
-	args := m.Called(ctx, tags)
+func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, id string, name string, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
+	args := m.Called(ctx, id, name, tags)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -1108,8 +1217,8 @@ type MockVPCClient struct {
 	mock.Mock
 }
 
-func (m *MockVPCClient) DescribeVSwitches(ctx context.Context, vSwitchID string, tags map[string]string) (*vpc.DescribeVSwitchesResponse, error) {
-	args := m.Called(ctx, vSwitchID, tags)
+func (m *MockVPCClient) DescribeVSwitches(ctx context.Context, vSwitchID string, tags map[string]string, zoneID string) (*vpc.DescribeVSwitchesResponse, error) {
+	args := m.Called(ctx, vSwitchID, tags, zoneID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

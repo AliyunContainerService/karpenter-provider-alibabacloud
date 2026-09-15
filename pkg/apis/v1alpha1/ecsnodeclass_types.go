@@ -48,6 +48,9 @@ type ECSNodeClassList struct {
 // ECSNodeClassSpec defines the desired state of ECSNodeClass
 // +kubebuilder:object:generate=true
 // +kubebuilder:object:root=false
+// +kubebuilder:validation:XValidation:rule="has(self.launchTemplateID) || has(self.vSwitchSelectorTerms)",message="spec.vSwitchSelectorTerms is required when launchTemplateID is not specified"
+// +kubebuilder:validation:XValidation:rule="has(self.launchTemplateID) || has(self.securityGroupSelectorTerms)",message="spec.securityGroupSelectorTerms is required when launchTemplateID is not specified"
+// +kubebuilder:validation:XValidation:rule="has(self.launchTemplateID) || has(self.imageSelectorTerms)",message="spec.imageSelectorTerms is required when launchTemplateID is not specified"
 type ECSNodeClassSpec struct {
 	// ClusterID is the ACK cluster ID
 	// +optional
@@ -62,18 +65,21 @@ type ECSNodeClassSpec struct {
 	ClusterEndpoint string `json:"clusterEndpoint,omitempty"`
 
 	// VSwitchSelectorTerms is a list of VSwitch selector requirements
-	// +kubebuilder:validation:Required
+	// +optional
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=30
 	VSwitchSelectorTerms []VSwitchSelectorTerm `json:"vSwitchSelectorTerms"`
 
 	// SecurityGroupSelectorTerms is a list of security group selector requirements
-	// +kubebuilder:validation:Required
+	// +optional
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=30
 	SecurityGroupSelectorTerms []SecurityGroupSelectorTerm `json:"securityGroupSelectorTerms"`
 
 	// ImageSelectorTerms is a list of image selector requirements
-	// +kubebuilder:validation:Required
+	// +optional
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=30
 	ImageSelectorTerms []ImageSelectorTerm `json:"imageSelectorTerms"`
 
 	// Role is the name of the RAM role to use for the instance
@@ -87,6 +93,10 @@ type ECSNodeClassSpec struct {
 	// DataDisks specifies the data disk configuration
 	// +optional
 	DataDisks []DataDiskSpec `json:"dataDisks,omitempty"`
+
+	// InstanceStorePolicy specifies local instance store handling. P0 only validates the enum.
+	// +optional
+	InstanceStorePolicy *string `json:"instanceStorePolicy,omitempty"`
 
 	// SpotStrategy specifies the spot instance strategy (SpotAsPriceGo or SpotWithPriceLimit)
 	// +optional
@@ -102,6 +112,7 @@ type ECSNodeClassSpec struct {
 
 	// Tags are instance tags
 	// +optional
+	// +kubebuilder:validation:MaxProperties=64
 	Tags map[string]string `json:"tags,omitempty"`
 
 	// Kubelet defines Kubelet configuration overrides
@@ -123,6 +134,10 @@ type ECSNodeClassSpec struct {
 	// LaunchTemplateID specifies the launch template ID to use
 	// +optional
 	LaunchTemplateID *string `json:"launchTemplateID,omitempty"`
+
+	// LaunchTemplateVersion specifies the launch template version to use
+	// +optional
+	LaunchTemplateVersion *int64 `json:"launchTemplateVersion,omitempty"`
 }
 
 // VSwitchSelectorTerm defines selection logic for VSwitch
@@ -131,6 +146,7 @@ type ECSNodeClassSpec struct {
 type VSwitchSelectorTerm struct {
 	// Tags is a map of tags to match
 	// +optional
+	// +kubebuilder:validation:MaxProperties=20
 	Tags map[string]string `json:"tags,omitempty"`
 
 	// ID is the VSwitch ID
@@ -148,6 +164,7 @@ type VSwitchSelectorTerm struct {
 type SecurityGroupSelectorTerm struct {
 	// Tags is a map of tags to match
 	// +optional
+	// +kubebuilder:validation:MaxProperties=20
 	Tags map[string]string `json:"tags,omitempty"`
 
 	// ID is the security group ID
@@ -169,6 +186,7 @@ type ImageSelectorTerm struct {
 
 	// Tags is a map of tags to match
 	// +optional
+	// +kubebuilder:validation:MaxProperties=20
 	Tags map[string]string `json:"tags,omitempty"`
 
 	// ID is the image ID
@@ -215,19 +233,32 @@ type CapacityReservationSelectorTerm struct {
 // SystemDiskSpec defines the system disk configuration
 // +kubebuilder:object:generate=true
 // +kubebuilder:object:root=false
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_essd_xc1'",message="cloud_essd_xc1 is not supported"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_essd' || (self.size >= 20 && self.size <= 32768)",message="cloud_essd size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_essd_entry' || (self.size >= 20 && self.size <= 32768)",message="cloud_essd_entry size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_efficiency' || (self.size >= 20 && self.size <= 32768)",message="cloud_efficiency size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_pperf' || (self.size >= 20 && self.size <= 32768)",message="cloud_pperf size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_sperf' || (self.size >= 20 && self.size <= 32768)",message="cloud_sperf size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_ssd' || (self.size >= 20 && self.size <= 32768)",message="cloud_ssd size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_auto' || (self.size >= 40 && self.size <= 32768)",message="cloud_auto size must be between 40 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'ephemeral_ssd' || (self.size >= 5 && self.size <= 800)",message="ephemeral_ssd size must be between 5 and 800 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud' || (self.size >= 5 && self.size <= 2000)",message="cloud size must be between 5 and 2000 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'cloud_essd_xc0' || (self.size >= 40 && self.size <= 2048)",message="cloud_essd_xc0 size must be between 40 and 2048 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'elastic_ephemeral_disk_premium' || (self.size >= 64 && self.size <= 8192)",message="elastic_ephemeral_disk_premium size must be between 64 and 8192 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.size) || self.category != 'elastic_ephemeral_disk_standard' || (self.size >= 64 && self.size <= 8192)",message="elastic_ephemeral_disk_standard size must be between 64 and 8192 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.performanceLevel) || self.category == 'cloud_essd'",message="performanceLevel is only supported for cloud_essd disks"
 type SystemDiskSpec struct {
-	// Category is the disk type (cloud_efficiency, cloud_ssd, cloud_essd)
+	// Category is the disk type
 	// +kubebuilder:default="cloud_essd"
+	// +kubebuilder:validation:Enum=cloud_essd;cloud_essd_entry;cloud_efficiency;cloud_pperf;cloud_sperf;cloud_ssd;cloud_auto;ephemeral_ssd;cloud;cloud_essd_xc0;cloud_essd_xc1;elastic_ephemeral_disk_premium;elastic_ephemeral_disk_standard
 	Category string `json:"category,omitempty"`
 
 	// Size is the disk size in GB
 	// +kubebuilder:default=40
-	// +kubebuilder:validation:Minimum=20
-	// +kubebuilder:validation:Maximum=500
 	Size *int32 `json:"size,omitempty"`
 
 	// PerformanceLevel is the ESSD performance level (PL0, PL1, PL2, PL3)
-	// +kubebuilder:default="PL0"
+	// +kubebuilder:validation:Enum=PL0;PL1;PL2;PL3
 	// +optional
 	PerformanceLevel *string `json:"performanceLevel,omitempty"`
 
@@ -243,8 +274,23 @@ type SystemDiskSpec struct {
 // DataDiskSpec defines the data disk configuration
 // +kubebuilder:object:generate=true
 // +kubebuilder:object:root=false
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_essd_xc1'",message="cloud_essd_xc1 is not supported"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_essd' || (self.size >= 20 && self.size <= 32768)",message="cloud_essd size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_essd_entry' || (self.size >= 20 && self.size <= 32768)",message="cloud_essd_entry size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_efficiency' || (self.size >= 20 && self.size <= 32768)",message="cloud_efficiency size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_pperf' || (self.size >= 20 && self.size <= 32768)",message="cloud_pperf size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_sperf' || (self.size >= 20 && self.size <= 32768)",message="cloud_sperf size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_ssd' || (self.size >= 20 && self.size <= 32768)",message="cloud_ssd size must be between 20 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_auto' || (self.size >= 40 && self.size <= 32768)",message="cloud_auto size must be between 40 and 32768 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'ephemeral_ssd' || (self.size >= 5 && self.size <= 800)",message="ephemeral_ssd size must be between 5 and 800 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud' || (self.size >= 5 && self.size <= 2000)",message="cloud size must be between 5 and 2000 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'cloud_essd_xc0' || (self.size >= 40 && self.size <= 2048)",message="cloud_essd_xc0 size must be between 40 and 2048 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'elastic_ephemeral_disk_premium' || (self.size >= 64 && self.size <= 8192)",message="elastic_ephemeral_disk_premium size must be between 64 and 8192 GB"
+// +kubebuilder:validation:XValidation:rule="self.category != 'elastic_ephemeral_disk_standard' || (self.size >= 64 && self.size <= 8192)",message="elastic_ephemeral_disk_standard size must be between 64 and 8192 GB"
+// +kubebuilder:validation:XValidation:rule="!has(self.performanceLevel) || self.category == 'cloud_essd'",message="performanceLevel is only supported for cloud_essd disks"
 type DataDiskSpec struct {
 	// Category is the disk type
+	// +kubebuilder:validation:Enum=cloud_essd;cloud_essd_entry;cloud_efficiency;cloud_pperf;cloud_sperf;cloud_ssd;cloud_auto;ephemeral_ssd;cloud;cloud_essd_xc0;cloud_essd_xc1;elastic_ephemeral_disk_premium;elastic_ephemeral_disk_standard
 	Category string `json:"category"`
 
 	// Size is the disk size in GB
@@ -255,12 +301,17 @@ type DataDiskSpec struct {
 	Device *string `json:"device,omitempty"`
 
 	// PerformanceLevel is the ESSD performance level
+	// +kubebuilder:validation:Enum=PL0;PL1;PL2;PL3
 	// +optional
 	PerformanceLevel *string `json:"performanceLevel,omitempty"`
 
 	// Encrypted specifies whether the disk is encrypted
 	// +optional
 	Encrypted *bool `json:"encrypted,omitempty"`
+
+	// KMSKeyID is the KMS key ID for encryption
+	// +optional
+	KMSKeyID *string `json:"kmsKeyID,omitempty"`
 
 	// SnapshotID is the snapshot ID to create from
 	// +optional

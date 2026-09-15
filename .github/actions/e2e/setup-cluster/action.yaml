@@ -1,0 +1,56 @@
+name: Setup ACK cluster
+description: Create an ACK cluster and render the E2E environment.
+inputs:
+  deploy_config:
+    required: true
+  cluster_name:
+    required: true
+  git_ref:
+    required: false
+    default: ""
+  suite:
+    required: true
+  source:
+    required: false
+    default: alibabacloud
+  discover_gpu:
+    required: false
+    default: "false"
+outputs:
+  env_file:
+    value: ${{ steps.setup.outputs.env_file }}
+  manifest:
+    value: ${{ steps.setup.outputs.manifest }}
+runs:
+  using: composite
+  steps:
+    - id: setup
+      shell: bash
+      env:
+        DEPLOY_CONFIG: ${{ inputs.deploy_config }}
+        CLUSTER_NAME: ${{ inputs.cluster_name }}
+        GIT_REF: ${{ inputs.git_ref }}
+        SUITE: ${{ inputs.suite }}
+        SOURCE: ${{ inputs.source }}
+        DISCOVER_GPU: ${{ inputs.discover_gpu }}
+      run: |
+        set -euo pipefail
+        mkdir -p ".e2e/${CLUSTER_NAME}"
+        env_file=".e2e/${CLUSTER_NAME}/ack.env"
+        manifest=".e2e/${CLUSTER_NAME}/manifest.yaml"
+        echo "env_file=${env_file}" >> "${GITHUB_OUTPUT}"
+        echo "manifest=${manifest}" >> "${GITHUB_OUTPUT}"
+        args=(
+          setup
+          --config "${DEPLOY_CONFIG}"
+          --cluster-name "${CLUSTER_NAME}"
+          --git-ref "${GIT_REF}"
+          --suite "${SUITE}"
+          --source "${SOURCE}"
+          --output-env "${env_file}"
+          --manifest "${manifest}"
+        )
+        if [[ "${DISCOVER_GPU}" == "true" ]]; then
+          args+=(--discover-gpu)
+        fi
+        GOFLAGS="${GOFLAGS:--mod=mod}" go run ./test/hack/e2e/ackctl "${args[@]}"

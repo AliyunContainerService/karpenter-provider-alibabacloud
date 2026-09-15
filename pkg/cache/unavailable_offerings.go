@@ -31,9 +31,14 @@ type UnavailableOfferingsCache struct {
 
 // NewUnavailableOfferingsCache creates a new unavailable offerings cache
 func NewUnavailableOfferingsCache() *UnavailableOfferingsCache {
+	return NewUnavailableOfferingsCacheWithTTL(5 * time.Minute)
+}
+
+// NewUnavailableOfferingsCacheWithTTL creates a new unavailable offerings cache with the given TTL.
+func NewUnavailableOfferingsCacheWithTTL(ttl time.Duration) *UnavailableOfferingsCache {
 	return &UnavailableOfferingsCache{
 		entries: make(map[string]time.Time),
-		ttl:     5 * time.Minute, // Default TTL
+		ttl:     ttl,
 	}
 }
 

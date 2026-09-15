@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/utils/securitygroups"
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
 	"github.com/samber/lo"
@@ -145,6 +146,7 @@ func (e *RunInstancesExecutor) cloneRequest(req *ecs.RunInstancesRequest) *ecs.R
 	clone.SpotPriceLimit = req.SpotPriceLimit
 	clone.RamRoleName = req.RamRoleName
 	clone.Tag = req.Tag
+	clone.SystemDisk = req.SystemDisk
 	clone.SystemDiskCategory = req.SystemDiskCategory
 	clone.SystemDiskSize = req.SystemDiskSize
 	clone.SystemDiskPerformanceLevel = req.SystemDiskPerformanceLevel
@@ -162,44 +164,57 @@ func ComputeRunInstancesBatchKey(req *ecs.RunInstancesRequest) string {
 	// Only requests with identical configurations can be batched
 
 	h := sha256.New()
+	write := func(value string) {
+		h.Write([]byte(value))
+		h.Write([]byte{0})
+	}
 
 	// Core instance configuration
-	h.Write([]byte(req.RegionId))
-	h.Write([]byte(req.InstanceType))
-	h.Write([]byte(req.ImageId))
-	h.Write([]byte(req.VSwitchId))
-	h.Write([]byte(req.SecurityGroupId))
+	write(req.RegionId)
+	write(req.InstanceType)
+	write(req.ImageId)
+	write(req.VSwitchId)
+	write(req.SecurityGroupId)
 
 	// Security groups (if multiple)
 	if req.SecurityGroupIds != nil {
-		for _, sg := range *req.SecurityGroupIds {
-			h.Write([]byte(sg))
+		for _, sg := range securitygroups.NormalizeIDs(*req.SecurityGroupIds) {
+			write(sg)
 		}
 	}
 
 	// Spot configuration
-	h.Write([]byte(req.SpotStrategy))
-	h.Write([]byte(req.SpotPriceLimit))
+	write(req.SpotStrategy)
+	write(string(req.SpotPriceLimit))
 
 	// RAM role
-	h.Write([]byte(req.RamRoleName))
+	write(req.RamRoleName)
 
 	// System disk
-	h.Write([]byte(req.SystemDiskCategory))
-	h.Write([]byte(req.SystemDiskSize))
-	h.Write([]byte(req.SystemDiskPerformanceLevel))
+	systemDiskCategory := req.SystemDiskCategory
+	systemDiskPerformanceLevel := req.SystemDiskPerformanceLevel
+	write(systemDiskCategory)
+	write(req.SystemDiskSize)
+	write(normalizeBatchPerformanceLevel(systemDiskCategory, systemDiskPerformanceLevel))
+	write(normalizeBatchBool(req.SystemDisk.Encrypted, false))
+	write(req.SystemDisk.KMSKeyId)
 
 	// Data disks (hash the configuration)
 	if req.DataDisk != nil {
 		for _, disk := range *req.DataDisk {
-			h.Write([]byte(disk.Category))
-			h.Write([]byte(disk.Size))
-			h.Write([]byte(disk.PerformanceLevel))
+			write(disk.Category)
+			write(disk.Size)
+			write(disk.Device)
+			write(normalizeBatchPerformanceLevel(disk.Category, disk.PerformanceLevel))
+			write(normalizeBatchBool(disk.Encrypted, false))
+			write(disk.KMSKeyId)
+			write(disk.SnapshotId)
+			write(normalizeBatchBool(disk.DeleteWithInstance, true))
 		}
 	}
 
 	// UserData
-	h.Write([]byte(req.UserData))
+	write(req.UserData)
 
 	// Tags (sorted for consistency)
 	if req.Tag != nil {
@@ -208,11 +223,38 @@ func ComputeRunInstancesBatchKey(req *ecs.RunInstancesRequest) string {
 			return t.Key + "=" + t.Value
 		})
 		for _, tag := range sortedTags {
-			h.Write([]byte(tag))
+			write(tag)
 		}
 	}
 
 	return fmt.Sprintf("run-instances-%x", h.Sum(nil))
+}
+
+func normalizeBatchPerformanceLevel(category, performanceLevel string) string {
+	if category == "cloud_essd" {
+		if performanceLevel == "" {
+			return "PL0"
+		}
+		return performanceLevel
+	}
+	return ""
+}
+
+func normalizeBatchBool(value string, defaultValue bool) string {
+	switch value {
+	case "true", "True", "TRUE":
+		if defaultValue {
+			return ""
+		}
+		return "true"
+	case "false", "False", "FALSE":
+		if !defaultValue {
+			return ""
+		}
+		return "false"
+	default:
+		return ""
+	}
 }
 
 // InstanceBatcher provides batch instance creation with windowed batching

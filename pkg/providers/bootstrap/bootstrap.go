@@ -280,15 +280,23 @@ func (p *Provider) ClearCache() {
 
 // GenerateUserData generates user data script for bootstrapping nodes
 func (p *Provider) GenerateUserData(ctx context.Context, opts BootstrapOptions) (string, error) {
-	// If custom user data is provided, use it
-	if opts.CustomUserData != nil && *opts.CustomUserData != "" {
-		return *opts.CustomUserData, nil
-	}
-
 	// Generate bootstrap script based on cluster type
 	switch opts.ClusterType {
 	case ACKClusterType:
-		return p.generateACKBootstrapScript(ctx, opts)
+		userData, err := p.generateACKBootstrapScript(ctx, opts)
+		if err != nil {
+			return "", err
+		}
+		if opts.CustomUserData == nil || *opts.CustomUserData == "" {
+			return userData, nil
+		}
+		if userData == "" {
+			return *opts.CustomUserData, nil
+		}
+		if !strings.HasSuffix(userData, "\n") {
+			userData += "\n"
+		}
+		return userData + *opts.CustomUserData, nil
 	case SelfManagedClusterType:
 		return p.generateSelfManagedBootstrapScript(opts)
 	case KubeadmClusterType:

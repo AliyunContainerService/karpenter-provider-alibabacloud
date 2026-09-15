@@ -38,48 +38,41 @@ var _ admission.CustomDefaulter = &ECSNodeClass{}
 
 // Default implements admission.CustomDefaulter so a webhook will be registered for the type
 func (nc *ECSNodeClass) Default(ctx context.Context, obj runtime.Object) error {
+	normalizedDisks, err := NormalizeDisks(nc.Spec)
+	if err != nil {
+		return err
+	}
+
 	// Set default system disk if not specified
 	if nc.Spec.SystemDisk == nil {
-		size := int32(40)
-		perfLevel := "PL0"
+		size := normalizedDisks.SystemDisk.Size
 		nc.Spec.SystemDisk = &SystemDiskSpec{
-			Category:         "cloud_essd",
-			Size:             &size,
-			PerformanceLevel: &perfLevel,
+			Category: normalizedDisks.SystemDisk.Category,
+			Size:     &size,
+		}
+		if normalizedDisks.SystemDisk.PerformanceLevel != "" {
+			perfLevel := normalizedDisks.SystemDisk.PerformanceLevel
+			nc.Spec.SystemDisk.PerformanceLevel = &perfLevel
 		}
 	} else {
 		// Set default size if not specified
 		if nc.Spec.SystemDisk.Size == nil {
-			size := int32(40)
+			size := normalizedDisks.SystemDisk.Size
 			nc.Spec.SystemDisk.Size = &size
 		}
 		// Set default category if empty
 		if nc.Spec.SystemDisk.Category == "" {
-			nc.Spec.SystemDisk.Category = "cloud_essd"
+			nc.Spec.SystemDisk.Category = normalizedDisks.SystemDisk.Category
 		}
 		// Set default performance level for ESSD
-		if nc.Spec.SystemDisk.Category == "cloud_essd" && nc.Spec.SystemDisk.PerformanceLevel == nil {
-			perfLevel := "PL0"
+		if normalizedDisks.SystemDisk.PerformanceLevel != "" && nc.Spec.SystemDisk.PerformanceLevel == nil {
+			perfLevel := normalizedDisks.SystemDisk.PerformanceLevel
 			nc.Spec.SystemDisk.PerformanceLevel = &perfLevel
 		}
 	}
 
-	// Set default DeleteWithInstance for data disks
-	for i := range nc.Spec.DataDisks {
-		if nc.Spec.DataDisks[i].DeleteWithInstance == nil {
-			deleteWithInstance := true
-			nc.Spec.DataDisks[i].DeleteWithInstance = &deleteWithInstance
-		}
-	}
-
 	// Set default metadata options
-	if nc.Spec.MetadataOptions == nil {
-		hopLimit := int32(1)
-		nc.Spec.MetadataOptions = &MetadataOptions{
-			HttpTokens:              "optional",
-			HttpPutResponseHopLimit: &hopLimit,
-		}
-	} else {
+	if nc.Spec.MetadataOptions != nil {
 		if nc.Spec.MetadataOptions.HttpTokens == "" {
 			nc.Spec.MetadataOptions.HttpTokens = "optional"
 		}

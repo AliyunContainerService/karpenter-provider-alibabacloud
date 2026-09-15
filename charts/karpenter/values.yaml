@@ -12,10 +12,13 @@ controller:
     repository: registry-cn-hangzhou.ack.aliyuncs.com/acs/karpenter-provider-alibabacloud
     # -- Image pull policy
     # @description --
-    # Options: Always, IfNotPresent, Never
+    # Enum values:
+    #   Always       - Always pull the image (recommended for development/testing)
+    #   IfNotPresent - Pull only if not present locally (recommended for production)
+    #   Never        - Never pull, use only local image (for air-gapped environments)
     pullPolicy: Always
     # -- Image tag/version to deploy
-    tag: "v0.2.4"
+    tag: "v0.2.5"
 
   # -- Resource requests and limits for the controller pod
   # @description --
@@ -64,6 +67,7 @@ controller:
   # @description --
   # IMPORTANT: You must configure either AccessKey credentials OR RRSA, not both.
   # RRSA is recommended for production as it's more secure.
+  credentialsSecretName: ""
   env:
     # ==========================================
     # Option 1: AccessKey Authentication (Legacy)
@@ -86,8 +90,18 @@ controller:
 
     # -- Alibaba Cloud Region ID
     # @description --
-    # Example: cn-hangzhou, cn-beijing, cn-shanghai
-    # Must match your ACK cluster region
+    # Must match your ACK cluster region.
+    # Enum values (common regions):
+    #   cn-hangzhou    - China (Hangzhou)
+    #   cn-beijing     - China (Beijing)
+    #   cn-shanghai    - China (Shanghai)
+    #   cn-shenzhen    - China (Shenzhen)
+    #   cn-chengdu     - China (Chengdu)
+    #   cn-hongkong    - China (Hong Kong)
+    #   ap-southeast-1 - Singapore
+    #   us-west-1      - US (Silicon Valley)
+    #   eu-central-1   - Germany (Frankfurt)
+    # Full list: https://www.alibabacloud.com/help/en/ecs/regions-and-zones
     - name: ALIBABA_CLOUD_REGION
       value: ""
 
@@ -181,9 +195,116 @@ settings:
 
   # -- Alibaba Cloud Region
   # @description --
-  # REQUIRED. Must match your ACK cluster region
-  # Example: cn-hangzhou, cn-beijing, cn-shanghai, ap-southeast-1
+  # REQUIRED. Must match your ACK cluster region.
+  # Enum values (common regions):
+  #   cn-hangzhou    - China (Hangzhou)
+  #   cn-beijing     - China (Beijing)
+  #   cn-shanghai    - China (Shanghai)
+  #   cn-shenzhen    - China (Shenzhen)
+  #   cn-chengdu     - China (Chengdu)
+  #   cn-hongkong    - China (Hong Kong)
+  #   ap-southeast-1 - Singapore
+  #   us-west-1      - US (Silicon Valley)
+  #   eu-central-1   - Germany (Frankfurt)
+  # Full list: https://www.alibabacloud.com/help/en/ecs/regions-and-zones
   region: ""
+
+  # -- SLS queue name for spot interruption events
+  interruptionQueue: ""
+
+  pricingRefresh:
+    # -- Enable background ECS pricing refresh
+    enabled: true
+    # -- Pricing refresh interval
+    interval: "12h"
+    # -- Max concurrent pricing calls
+    concurrency: 8
+
+  pricing:
+    # -- Allow static price fallback to cn-hangzhou
+    staticDefaultRegionFallbackEnabled: false
+
+  # -- TTL for capacity failure cache
+  unavailableOfferingCacheTTL: "5m"
+
+  # -- Bound create fallback attempts
+  maxCreateCandidateAttempts: 20
+
+  podDensity:
+    # -- Pod density mode
+    # @description --
+    # Enum values:
+    #   kubelet (default)
+    #     Use kubelet's maxPods setting. No ENI-based pod density management.
+    #   terway-eni
+    #     Use Terway ENI mode (one ENI per pod, shared ENI).
+    #     Requires feature gate "TerwayPodDensity=true".
+    #   terway-eni-multi-ip
+    #     Use Terway ENI multi-IP mode (multiple pods per ENI).
+    #     Requires feature gate "TerwayPodDensity=true".
+    #   exclusive-eni
+    #     Use exclusive ENI mode (dedicated ENI per pod, managed terway).
+    #     Requires feature gate "TerwayPodDensity=true".
+    mode: "kubelet"
+    # -- Reserved ENIs for host/system networking
+    # @description --
+    # Only applicable when mode != "kubelet"
+    terwayReservedENIs: 1
+    # -- Reserved IPs per ENI
+    # @description --
+    # Only applicable when mode != "kubelet"
+    terwayReservedIPsPerENI: 1
+    # -- Optional upper bound for Terway calculated maxPods; 0 disables
+    # @description --
+    # Set to limit the maximum number of pods calculated by Terway.
+    # 0 means no limit (use all available IPs).
+    terwayMaxPodsCap: 0
+
+  # -- How Karpenter treats preferredDuringSchedulingIgnoredDuringExecution affinities
+  # @description --
+  # Enum values:
+  #   Respect (default)
+  #     Treat the highest-weight preferred term as a hard requirement,
+  #     then iteratively relax (drop preferred terms one by one) until
+  #     the pod can be scheduled. This is Karpenter's standard behaviour.
+  #     Example: Pod prefers arm64 -> provision arm64 if available,
+  #              otherwise relax and allow amd64.
+  #   Ignore
+  #     Completely ignore all preferredDuringScheduling node/pod affinities
+  #     and scheduleAnyway topologySpreadConstraints; only honor
+  #     requiredDuringSchedulingIgnoredDuringExecution and hard constraints.
+  #     Use this when soft preferences (e.g. preferred arm64 affinity)
+  #     must never block or bias provisioning of the opposite arch.
+  #     Example: Pod prefers arm64 but requires amd64 -> provision amd64 only.
+  preferencePolicy: "Respect"
+
+  # -- Comma-separated provider feature gates
+  # @description --
+  # Format: GateName1=true,GateName2=false,...
+  # Enum values (available provider feature gates):
+  #   TerwayPodDensity (default: false)
+  #     Enable Terway pod density management. Required for pod-density modes
+  #     other than "kubelet" (terway-eni, terway-eni-multi-ip, exclusive-eni).
+  #   InterruptionHandling (default: false)
+  #     Enable spot instance interruption handling via SLS event queue.
+  #     Requires settings.interruptionQueue to be set.
+  #   LaunchTemplateID (default: false)
+  #     Enable launch template ID support in ECSNodeClass.
+  #   MetadataOptions (default: false)
+  #     Enable ECS metadata options configuration.
+  #   CapacityReservation (default: false)
+  #     Enable capacity reservation support.
+  #   DeploymentSet (default: false)
+  #     Enable deployment set support for instance placement.
+  #   InstanceStoreRAID0 (default: false)
+  #     Enable NVMe instance store RAID0 support.
+  #   CreateFallback (default: false)
+  #     Enable instance creation fallback to alternative instance types.
+  #   PricingRefresh (default: true)
+  #     Enable background ECS pricing refresh.
+  #   NodeOverlay=true / Drift=true (Karpenter core gates, also accepted)
+  # Example: "TerwayPodDensity=true,InterruptionHandling=true"
+  featureGates: ""
 
 # -- Image pull secrets for private registries
 # @description --

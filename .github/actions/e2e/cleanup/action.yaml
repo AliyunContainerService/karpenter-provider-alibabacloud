@@ -1,0 +1,23 @@
+name: Cleanup ACK cluster
+description: Delete the ACK cluster recorded in the E2E manifest.
+inputs:
+  deploy_config:
+    required: true
+  manifest:
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        DEPLOY_CONFIG: ${{ inputs.deploy_config }}
+        MANIFEST: ${{ inputs.manifest }}
+      run: |
+        set -uo pipefail
+        cleanup_status=0
+        sweep_status=0
+        GOFLAGS="${GOFLAGS:--mod=mod}" go run ./test/hack/e2e/ackctl cleanup --config "${DEPLOY_CONFIG}" --manifest "${MANIFEST}" || cleanup_status=$?
+        GOFLAGS="${GOFLAGS:--mod=mod}" go run ./test/hack/e2e/ackctl sweep --config "${DEPLOY_CONFIG}" --manifest "${MANIFEST}" --delete || sweep_status=$?
+        if [[ "${cleanup_status}" -ne 0 || "${sweep_status}" -ne 0 ]]; then
+          exit 1
+        fi

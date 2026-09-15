@@ -23,6 +23,7 @@ import (
 
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/clients"
+	ecsutil "github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/utils/ecs"
 	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"github.com/alibabacloud-go/tea/tea"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -39,6 +40,19 @@ type LaunchTemplate struct {
 	ID      string
 	Name    string
 	Version string
+}
+
+// LaunchTemplateData contains the instance-affecting fields from a launch template version.
+type LaunchTemplateData struct {
+	ImageID          string
+	InstanceType     string
+	VSwitchID        string
+	ZoneID           string
+	SecurityGroupIDs []string
+}
+
+type launchTemplateVersionDescriber interface {
+	DescribeLaunchTemplateVersions(context.Context, *ecs.DescribeLaunchTemplateVersionsRequest) (*ecs.DescribeLaunchTemplateVersionsResponse, error)
 }
 
 // NewProvider creates a new launch template provider
@@ -90,9 +104,11 @@ func (p *Provider) Create(ctx context.Context, nodeClass *v1alpha1.ECSNodeClass,
 		request.UserData = tea.String(userData)
 	}
 
-	// Set instance charge type (spot or on-demand)
-	if nodeClass.Spec.SpotStrategy != nil {
-		request.SpotStrategy = tea.String(string(*nodeClass.Spec.SpotStrategy))
+	// Set spot strategy on the launch template only when the user requested a
+	// valid spot strategy. Capacity type is ultimately enforced at RunInstances
+	// time (see instance.Create); validation is centralized in pkg/utils/ecs.
+	if nodeClass.Spec.SpotStrategy != nil && ecsutil.IsValidSpotStrategy(*nodeClass.Spec.SpotStrategy) {
+		request.SpotStrategy = tea.String(*nodeClass.Spec.SpotStrategy)
 	}
 
 	// Set system disk configuration if specified
@@ -151,6 +167,78 @@ func (p *Provider) Get(ctx context.Context, id string) (*LaunchTemplate, error) 
 		Name:    *launchTemplateSet.LaunchTemplateName,
 		Version: fmt.Sprintf("%d", *launchTemplateSet.DefaultVersionNumber),
 	}, nil
+}
+
+// GetData resolves the concrete configuration from a launch template version.
+func (p *Provider) GetData(ctx context.Context, id string, version *int64) (*LaunchTemplateData, error) {
+	describer, ok := p.ecsClient.(launchTemplateVersionDescriber)
+	if !ok {
+		return nil, fmt.Errorf("ECS client does not support DescribeLaunchTemplateVersions")
+	}
+
+	request := &ecs.DescribeLaunchTemplateVersionsRequest{
+		RegionId:         tea.String(p.region),
+		LaunchTemplateId: tea.String(id),
+		DetailFlag:       tea.Bool(true),
+		PageSize:         tea.Int32(1),
+	}
+	if version != nil {
+		request.LaunchTemplateVersion = []*int64{tea.Int64(*version)}
+	} else {
+		request.DefaultVersion = tea.Bool(true)
+	}
+
+	response, err := describer.DescribeLaunchTemplateVersions(ctx, request)
+	if err != nil {
+		return nil, fmt.Errorf("describe launch template versions: %w", err)
+	}
+	if response == nil || response.Body == nil || response.Body.LaunchTemplateVersionSets == nil ||
+		len(response.Body.LaunchTemplateVersionSets.LaunchTemplateVersionSet) == 0 ||
+		response.Body.LaunchTemplateVersionSets.LaunchTemplateVersionSet[0].LaunchTemplateData == nil {
+		return nil, fmt.Errorf("launch template version not found")
+	}
+
+	data := response.Body.LaunchTemplateVersionSets.LaunchTemplateVersionSet[0].LaunchTemplateData
+	result := &LaunchTemplateData{}
+	if data.ImageId != nil {
+		result.ImageID = *data.ImageId
+	}
+	if data.InstanceType != nil {
+		result.InstanceType = *data.InstanceType
+	}
+	if data.VSwitchId != nil {
+		result.VSwitchID = *data.VSwitchId
+	}
+	if data.ZoneId != nil {
+		result.ZoneID = *data.ZoneId
+	}
+	if data.SecurityGroupId != nil {
+		result.SecurityGroupIDs = append(result.SecurityGroupIDs, *data.SecurityGroupId)
+	}
+	if data.SecurityGroupIds != nil {
+		for _, id := range data.SecurityGroupIds.SecurityGroupId {
+			if id != nil {
+				result.SecurityGroupIDs = append(result.SecurityGroupIDs, *id)
+			}
+		}
+	}
+	if data.NetworkInterfaces != nil && len(data.NetworkInterfaces.NetworkInterface) > 0 {
+		networkInterface := data.NetworkInterfaces.NetworkInterface[0]
+		if result.VSwitchID == "" && networkInterface.VSwitchId != nil {
+			result.VSwitchID = *networkInterface.VSwitchId
+		}
+		if networkInterface.SecurityGroupId != nil {
+			result.SecurityGroupIDs = append(result.SecurityGroupIDs, *networkInterface.SecurityGroupId)
+		}
+		if networkInterface.SecurityGroupIds != nil {
+			for _, id := range networkInterface.SecurityGroupIds.SecurityGroupId {
+				if id != nil {
+					result.SecurityGroupIDs = append(result.SecurityGroupIDs, *id)
+				}
+			}
+		}
+	}
+	return result, nil
 }
 
 // Delete deletes a launch template by ID

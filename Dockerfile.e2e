@@ -1,0 +1,6 @@
+FROM registry-cn-hangzhou.ack.aliyuncs.com/dev/debian:11-base
+WORKDIR /
+COPY bin/controller-linux-amd64 /controller
+USER 65532:65532
+EXPOSE 8080 9443
+ENTRYPOINT ["/controller"]

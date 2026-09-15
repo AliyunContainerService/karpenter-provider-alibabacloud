@@ -1,31 +1,58 @@
 
-.DS_Store
-.idea/
-.vscode/
-*.bak
+# Binaries for programs and plugins
 *.dll
 *.dylib
 *.exe
 *.exe~
-*.out
 *.so
-*.swo
-*.swp
-*.test
-*.tmp
-*~
-# Binaries for programs and plugins
-# Build artifacts
-# Dependency directories (remove the comment below to include it)
-# Go workspace file
-# IDE
-# OS
-# Output of the go coverage tool, specifically when used with LiteIDE
-# Temporary files
+
 # Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Build artifacts
 bin/
 dist/
-docs/superpowers/
-go.work
-Thumbs.db
+
+# Dependency directories
 vendor/
+
+# Go workspace file
+go.work
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*.swo
+*~
+
+# E2E test artifacts
+.e2e/
+**/.e2e/
+.e2e-controller-image.txt
+
+# Claude Code
+.claude/
+
+# Docs
+docs/
+
+# Agent instructions
+AGENT.md
+
+# Integration test output
+test-output/
+build/
+
+.qoder

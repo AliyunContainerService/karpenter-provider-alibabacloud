@@ -21,6 +21,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	ecs "github.com/alibabacloud-go/ecs-20140526/v5/client"
 	"github.com/alibabacloud-go/tea/tea"
 	"github.com/stretchr/testify/assert"
@@ -83,7 +84,7 @@ func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, f
 	panic("implement me")
 }
 
-func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
+func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, id string, name string, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -326,6 +327,131 @@ func TestGet(t *testing.T) {
 	}
 }
 
+func TestInstanceTypeLabels(t *testing.T) {
+	tests := []struct {
+		name         string
+		instanceType string
+		expected     map[string]string
+	}{
+		{
+			name:         "standard instance type",
+			instanceType: "ecs.g7.xlarge",
+			expected: map[string]string{
+				v1alpha1.LabelInstanceFamily:          "g7",
+				v1alpha1.LabelInstanceFamilyCanonical: "g7",
+				v1alpha1.LabelInstanceCategory:        "g",
+				v1alpha1.LabelInstanceGeneration:      "7",
+				v1alpha1.LabelInstanceSize:            "xlarge",
+				v1alpha1.LabelInstanceSizeCanonical:   "xlarge",
+			},
+		},
+		{
+			name:         "gpu instance type",
+			instanceType: "ecs.gn7i-c8g1.2xlarge",
+			expected: map[string]string{
+				v1alpha1.LabelInstanceFamily:          "gn7i-c8g1",
+				v1alpha1.LabelInstanceFamilyCanonical: "gn7i-c8g1",
+				v1alpha1.LabelInstanceCategory:        "gn",
+				v1alpha1.LabelInstanceGeneration:      "7",
+				v1alpha1.LabelInstanceSize:            "2xlarge",
+				v1alpha1.LabelInstanceSizeCanonical:   "2xlarge",
+			},
+		},
+		{
+			name:         "empty instance type",
+			instanceType: "ecs.",
+			expected:     map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, InstanceTypeLabels(tt.instanceType))
+		})
+	}
+}
+
+func TestResolvedLabels(t *testing.T) {
+	cpu := resource.NewQuantity(4, resource.DecimalSI)
+	mem := resource.NewQuantity(16*1024*1024*1024, resource.BinarySI)
+	gpuCount := resource.NewQuantity(1, resource.DecimalSI)
+	gpuMem := resource.NewQuantity(14, resource.DecimalSI)
+	unknownGPUMem := resource.NewQuantity(0, resource.DecimalSI)
+
+	tests := []struct {
+		name     string
+		it       *InstanceType
+		expected map[string]string
+	}{
+		{
+			name: "standard instance type",
+			it:   &InstanceType{Name: "ecs.g7.xlarge", CPU: cpu, Memory: mem},
+			expected: map[string]string{
+				v1alpha1.LabelInstanceFamily:          "g7",
+				v1alpha1.LabelInstanceFamilyCanonical: "g7",
+				v1alpha1.LabelInstanceCategory:        "g",
+				v1alpha1.LabelInstanceGeneration:      "7",
+				v1alpha1.LabelInstanceSize:            "xlarge",
+				v1alpha1.LabelInstanceSizeCanonical:   "xlarge",
+				v1alpha1.LabelInstanceCPU:             "4",
+				v1alpha1.LabelInstanceMemory:          "16384",
+			},
+		},
+		{
+			name: "gpu instance type",
+			it: &InstanceType{
+				Name:   "ecs.gn7i-c8g1.2xlarge",
+				CPU:    cpu,
+				Memory: mem,
+				GPU:    &GPU{Count: gpuCount, Model: "Tesla T4", Memory: gpuMem},
+			},
+			expected: map[string]string{
+				v1alpha1.LabelInstanceFamily:          "gn7i-c8g1",
+				v1alpha1.LabelInstanceFamilyCanonical: "gn7i-c8g1",
+				v1alpha1.LabelInstanceCategory:        "gn",
+				v1alpha1.LabelInstanceGeneration:      "7",
+				v1alpha1.LabelInstanceSize:            "2xlarge",
+				v1alpha1.LabelInstanceSizeCanonical:   "2xlarge",
+				v1alpha1.LabelInstanceCPU:             "4",
+				v1alpha1.LabelInstanceMemory:          "16384",
+				v1alpha1.LabelInstanceGPUName:         "tesla-t4",
+				v1alpha1.LabelInstanceGPUManufacturer: "nvidia",
+				v1alpha1.LabelInstanceGPUCount:        "1",
+				v1alpha1.LabelInstanceGPUMemory:       "14",
+			},
+		},
+		{
+			name: "unknown gpu memory is omitted",
+			it: &InstanceType{
+				Name: "ecs.gn7i-c8g1.2xlarge",
+				GPU:  &GPU{Count: gpuCount, Model: "Tesla T4", Memory: unknownGPUMem},
+			},
+			expected: map[string]string{
+				v1alpha1.LabelInstanceFamily:          "gn7i-c8g1",
+				v1alpha1.LabelInstanceFamilyCanonical: "gn7i-c8g1",
+				v1alpha1.LabelInstanceCategory:        "gn",
+				v1alpha1.LabelInstanceGeneration:      "7",
+				v1alpha1.LabelInstanceSize:            "2xlarge",
+				v1alpha1.LabelInstanceSizeCanonical:   "2xlarge",
+				v1alpha1.LabelInstanceGPUName:         "tesla-t4",
+				v1alpha1.LabelInstanceGPUManufacturer: "nvidia",
+				v1alpha1.LabelInstanceGPUCount:        "1",
+			},
+		},
+		{
+			name:     "nil instance type",
+			it:       nil,
+			expected: map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, ResolvedLabels(tt.it))
+		})
+	}
+}
+
 func TestFilter(t *testing.T) {
 	instanceTypes := []*InstanceType{
 		{
@@ -374,6 +500,83 @@ func TestFilter(t *testing.T) {
 				},
 			},
 			expectedLen: 1,
+		},
+		{
+			name: "filter by AlibabaCloud instance category",
+			requirements: []InstanceTypeRequirement{
+				{
+					Key:      v1alpha1.LabelInstanceCategory,
+					Operator: InstanceTypeOperatorIn,
+					Values:   []string{"g"},
+				},
+			},
+			expectedLen: 1,
+		},
+		{
+			name: "filter by legacy instance family",
+			requirements: []InstanceTypeRequirement{
+				{
+					Key:      v1alpha1.LabelInstanceFamily,
+					Operator: InstanceTypeOperatorIn,
+					Values:   []string{"g6"},
+				},
+			},
+			expectedLen: 1,
+		},
+		{
+			name: "filter by canonical instance family",
+			requirements: []InstanceTypeRequirement{
+				{
+					Key:      v1alpha1.LabelInstanceFamilyCanonical,
+					Operator: InstanceTypeOperatorIn,
+					Values:   []string{"g6"},
+				},
+			},
+			expectedLen: 1,
+		},
+		{
+			name: "filter by legacy instance size",
+			requirements: []InstanceTypeRequirement{
+				{
+					Key:      v1alpha1.LabelInstanceSize,
+					Operator: InstanceTypeOperatorIn,
+					Values:   []string{"xlarge"},
+				},
+			},
+			expectedLen: 1,
+		},
+		{
+			name: "filter by canonical instance size",
+			requirements: []InstanceTypeRequirement{
+				{
+					Key:      v1alpha1.LabelInstanceSizeCanonical,
+					Operator: InstanceTypeOperatorIn,
+					Values:   []string{"xlarge"},
+				},
+			},
+			expectedLen: 1,
+		},
+		{
+			name: "filter by AlibabaCloud instance cpu",
+			requirements: []InstanceTypeRequirement{
+				{
+					Key:      v1alpha1.LabelInstanceCPU,
+					Operator: InstanceTypeOperatorIn,
+					Values:   []string{"4"},
+				},
+			},
+			expectedLen: 1,
+		},
+		{
+			name: "filter by spot capacity type",
+			requirements: []InstanceTypeRequirement{
+				{
+					Key:      v1alpha1.LabelCapacityType,
+					Operator: InstanceTypeOperatorIn,
+					Values:   []string{v1alpha1.CapacityTypeSpot},
+				},
+			},
+			expectedLen: 2,
 		},
 		{
 			name:         "no filter",
@@ -430,6 +633,21 @@ func TestClearCache(t *testing.T) {
 	// Verify cache is cleared
 	_, exists = provider.getCachedValue("test-key")
 	assert.False(t, exists)
+}
+
+func TestGPUModelNormalizesKubernetesLabelValue(t *testing.T) {
+	gpuCount := resource.MustParse("1")
+	gpuMemory := resource.MustParse("16")
+
+	result := gpuModel(&InstanceType{
+		GPU: &GPU{
+			Count:  &gpuCount,
+			Model:  "NVIDIA V100",
+			Memory: &gpuMemory,
+		},
+	})
+
+	assert.Equal(t, "nvidia-v100", result)
 }
 
 func TestCalculateGPUMemory(t *testing.T) {
@@ -611,6 +829,53 @@ func TestConvertECSInstanceTypeWithGPU(t *testing.T) {
 			} else {
 				assert.Nil(t, result.GPU)
 			}
+		})
+	}
+}
+
+// TestConvertECSInstanceTypeArchitecture verifies that convertECSInstanceType maps
+// the raw ECS DescribeInstanceTypes CpuArchitecture field onto the Kubernetes
+// kubernetes.io/arch label value. This is the authoritative architecture source
+// (DescribeInstances does NOT return CpuArchitecture), so it must be exercised
+// against the real ECS response struct rather than inferred. Covers ARM64, the
+// x86 aliases, casing variants, and the nil (missing) case.
+func TestConvertECSInstanceTypeArchitecture(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+	tests := []struct {
+		name         string
+		cpuArch      *string
+		expectedArch string
+	}{
+		{name: "X86", cpuArch: strPtr("X86"), expectedArch: v1alpha1.ArchitectureAmd64},
+		{name: "X86_64", cpuArch: strPtr("X86_64"), expectedArch: v1alpha1.ArchitectureAmd64},
+		{name: "ARM64 (Yitian 710, e.g. g8y)", cpuArch: strPtr("ARM64"), expectedArch: v1alpha1.ArchitectureArm64},
+		{name: "lowercase arm64", cpuArch: strPtr("arm64"), expectedArch: v1alpha1.ArchitectureArm64},
+		{name: "aarch64 alias", cpuArch: strPtr("aarch64"), expectedArch: v1alpha1.ArchitectureArm64},
+		{name: "mixed-case Arm64", cpuArch: strPtr("Arm64"), expectedArch: v1alpha1.ArchitectureArm64},
+		{name: "nil defaults to amd64", cpuArch: nil, expectedArch: v1alpha1.ArchitectureAmd64},
+		{name: "unknown defaults to amd64", cpuArch: strPtr("sw64"), expectedArch: v1alpha1.ArchitectureAmd64},
+	}
+
+	provider := NewProvider("cn-hangzhou", new(MockECSClient))
+	zones := map[string]ZoneInfo{"cn-hangzhou-h": {Available: true}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instanceTypeId := "ecs.g8y.large"
+			cpuCoreCount := int32(2)
+			memorySize := float32(8.0)
+			ecsInstanceType := &ecs.DescribeInstanceTypesResponseBodyInstanceTypesInstanceType{
+				InstanceTypeId:  &instanceTypeId,
+				CpuCoreCount:    &cpuCoreCount,
+				MemorySize:      &memorySize,
+				CpuArchitecture: tt.cpuArch,
+			}
+
+			result := provider.convertECSInstanceType(ecsInstanceType, zones)
+
+			assert.NotNil(t, result)
+			assert.Equal(t, tt.expectedArch, result.Architecture,
+				"CpuArchitecture=%v should map to %s", tt.cpuArch, tt.expectedArch)
 		})
 	}
 }

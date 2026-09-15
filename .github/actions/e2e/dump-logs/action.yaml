@@ -1,0 +1,29 @@
+name: Dump E2E logs
+description: Collect Kubernetes diagnostics from an ACK E2E cluster.
+inputs:
+  manifest:
+    required: true
+  output_dir:
+    required: false
+    default: .e2e/dump
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        MANIFEST: ${{ inputs.manifest }}
+        OUTPUT_DIR: ${{ inputs.output_dir }}
+      run: |
+        set -euo pipefail
+        GOFLAGS="${GOFLAGS:--mod=mod}" go run ./test/hack/e2e/ackctl dump --manifest "${MANIFEST}" --output-dir "${OUTPUT_DIR}"
+        if [[ -n "${KUBECONFIG:-}" ]]; then
+          kubectl get nodes -o wide > "${OUTPUT_DIR}/nodes.txt" || true
+          kubectl get pods -A -o wide > "${OUTPUT_DIR}/pods.txt" || true
+          kubectl describe nodes > "${OUTPUT_DIR}/nodes-describe.txt" || true
+          kubectl describe pods -A > "${OUTPUT_DIR}/pods-describe.txt" || true
+          kubectl get nodepools,ecsnodeclasses,nodeclaims -A -o yaml > "${OUTPUT_DIR}/karpenter-resources.yaml" || true
+          kubectl describe nodepools,nodeclaims,ecsnodeclasses -A > "${OUTPUT_DIR}/karpenter-describe.txt" || true
+          kubectl get events -A --sort-by=.lastTimestamp > "${OUTPUT_DIR}/events.txt" || true
+          kubectl logs -n karpenter -l app.kubernetes.io/name=karpenter --all-containers=true --tail=-1 > "${OUTPUT_DIR}/karpenter.log" || true
+          kubectl logs -n karpenter -l app.kubernetes.io/name=karpenter --all-containers=true --previous --tail=-1 > "${OUTPUT_DIR}/karpenter-previous.log" || true
+        fi

@@ -939,8 +939,8 @@ func (m *MockECSClient) DescribeImages(ctx context.Context, imageIDs []string, f
 	return args.Get(0).([]ecs.DescribeImagesResponseBodyImagesImage), args.Error(1)
 }
 
-func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
-	args := m.Called(ctx, tags)
+func (m *MockECSClient) DescribeSecurityGroups(ctx context.Context, id string, name string, tags map[string]string) (*ecs.DescribeSecurityGroupsResponse, error) {
+	args := m.Called(ctx, id, name, tags)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -1000,8 +1000,8 @@ type MockVPCClient struct {
 	mock.Mock
 }
 
-func (m *MockVPCClient) DescribeVSwitches(ctx context.Context, vpcID string, tags map[string]string) (*vpc.DescribeVSwitchesResponse, error) {
-	args := m.Called(ctx, vpcID, tags)
+func (m *MockVPCClient) DescribeVSwitches(ctx context.Context, vpcID string, tags map[string]string, zoneID string) (*vpc.DescribeVSwitchesResponse, error) {
+	args := m.Called(ctx, vpcID, tags, zoneID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
