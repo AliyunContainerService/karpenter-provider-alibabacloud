@@ -113,6 +113,10 @@ func (c *Controller) Reconcile(ctx context.Context, req reconcile.Request) (reco
 func (c *Controller) tagInstance(ctx context.Context, nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNodeClass, instanceID string) error {
 	// Build desired tags (uses the same function as Create for consistency)
 	desiredTags := cloudprovider.BuildInstanceTags(nodeClaim, nodeClass)
+	// Storage tags describe the disk and reservations at launch. A later
+	// NodeClass edit must not rewrite them on an existing instance.
+	delete(desiredTags, v1alpha1.TagEphemeralStorageCapacity)
+	delete(desiredTags, v1alpha1.TagEphemeralStorageAllocatable)
 
 	// Get current instance tags, bypassing cache for accuracy
 	inst, err := c.instanceProvider.Get(ctx, instanceID, true /* skipCache */)

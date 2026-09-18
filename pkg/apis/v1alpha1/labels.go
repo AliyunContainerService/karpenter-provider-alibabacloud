@@ -93,6 +93,11 @@ const (
 	// TagKubeletMaxPods records the ECSNodeClass kubelet maxPods setting on launched instances.
 	TagKubeletMaxPods = Group + "/kubelet-max-pods"
 
+	// These tags preserve the disk estimate used when an instance was launched.
+	// Get and List can report the same storage after the NodeClass changes.
+	TagEphemeralStorageCapacity    = LabelDomain + "/ephemeral-storage-capacity"
+	TagEphemeralStorageAllocatable = LabelDomain + "/ephemeral-storage-allocatable"
+
 	// LabelInstanceFamily is the legacy label key for instance family
 	LabelInstanceFamily = "node.kubernetes.io/instance-family"
 
