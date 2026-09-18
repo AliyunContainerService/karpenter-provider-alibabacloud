@@ -216,7 +216,7 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
 	}
 
 	// 11. Convert instance to NodeClaim
-	createdNodeClaim := c.convertInstanceToNodeClaim(ctx, inst, nodeClaim, filteredTypes, nodeClass.Spec.ClusterID)
+	createdNodeClaim := c.convertInstanceToNodeClaim(ctx, inst, nodeClaim, filteredTypes, nodeClass)
 
 	// 12. Set NodeClass hash annotation for drift detection
 	hash := calculateNodeClassHash(nodeClass)
@@ -286,11 +286,11 @@ func (c *CloudProvider) Get(ctx context.Context, providerID string) (*coreapis.N
 		if it.Name == inst.InstanceType {
 			var err error
 			matchedIT = it
-			clusterID := inst.Tags[v1alpha1.TagClusterID]
-			capacity, allocatable, err = c.calculateCapacityAndAllocatable(ctx, it, clusterID)
+			capacity, allocatable, err = c.calculateCapacityAndAllocatable(ctx, it, nil)
 			if err != nil {
 				return nil, err
 			}
+			applyEphemeralStorageTags(inst, capacity, allocatable)
 			break
 		}
 	}
@@ -346,8 +346,8 @@ func (c *CloudProvider) List(ctx context.Context) ([]*coreapis.NodeClaim, error)
 		matchedIT := instanceTypeMap[inst.InstanceType]
 		if matchedIT != nil {
 			// Ignore error here, just skip if calculation fails
-			clusterID := inst.Tags[v1alpha1.TagClusterID]
-			capacity, allocatable, _ = c.calculateCapacityAndAllocatable(ctx, matchedIT, clusterID)
+			capacity, allocatable, _ = c.calculateCapacityAndAllocatable(ctx, matchedIT, nil)
+			applyEphemeralStorageTags(inst, capacity, allocatable)
 		}
 
 		// Parse launch time
@@ -424,7 +424,10 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 	if nodeClassReady.IsUnknown() {
 		return nil, cloudprovider.NewCreateError(fmt.Errorf("resolving nodeclass readiness, nodeclass is in Ready=Unknown: %s", nodeClassReady.Message), "NodeClassReadinessUnknown", "NodeClass is in Ready=Unknown")
 	}
-
+	_, storageOverhead, err := ephemeralStorageResources(nodeClass)
+	if err != nil {
+		return nil, fmt.Errorf("calculating ephemeral storage for nodeclass %s: %w", nodeClass.Name, err)
+	}
 
 	// 3. DEFENSIVE CHECK: Verify VSwitches are populated
 	// This catches the race condition where NodeClass is marked Ready but status has not been fully populated.
@@ -480,7 +483,7 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 			continue
 		}
 
-		capacity, _, err := c.calculateCapacityAndAllocatable(ctx, it, nodeClass.Spec.ClusterID)
+		capacity, _, err := c.calculateCapacityAndAllocatable(ctx, it, nodeClass)
 		if err != nil {
 			logger.Error(err, "failed to calculate capacity", "instanceType", it.Name)
 			continue
@@ -548,6 +551,9 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *coreapis
 			corev1.ResourceMemory: divideQuantity(totalOverhead[corev1.ResourceMemory], 3),
 			corev1.ResourceCPU:    divideQuantity(totalOverhead[corev1.ResourceCPU], 3),
 		}
+		evictionThreshold[corev1.ResourceEphemeralStorage] = storageOverhead.EvictionThreshold[corev1.ResourceEphemeralStorage]
+		kubeReserved[corev1.ResourceEphemeralStorage] = storageOverhead.KubeReserved[corev1.ResourceEphemeralStorage]
+		systemReserved[corev1.ResourceEphemeralStorage] = storageOverhead.SystemReserved[corev1.ResourceEphemeralStorage]
 
 		// Collect unique zones and capacity types across all offerings for InstanceType-level Requirements.
 		offeringZones := lo.Keys(lo.SliceToMap(offerings, func(o *cloudprovider.Offering) (string, struct{}) {
@@ -765,6 +771,11 @@ func BuildInstanceTags(nodeClaim *coreapis.NodeClaim, nodeClass *v1alpha1.ECSNod
 	// Layer 3: user-defined tags — highest priority, may override layers 1 and 2
 	for k, v := range nodeClass.Spec.Tags {
 		tags[k] = v
+	}
+	if storageCapacity, storageOverhead, err := ephemeralStorageResources(nodeClass); err == nil {
+		tags[v1alpha1.TagEphemeralStorageCapacity] = storageCapacity.String()
+		storageAllocatable := subtractQuantity(storageCapacity, storageOverhead.Total()[corev1.ResourceEphemeralStorage])
+		tags[v1alpha1.TagEphemeralStorageAllocatable] = storageAllocatable.String()
 	}
 
 	return tags
@@ -1083,7 +1094,7 @@ func validateRAMRoleForCreate(nodeClass *v1alpha1.ECSNodeClass) (string, error) 
 	return *nodeClass.Status.RAMRole, nil
 }
 
-func (c *CloudProvider) convertInstanceToNodeClaim(ctx context.Context, inst *instance.Instance, original *coreapis.NodeClaim, instanceTypes []*instancetype.InstanceType, clusterID string) *coreapis.NodeClaim {
+func (c *CloudProvider) convertInstanceToNodeClaim(ctx context.Context, inst *instance.Instance, original *coreapis.NodeClaim, instanceTypes []*instancetype.InstanceType, nodeClass *v1alpha1.ECSNodeClass) *coreapis.NodeClaim {
 	// Find instance type info
 	var capacity corev1.ResourceList
 	var allocatable corev1.ResourceList
@@ -1092,7 +1103,7 @@ func (c *CloudProvider) convertInstanceToNodeClaim(ctx context.Context, inst *in
 	for _, it := range instanceTypes {
 		if it.Name == inst.InstanceType {
 			matchedIT = it
-			capacity, allocatable, _ = c.calculateCapacityAndAllocatable(ctx, it, clusterID)
+			capacity, allocatable, _ = c.calculateCapacityAndAllocatable(ctx, it, nodeClass)
 			break
 		}
 	}
@@ -1300,7 +1311,7 @@ func resourcesSubtract(lhs, rhs corev1.ResourceList) corev1.ResourceList {
 }
 
 // calculateCapacityAndAllocatable calculates capacity and allocatable resources for an instance type
-func (c *CloudProvider) calculateCapacityAndAllocatable(ctx context.Context, it *instancetype.InstanceType, clusterID string) (capacity, allocatable corev1.ResourceList, err error) {
+func (c *CloudProvider) calculateCapacityAndAllocatable(ctx context.Context, it *instancetype.InstanceType, nodeClass *v1alpha1.ECSNodeClass) (capacity, allocatable corev1.ResourceList, err error) {
 	if it.CPU == nil || it.Memory == nil {
 		return nil, nil, fmt.Errorf("instance type %s has nil CPU or Memory", it.Name)
 	}
@@ -1310,6 +1321,15 @@ func (c *CloudProvider) calculateCapacityAndAllocatable(ctx context.Context, it 
 		corev1.ResourceCPU:    *it.CPU,
 		corev1.ResourceMemory: *it.Memory,
 		corev1.ResourcePods:   *resource.NewQuantity(DefaultPodsLimit, resource.DecimalSI),
+	}
+	var storageOverhead *cloudprovider.InstanceTypeOverhead
+	if nodeClass != nil {
+		var storageCapacity resource.Quantity
+		storageCapacity, storageOverhead, err = ephemeralStorageResources(nodeClass)
+		if err != nil {
+			return nil, nil, err
+		}
+		capacity[corev1.ResourceEphemeralStorage] = storageCapacity
 	}
 
 	// Add GPU resources if available
@@ -1336,6 +1356,9 @@ func (c *CloudProvider) calculateCapacityAndAllocatable(ctx context.Context, it 
 
 	// Calculate allocatable by subtracting overhead
 	overhead := calculateOverhead(ctx, it)
+	if storageOverhead != nil {
+		overhead[corev1.ResourceEphemeralStorage] = storageOverhead.Total()[corev1.ResourceEphemeralStorage]
+	}
 	allocatable = resourcesSubtract(capacity, overhead)
 
 	return capacity, allocatable, nil

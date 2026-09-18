@@ -104,6 +104,33 @@ func TestZonesFromRequirements(t *testing.T) {
 	}
 }
 
+func TestCalculateCapacityAndAllocatableIncludesEphemeralStorage(t *testing.T) {
+	it := &instancetype.InstanceType{
+		Name:   "ecs.g7.xlarge",
+		CPU:    resource.NewQuantity(4, resource.DecimalSI),
+		Memory: resource.NewQuantity(16*1024*1024*1024, resource.BinarySI),
+	}
+
+	capacity, allocatable, err := (&CloudProvider{}).calculateCapacityAndAllocatable(context.Background(), it, &v1alpha1.ECSNodeClass{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	storageCapacity := capacity[corev1.ResourceEphemeralStorage]
+	storageAllocatable := allocatable[corev1.ResourceEphemeralStorage]
+	assert.Equal(t, int64(40)<<30, storageCapacity.Value())
+	assert.Equal(t, int64(34)<<30, storageAllocatable.Value())
+}
+
+func TestBuildInstanceTagsRecordsLaunchTimeEphemeralStorage(t *testing.T) {
+	size := int32(100)
+	nodeClass := &v1alpha1.ECSNodeClass{Spec: v1alpha1.ECSNodeClassSpec{
+		SystemDisk: &v1alpha1.SystemDiskSpec{Size: &size},
+	}}
+	tags := BuildInstanceTags(&coreapis.NodeClaim{}, nodeClass)
+	assert.Equal(t, "100Gi", tags["karpenter.alibabacloud.com/ephemeral-storage-capacity"])
+	assert.Equal(t, "88Gi", tags["karpenter.alibabacloud.com/ephemeral-storage-allocatable"])
+}
+
 func TestFilterVSwitchesByZones(t *testing.T) {
 	vsw := []v1alpha1.VSwitch{
 		{ID: "vsw-l", Zone: "cn-shanghai-l", ZoneID: "cn-shanghai-l"},
@@ -528,7 +555,7 @@ func TestConvertInstanceToNodeClaimArchLabels(t *testing.T) {
 					{Name: tt.instanceType, Architecture: tt.authoritativeArch},
 				}
 			}
-			nc := cp.convertInstanceToNodeClaim(context.Background(), inst, &coreapis.NodeClaim{}, instanceTypes, "c-test")
+			nc := cp.convertInstanceToNodeClaim(context.Background(), inst, &coreapis.NodeClaim{}, instanceTypes, nil)
 			assert.Equal(t, tt.wantK8sArch, nc.Labels[corev1.LabelArchStable], "LabelArchStable")
 			assert.Equal(t, "linux", nc.Labels[corev1.LabelOSStable], "LabelOSStable")
 			assert.Equal(t, tt.instanceType, nc.Labels[corev1.LabelInstanceTypeStable], "LabelInstanceTypeStable")
@@ -552,7 +579,7 @@ func TestConvertInstanceToNodeClaimResolvedLabels(t *testing.T) {
 		Memory: resource.NewQuantity(16*1024*1024*1024, resource.BinarySI),
 	}}
 
-	nodeClaim := cp.convertInstanceToNodeClaim(context.Background(), inst, &coreapis.NodeClaim{}, instanceTypes, "c-test")
+	nodeClaim := cp.convertInstanceToNodeClaim(context.Background(), inst, &coreapis.NodeClaim{}, instanceTypes, nil)
 	for key, value := range map[string]string{
 		corev1.LabelTopologyRegion:            "cn-shanghai",
 		v1alpha1.LabelInstanceFamily:          "g7",

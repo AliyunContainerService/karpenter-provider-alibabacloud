@@ -101,12 +101,14 @@ func (nc *ECSNodeClass) validateLaunchTemplate() error {
 
 func (nc *ECSNodeClass) validateTags() error {
 	restricted := map[string]bool{
-		TagManagedBy:            true,
-		TagClusterID:            true,
-		TagNodePool:             true,
-		TagNodeClaim:            true,
-		TagKubeletMaxPods:       true,
-		"kubernetes.io/cluster": true,
+		TagManagedBy:                   true,
+		TagClusterID:                   true,
+		TagNodePool:                    true,
+		TagNodeClaim:                   true,
+		TagKubeletMaxPods:              true,
+		TagEphemeralStorageCapacity:    true,
+		TagEphemeralStorageAllocatable: true,
+		"kubernetes.io/cluster":        true,
 	}
 	for key := range nc.Spec.Tags {
 		if restricted[key] {

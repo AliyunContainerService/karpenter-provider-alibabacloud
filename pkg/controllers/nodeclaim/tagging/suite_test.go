@@ -280,6 +280,10 @@ var _ = Describe("TaggingController", func() {
 			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagNodePool, "default"))
 			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagManagedBy, v1alpha1.TagManagedByValue))
 			Expect(capturedTags).To(HaveKeyWithValue(v1alpha1.TagClusterID, "test-cluster-123"))
+			// An old instance without launch-time storage tags must not be
+			// assigned estimates from the current NodeClass during reconciliation.
+			Expect(capturedTags).ToNot(HaveKey(v1alpha1.TagEphemeralStorageCapacity))
+			Expect(capturedTags).ToNot(HaveKey(v1alpha1.TagEphemeralStorageAllocatable))
 		})
 
 		It("should include custom tags from NodeClass", func() {

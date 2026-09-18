@@ -37,6 +37,8 @@ func TestECSNodeClassValidateRejectsRestrictedTags(t *testing.T) {
 		TagNodePool,
 		TagNodeClaim,
 		TagKubeletMaxPods,
+		TagEphemeralStorageCapacity,
+		TagEphemeralStorageAllocatable,
 		TagCluster,
 	} {
 		nodeClass := validValidationNodeClassForUnit()
