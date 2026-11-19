@@ -25,6 +25,7 @@ import (
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/apis/v1alpha1"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/instance"
 	"github.com/AliyunContainerService/karpenter-provider-alibabacloud/pkg/providers/instancetype"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -975,4 +976,53 @@ func TestInstanceTypeFallbackRespectsArchitecture(t *testing.T) {
 	assert.Equal(t, "m-x86", attempts[0].imageID, "amd64 instance should use x86_64 image")
 	assert.Equal(t, "ecs.g8y.large", attempts[1].instanceType)
 	assert.Equal(t, "m-arm", attempts[1].imageID, "arm64 instance should use arm64 image")
+}
+
+func newSizedInstanceType(name, cpu, memory string) *instancetype.InstanceType {
+	it := &instancetype.InstanceType{Name: name, Architecture: "arm64"}
+	if cpu != "" {
+		q := resource.MustParse(cpu)
+		it.CPU = &q
+	}
+	if memory != "" {
+		q := resource.MustParse(memory)
+		it.Memory = &q
+	}
+	return it
+}
+
+// TestSortInstanceTypesForLaunch uses the DescribeInstanceTypes order seen on a real cn-shanghai
+// cluster, where a NodeClaim for two pause pods ended up on an ecs.r8y.4xlarge.
+func TestSortInstanceTypesForLaunch(t *testing.T) {
+	input := []*instancetype.InstanceType{
+		newSizedInstanceType("ecs.c6r.large", "2", "4Gi"),
+		newSizedInstanceType("ecs.g6r.4xlarge", "16", "64Gi"),
+		newSizedInstanceType("ecs.r8y.4xlarge", "16", "128Gi"),
+		newSizedInstanceType("ecs.g8y.xlarge", "4", "16Gi"),
+		newSizedInstanceType("ecs.r8y.large", "2", "16Gi"),
+		newSizedInstanceType("ecs.g8y.large", "2", "8Gi"),
+		newSizedInstanceType("ecs.c8y.large", "2", "4Gi"),
+		newSizedInstanceType("ecs.unknown", "", ""),
+	}
+	inputNames := lo.Map(input, func(it *instancetype.InstanceType, _ int) string { return it.Name })
+
+	got := lo.Map(sortInstanceTypesForLaunch(input), func(it *instancetype.InstanceType, _ int) string { return it.Name })
+
+	assert.Equal(t, []string{
+		"ecs.c6r.large",   // 2 vCPU, 4 GiB (name breaks the tie with c8y)
+		"ecs.c8y.large",   // 2 vCPU, 4 GiB
+		"ecs.g8y.large",   // 2 vCPU, 8 GiB
+		"ecs.r8y.large",   // 2 vCPU, 16 GiB
+		"ecs.g8y.xlarge",  // 4 vCPU
+		"ecs.g6r.4xlarge", // 16 vCPU, 64 GiB
+		"ecs.r8y.4xlarge", // 16 vCPU, 128 GiB
+		"ecs.unknown",     // unknown size goes last
+	}, got)
+
+	// The input slice comes from the instance type provider and must not be reordered.
+	assert.Equal(t, inputNames, lo.Map(input, func(it *instancetype.InstanceType, _ int) string { return it.Name }))
+}
+
+func TestSortInstanceTypesForLaunchEmpty(t *testing.T) {
+	assert.Empty(t, sortInstanceTypesForLaunch(nil))
 }
