@@ -163,6 +163,8 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *coreapis.NodeClai
 	if len(filteredTypes) == 0 {
 		return nil, fmt.Errorf("no instance types match the requirements")
 	}
+	// createInstanceWithRetry launches the first type that succeeds, so try the smallest first.
+	filteredTypes = sortInstanceTypesForLaunch(filteredTypes)
 
 	// 4. Resolve images from NodeClass
 	images := nodeClass.Status.Images
@@ -1020,6 +1022,39 @@ func (c *CloudProvider) createInstanceWithRetry(ctx context.Context, nodeClaim *
 		return "", fmt.Errorf("failed to create instance: %w", err)
 	}
 	return "", fmt.Errorf("all instance types exhausted across all zones (%d types tried), last error: %w", len(instanceTypes), lastErr)
+}
+
+// sortInstanceTypesForLaunch returns a copy of instanceTypes ordered from smallest to largest:
+// vCPU, then memory, then name. Karpenter core only passes types that fit the pending pods, and
+// offerings do not carry real prices yet (Price is always 0), so size is the best cost signal.
+// Without this, types were tried in DescribeInstanceTypes order, and a small pod could get a
+// 16 vCPU node when the first small types were out of stock.
+func sortInstanceTypesForLaunch(instanceTypes []*instancetype.InstanceType) []*instancetype.InstanceType {
+	sorted := make([]*instancetype.InstanceType, len(instanceTypes))
+	copy(sorted, instanceTypes)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if c := compareQuantity(sorted[i].CPU, sorted[j].CPU); c != 0 {
+			return c < 0
+		}
+		if c := compareQuantity(sorted[i].Memory, sorted[j].Memory); c != 0 {
+			return c < 0
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
+	return sorted
+}
+
+// compareQuantity compares two quantities. A nil quantity (unknown size) sorts last.
+func compareQuantity(a, b *resource.Quantity) int {
+	switch {
+	case a == nil && b == nil:
+		return 0
+	case a == nil:
+		return 1
+	case b == nil:
+		return -1
+	}
+	return a.Cmp(*b)
 }
 
 // vswitchFallbackCreate tries vswitches in order, falling back to the next on capacity or IP-exhaustion
